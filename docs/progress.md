@@ -20,9 +20,10 @@ Phase 1:
 Phase 2:
 - Visual browser click-through of the Phase 2 acceptance flow (Agent Studio pinning, the task page's Subagents card, snapshot chips and skill events) was not performed by the implementer, who had no browser. The flow was driven through the HTTP API instead, and the web pages answered HTTP 200 (see "Phase 2 acceptance (real Claude)" below). It remains for the owner.
 - `ProjectAgent` (which agents belong to which project) is deferred to Phase 4; the Chief's planning needs it, nothing in Phase 2 does.
-- Approvals (Phase 4): pinning skills or subagents adds `Skill` and `Agent` to the allowed tools, which the SDK auto-approves before `canUseTool` (see `docs/security.md`).
+- Approvals (Phase 4): pinning skills or subagents adds `Skill` (skills) or `Agent` and `Task` (subagents) to the allowed tools, which the SDK auto-approves before `canUseTool` (see `docs/security.md`).
 - Skill frontmatter parsing supports single-line `key: value` only; multi-line (folded or block) values are not supported.
-- Subagent use was not exercised by a real run: the seeded subagents were offered to the designer run but not used, so `GET /runs/:id/subagents` was empty.
+- In the subagent smoke, a second `agent.started` in the same run listed the machine's claude.ai MCP connector tools (Gmail, Notion, Claude Docs). Not investigated: whether agent sessions can call them, and how to exclude them (see "Runtime subagent smoke").
+- In the acceptance runs the designer session had no subagent tool: the adapter granted `Agent` but left `Task` in `disallowedTools`, and the SDK lists the subagent tool as `Task` in the session's tools, so it was removed. Fixed after the acceptance (both `Agent` and `Task` are granted when subagents are pinned) and checked by the runtime subagent smoke below, which spawned the subagent and returned `SUBAGENT_OK`. The smoke script still exits 1, because its check expects `Agent` in `agent.started.payload.tools` and the SDK lists the tool as `Task`; the check needs a decision. A platform run with a subagent (a `SubagentRun` row from a real session) has not been done yet.
 
 Phase 3 (messaging and memory): message bus and inbox runs, agent MCP tools, human chat as a real session, task summaries, project memory, context pack, memory UI.
 
@@ -74,6 +75,34 @@ result {
 }
 ```
 
+### Runtime subagent smoke
+
+Date: 2026-10-31, after the acceptance run. Fix: `effectiveAllowedTools` in `packages/runtime/src/claude/adapter.ts` now adds both `Agent` and `Task` when subagents are pinned, so neither is in `disallowedTools`. Command: `pnpm --filter @office/runtime exec tsx scripts/smoke-subagent.ts` (model `haiku`, `maxBudgetUsd` 0.10, `allowedTools: []`, no skills, one subagent `echoer` (`Reply with exactly: SUBAGENT_OK`, model `haiku`), prompt `Use the echoer subagent and return exactly what it replies.`, system prompt `Delegate to the echoer subagent; do not answer yourself.`). One attempt, exit 1.
+
+Result: the subagent works. The agent called `Agent` with `subagent_type` `echoer`, the adapter emitted `agent.subagent.spawned` and `agent.subagent.completed` (summary `SUBAGENT_OK`), and the run succeeded with resultText `SUBAGENT_OK`. The script exited 1 only because its check requires `Agent` in `agent.started.payload.tools`, and the SDK lists the subagent tool there as `Task` (first entry); `Agent` is not in that list. The check `{"agentInTools":false,"spawned":true}` was printed. The adapter was not changed again, since the failure points at the check, not the adapter.
+
+```
+[CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked for: Agent, Task. ...
+event agent.started {"tools":["Task","AskUserQuestion","CronCreate","CronDelete","CronList","DesignSync","EnterPlanMode","EnterWorktree","ExitPlanMode","ExitWorktree","Glob","Grep","ListAgents","PushNotification","Read","RemoteTrigger","ReportFindings","ScheduleWakeup","SendMessage","SendToProject","SendToProjectContext","ToolSearch","Workflow"],"agents":["claude","echoer","Explore","general-purpose","Plan","statusline-setup"]}
+event agent.tool.started Agent {"subagent_type":"echoer","description":"Run echoer subagent","prompt":"Please respond to this echo request. Return your reply exactly as you produce it."}
+event agent.subagent.spawned {"toolUseId":"toolu_015nh19BRhHCfMTqqbiKHndz","description":"Run echoer subagent","subagentType":"echoer"}
+event agent.tool.completed
+event agent.text
+event agent.subagent.completed {"toolUseId":"toolu_015nh19BRhHCfMTqqbiKHndz","status":"completed","summary":"SUBAGENT_OK"}
+event agent.thinking
+event agent.text
+event agent.completed
+event agent.started {"tools":["Task","AskUserQuestion", ... ,"ListMcpResourcesTool", ... ,"mcp__claude_ai_Claude_Docs__batch", ... ,"mcp__claude_ai_Gmail__send_message", ... ,"mcp__claude_ai_Notion__notion-wait-session"],"agents":[...same...]}
+event agent.text
+event agent.completed
+result {"status":"succeeded","resultText":"SUBAGENT_OK","sdkSessionId":"c6816612-2634-4282-a639-8e57edfe7fca","usage":{"inputTokens":2,"outputTokens":12,"costUsd":0.006620055,"numTurns":1,"durationMs":1305}}
+check {"agentInTools":false,"spawned":true}
+```
+
+Cost: the result reports 0.006620055 USD, which is the usage of the last of the two `agent.completed` events (numTurns 1); the first completion's cost was not printed, so the run's full cost is not known from this output.
+
+Observations: the stream contained a second `agent.started` and `agent.completed` after the first completion. The second `agent.started` listed the machine's claude.ai MCP connector tools (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Notion__*`, `mcp__claude_ai_Claude_Docs__*`), which the first did not. It produced only `agent.text` and `agent.completed`, with no tool call. Where those connector tools come from, and whether a run can call them, has not been investigated (see Outstanding).
+
 ### Phase 2 acceptance (real Claude)
 
 Date: 2026-10-31. Result: **passed**. One attempt per task, no retry. Every expectation held for both runs: the pinned skill names are in `agent.started.payload.slashCommands`, at least one eager pin produced `agent.skill.invoked`, each `session.skillsSnapshot` equals its agent version's pins and the two snapshots differ, and both tasks reached `done`.
@@ -121,7 +150,7 @@ seq 9  agent.tool.started   Write index.html             seq 10 agent.file.chang
 seq 13 agent.completed      2026-10-31T20:05:54.070Z  costUsd 0.0892959, numTurns 5
 ```
 
-The designer invoked only its eager skill; none of the five on-demand skills and none of the subagents was used.
+The designer invoked only its eager skill and none of the five on-demand skills. It could not use its subagents: the subagent tool was missing from the session (see the worker log note below).
 
 `slashCommands` in `agent.started`: the developer run's list (58 entries) starts with `lazy-expert-developer`, `test-driven-development`; the designer run's list (62 entries) starts with `accessibility`, `design-systems`, `frontend-design`, `responsive-design`, `ui-ux-design`, `visual-quality-review`. The rest of each list is built-in commands and bundled skills, as in the runtime smoke. `agent.started.payload.agents` for the designer run lists `accessibility-reviewer`, `ux-researcher` and `visual-reviewer` next to the built-in agents; the developer run lists only built-ins.
 
@@ -170,7 +199,7 @@ Replay after restart: the API process was killed (health check failed) and resta
 
 Web pages (Next.js dev server, owner cookie): `GET /`, `/skills`, `/skills/884f98d0-69e6-44f2-88d9-8a89415a7460`, `/agents`, `/agents/15e9d1b8-65b4-4350-96ca-067db9315e9d`, `/tasks/df321e0f-d732-4ec1-8496-815888f913d1` and `/tasks/fc25d794-8650-4c02-b8f4-70667690d7ac` all returned HTTP 200.
 
-Worker log note: the SDK printed `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` for `Read, Glob, Grep, Bash, Edit, Write, Skill` (developer run) and for `Read, Glob, Grep, Bash, Edit, Write, Skill, Agent` (designer run), confirming that `Skill` and `Agent` are added to the allowed tools only when skills or subagents are pinned (see `docs/security.md`). The `tools` list in `agent.started` contains `Skill` for both runs but not `Agent` in either; the designer run did not spawn a subagent, so the `Agent` grant was not exercised.
+Worker log note: the SDK printed `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` for `Read, Glob, Grep, Bash, Edit, Write, Skill` (developer run) and for `Read, Glob, Grep, Bash, Edit, Write, Skill, Agent` (designer run), confirming that `Skill` and `Agent` are added to the allowed tools only when skills or subagents are pinned (see `docs/security.md`). The `tools` list in `agent.started` contains `Skill` for both runs, and neither `Agent` nor `Task`. The cause: the adapter added `Agent` to the allowed tools but left `Task` in `disallowedTools`, and the SDK lists the subagent tool as `Task` in a session's tools (calling it `Agent` in tool calls), so the designer session had no subagent tool. Fixed after this run; see "Runtime subagent smoke".
 
 ## Phase 1 evidence
 

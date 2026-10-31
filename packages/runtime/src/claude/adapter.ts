@@ -24,8 +24,10 @@ const BUILTIN_TOOLS = [
 /** spec.allowedTools plus Skill/Agent when skills/subagents are pinned, so pinning implies the grant. */
 export function effectiveAllowedTools(spec: RunSpec): string[] {
   const tools = [...spec.allowedTools];
-  if (spec.skills.length > 0 && !tools.includes('Skill')) tools.push('Skill');
-  if (spec.subagents.length > 0 && !tools.includes('Agent')) tools.push('Agent');
+  const grant = (t: string) => !tools.includes(t) && tools.push(t);
+  if (spec.skills.length > 0) grant('Skill');
+  // the SDK calls the subagent tool Agent but lists it as Task in init; a disallowed Task removed it from the session
+  if (spec.subagents.length > 0) ['Agent', 'Task'].forEach(grant);
   return tools;
 }
 

@@ -57,7 +57,7 @@ pnpm --filter @office/api test          # one package
 
 Tests use the real Postgres test database and the fake adapter; no test calls Claude. API test files share the test database and truncate it, so they run serially. The worker's `pretest` builds the API, because the end-to-end test starts the real API in-process.
 
-Real-Claude checks are opt-in and cost money. The runtime smoke tests are `pnpm --filter @office/runtime exec tsx scripts/smoke-claude.ts` and, for a pinned skill, `scripts/smoke-skills.ts`. Their results are recorded in `docs/progress.md`.
+Real-Claude checks are opt-in and cost money. The runtime smoke tests are `pnpm --filter @office/runtime exec tsx scripts/smoke-claude.ts` and, for a pinned skill and a subagent, `scripts/smoke-skills.ts` and `scripts/smoke-subagent.ts`. Their results are recorded in `docs/progress.md`.
 
 ## Before committing
 

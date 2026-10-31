@@ -87,9 +87,10 @@ describe('ClaudeAdapter', () => {
     expect(options.additionalDirectories).toEqual(['/tmp/x/.office']);
     expect(options.skills).toEqual(['tdd']);
     expect(options.agents).toEqual({ reviewer: { description: 'd', prompt: 'p', skills: ['tdd'] } });
-    expect(options.allowedTools).toEqual(['Read', 'Skill', 'Agent']);
+    expect(options.allowedTools).toEqual(['Read', 'Skill', 'Agent', 'Task']);
     expect(options.disallowedTools).not.toContain('Skill');
     expect(options.disallowedTools).not.toContain('Agent');
+    expect(options.disallowedTools).not.toContain('Task');
   });
 
   it('omits skill and subagent options when none are pinned', async () => {
@@ -109,11 +110,11 @@ describe('effectiveAllowedTools', () => {
   it('adds Skill only with skills and Agent only with subagents', () => {
     expect(effectiveAllowedTools(spec)).toEqual(['Read']);
     expect(effectiveAllowedTools({ ...spec, skills: [skill] })).toEqual(['Read', 'Skill']);
-    expect(effectiveAllowedTools({ ...spec, subagents: [sub] })).toEqual(['Read', 'Agent']);
+    expect(effectiveAllowedTools({ ...spec, subagents: [sub] })).toEqual(['Read', 'Agent', 'Task']);
   });
 
   it('does not duplicate Skill or Agent', () => {
-    const s = { ...spec, allowedTools: ['Skill', 'Agent'], skills: [skill], subagents: [sub] };
-    expect(effectiveAllowedTools(s)).toEqual(['Skill', 'Agent']);
+    const s = { ...spec, allowedTools: ['Skill', 'Agent', 'Task'], skills: [skill], subagents: [sub] };
+    expect(effectiveAllowedTools(s)).toEqual(['Skill', 'Agent', 'Task']);
   });
 });
