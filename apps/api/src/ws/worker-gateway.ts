@@ -18,6 +18,9 @@ interface Connection {
 
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 
+// emitted by the API itself; a worker must not forge them
+const SERVER_ONLY_EVENTS = new Set(['run.lease.lost', 'run.status.changed', 'task.status.changed']);
+
 export class WorkerGateway {
   private conns = new Map<string, Connection>();
 
@@ -143,7 +146,13 @@ export class WorkerGateway {
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');
     this.conns.set(worker.id, { socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, activeRuns });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
+    this.cancelUnleased(worker.id, msg.activeRunIds, activeRuns);
     return worker.id;
+  }
+
+  /** Tells the worker to stop runs it reports but no longer leases (lost, cancelled or finished meanwhile). */
+  private cancelUnleased(workerId: string, reported: string[], leased: Set<string>) {
+    for (const runId of reported) if (!leased.has(runId)) this.send(workerId, { type: 'run.cancel', runId });
   }
 
   /** Every run the DB says this worker holds; the worker's own report is not trusted for capacity. */
@@ -169,6 +178,7 @@ export class WorkerGateway {
         const before = new Set(conn?.activeRuns);
         const activeRuns = await this.leasedRuns(workerId);
         if (!conn) return;
+        this.cancelUnleased(workerId, msg.activeRunIds, activeRuns);
         // keep runs assigned while the query ran; they may not have been visible to it
         for (const id of conn.activeRuns) if (!before.has(id)) activeRuns.add(id);
         Object.assign(conn, { capacity: msg.capacity, activeRuns });
@@ -181,6 +191,7 @@ export class WorkerGateway {
         this.log.warn({ workerId, runId: msg.runId, reason: msg.reason }, 'worker rejected run');
         return;
       case 'run.event': {
+        if (SERVER_ONLY_EVENTS.has(msg.event.type)) throw new Error(`event type ${msg.event.type} is server-only`);
         const run = await findLeasedRun(this.prisma, msg.event.runId, workerId);
         if (!run?.session || run.session.id !== msg.event.sessionId) {
           this.log.warn({ workerId, runId: msg.event.runId }, 'dropping event for a run this worker does not lease');

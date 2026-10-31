@@ -61,7 +61,7 @@ describe('ui gateway', () => {
   const connectWith = async (list: typeof listEvents) => {
     const app2 = Fastify();
     await app2.register(websocket);
-    new UiGateway(t.prisma, t.app.hub, app2.log, list).register(app2);
+    new UiGateway(t.prisma, t.app.hub, app2.log, list).register(app2, process.env.WEB_ORIGIN!);
     await app2.listen({ port: 0, host: '127.0.0.1' });
     extra.push(app2);
     const c = new UiClient({}, (app2.server.address() as AddressInfo).port);
@@ -110,6 +110,20 @@ describe('ui gateway', () => {
       c.ws.once('error', () => {});
     });
     expect(outcome).toMatch(/^(http 401|close 4401)$/);
+  });
+
+  it('refuses a browser Origin other than WEB_ORIGIN, accepts WEB_ORIGIN and a missing Origin', async () => {
+    const outcome = (origin?: string) => {
+      const c = new UiClient({ Cookie: cookie, ...(origin ? { Origin: origin } : {}) });
+      return new Promise<string>((resolve) => {
+        c.ws.once('unexpected-response', (_req, res) => resolve(`http ${res.statusCode}`));
+        c.ws.once('open', () => resolve('open'));
+        c.ws.once('error', () => {});
+      });
+    };
+    expect(await outcome('http://evil.example')).toBe('http 403');
+    expect(await outcome(process.env.WEB_ORIGIN)).toBe('open');
+    expect(await outcome()).toBe('open');
   });
 
   it('replays stored events, then replay.done, then live events once', async () => {

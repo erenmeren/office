@@ -3,6 +3,7 @@ import { z } from 'zod';
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
   API_PORT: z.coerce.number().int().positive().default(4000),
+  API_HOST: z.string().min(1).default('127.0.0.1'),
   COOKIE_SECRET: z.string().min(32),
   WEB_ORIGIN: z.string().min(1),
   OFFICE_DATA_DIR: z.string().min(1),
@@ -14,6 +15,7 @@ const EnvSchema = z.object({
 export interface Config {
   databaseUrl: string;
   port: number;
+  host: string;
   cookieSecret: string;
   webOrigin: string;
   dataDir: string;
@@ -33,6 +35,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   return {
     databaseUrl: e.DATABASE_URL,
     port: e.API_PORT,
+    host: e.API_HOST,
     cookieSecret: e.COOKIE_SECRET,
     webOrigin: e.WEB_ORIGIN,
     dataDir: e.OFFICE_DATA_DIR,

@@ -71,7 +71,7 @@ export async function buildApp(
   app.decorate('gateway', gateway);
   app.decorate('scheduler', scheduler);
   gateway.register(app);
-  new UiGateway(app.prisma, hub, app.log).register(app);
+  new UiGateway(app.prisma, hub, app.log).register(app, config.webOrigin);
   await app.register(taskRoutes);
   await app.register(runRoutes);
   await app.register(workerRoutes);

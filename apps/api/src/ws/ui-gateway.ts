@@ -21,8 +21,19 @@ export class UiGateway {
   ) {}
 
   /** Authentication is done by the app-wide onRequest hook: an unauthenticated upgrade gets HTTP 401. */
-  register(app: FastifyInstance) {
-    app.get('/ws/ui', { websocket: true }, (socket) => this.accept(socket));
+  register(app: FastifyInstance, webOrigin: string) {
+    app.get(
+      '/ws/ui',
+      {
+        websocket: true,
+        // CORS does not cover WebSocket upgrades; browsers always send Origin, non-browser clients may omit it
+        preValidation: async (request, reply) => {
+          const origin = request.headers.origin;
+          if (origin && origin !== webOrigin) return reply.code(403).send({ error: 'forbidden_origin' });
+        },
+      },
+      (socket) => this.accept(socket),
+    );
   }
 
   private accept(socket: WebSocket) {

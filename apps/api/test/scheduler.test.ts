@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunSpec } from '@office/shared';
 import { makeApp } from './helpers.js';
 import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
@@ -89,13 +92,52 @@ describe('scheduler', () => {
     expect(got.runs[0].session.id).toBe(spec.sessionId);
   });
 
-  it('skips a worker whose allowedRoots do not cover the repo', async () => {
+  it('skips a worker whose allowedRoots do not cover the repo, warning once per task', async () => {
+    const warn = vi.spyOn(t.app.log, 'warn');
     const task = await createTask();
     const w = await worker({ allowedRoots: ['/tmp/other'] });
+    await t.app.scheduler.tick();
     await t.app.scheduler.tick();
     await sleep(100);
     expect(w.received.map((m) => m.type)).toEqual(['welcome']);
     expect((await getTask(task.id)).status).toBe('ready');
+    expect(warn.mock.calls.filter(([o]) => (o as { taskId?: string }).taskId === task.id)).toHaveLength(1);
+  });
+
+  it('assigns a task whose repoPath goes through a symlink to a worker reporting the real root', async () => {
+    const real = realpathSync(mkdtempSync(join(tmpdir(), 'office-real-')));
+    const link = `${real}-link`;
+    try {
+      mkdirSync(join(real, 'p2'));
+      symlinkSync(real, link);
+      const p2 = (await req('POST', '/projects', { name: 'P2', slug: 'p2', repoPath: join(link, 'p2') })).json().id;
+      await req('POST', '/tasks', { projectId: p2, agentId, title: 'linked', description: 'd' });
+      const w = await worker({ allowedRoots: [real] });
+      expect((await assign(w)).prompt).toContain('linked');
+    } finally {
+      rmSync(link, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it('releases a run whose assignment could not be sent, without using an attempt', async () => {
+    const task = await createTask();
+    await worker();
+    vi.spyOn(t.app.gateway, 'send').mockReturnValueOnce(false);
+    await t.app.scheduler.tick();
+    expect(await getTask(task.id)).toMatchObject({ status: 'ready', attempts: 0 });
+    const runs = await t.prisma.taskRun.findMany({ where: { taskId: task.id }, include: { session: true } });
+    expect(runs.map((r) => [r.status, r.session?.status])).toEqual([['lost', 'lost']]);
+  });
+
+  it('rejects server-only event types sent by a worker', async () => {
+    await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    await accept(w, spec);
+    w.send({ ...event(spec, 1), event: { ...event(spec, 1).event, type: 'run.lease.lost' } });
+    expect((await w.waitFor('error')).message).toMatch(/server-only/);
+    expect(await t.prisma.sessionEvent.count({ where: { sessionId: spec.sessionId } })).toBe(0);
   });
 
   it('accepts, stores events idempotently and redacted, completes', async () => {
@@ -234,6 +276,35 @@ describe('scheduler', () => {
     expect(await t.prisma.usageRecord.count()).toBe(0);
     await t.app.scheduler.tick();
     expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('lost');
+  });
+
+  it('cancels the run on a connected worker when its lease expires, and again on a stale heartbeat', async () => {
+    await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    await accept(w, spec);
+    await expireRun(spec.runId);
+    await t.app.scheduler.tick();
+    expect(await w.waitFor('run.cancel')).toEqual({ type: 'run.cancel', runId: spec.runId });
+    w.send({ type: 'heartbeat', capacity: 1, activeRunIds: [spec.runId] });
+    expect(await w.waitFor('run.cancel')).toEqual({ type: 'run.cancel', runId: spec.runId });
+  });
+
+  it('tells a reconnecting worker to cancel a run whose lease was lost meanwhile', async () => {
+    await createTask();
+    const w1 = await worker();
+    const spec = await assign(w1);
+    await accept(w1, spec);
+    await w1.close();
+    await until(() => t.app.gateway.onlineWorkers().length === 0, 'worker gone');
+    await expireRun(spec.runId);
+    await t.app.scheduler.tick();
+    const w2 = await connectFakeWorker(t.app, {
+      credential: w1.credential, name: 'w', capacity: 1, allowedRoots: ['/tmp/office-ws'], activeRunIds: [spec.runId],
+    });
+    workers.push(w2);
+    expect(await w2.waitFor('run.cancel')).toEqual({ type: 'run.cancel', runId: spec.runId });
+    expect(t.app.gateway.onlineWorkers()[0]!.activeRuns).toBe(0);
   });
 
   it('a heartbeat moves the lease forward', async () => {

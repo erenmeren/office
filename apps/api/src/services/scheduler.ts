@@ -1,14 +1,27 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { FastifyBaseLogger } from 'fastify';
 import type { PrismaClient } from '@office/db';
 import type { Config } from '../config.js';
 import { isUnderRoot } from '../lib/paths.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 import type { EventHub } from './event-hub.js';
-import { createRunForTask, expireLeases } from './run-service.js';
+import { abandonRun, createRunForTask, expireLeases } from './run-service.js';
+
+// worker roots are real paths, so compare the repo's real path too (resolve only if it does not exist here)
+function realOrResolved(path: string) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
 
 export class Scheduler {
   private timer?: NodeJS.Timeout;
   private inFlight?: Promise<void>;
+  // ready tasks already warned about having no eligible worker
+  private warnedNoWorker = new Set<string>();
 
   constructor(
     private prisma: PrismaClient,
@@ -40,7 +53,10 @@ export class Scheduler {
   private async run() {
     try {
       for (const { runId, workerId } of await expireLeases(this.prisma, this.hub)) {
-        if (workerId) this.gateway.releaseRun(workerId, runId);
+        if (!workerId) continue;
+        // the worker may still be executing it; it must stop touching the repo
+        this.gateway.send(workerId, { type: 'run.cancel', runId });
+        this.gateway.releaseRun(workerId, runId);
       }
     } catch (err) {
       this.log.error({ err }, 'expireLeases failed');
@@ -58,14 +74,23 @@ export class Scheduler {
     }
     for (const task of tasks) {
       try {
+        const repoPath = realOrResolved(task.project.repoPath);
         const worker = this.gateway
           .onlineWorkers()
-          .find(
-            (w) => w.capacity - w.activeRuns > 0 && w.allowedRoots.some((r) => isUnderRoot(task.project.repoPath, r)),
-          );
-        if (!worker) continue;
+          .find((w) => w.capacity - w.activeRuns > 0 && w.allowedRoots.some((r) => isUnderRoot(repoPath, r)));
+        if (!worker) {
+          if (!this.warnedNoWorker.has(task.id)) {
+            this.warnedNoWorker.add(task.id);
+            this.log.warn({ taskId: task.id, repoPath }, 'ready task has no eligible worker online');
+          }
+          continue;
+        }
+        this.warnedNoWorker.delete(task.id);
         const { spec } = await createRunForTask(this.prisma, this.hub, task, worker, this.config);
-        this.gateway.send(worker.workerId, { type: 'run.assign', spec });
+        if (!this.gateway.send(worker.workerId, { type: 'run.assign', spec })) {
+          this.log.warn({ taskId: task.id, runId: spec.runId, workerId: worker.workerId }, 'run.assign not delivered; run released');
+          await abandonRun(this.prisma, this.hub, spec.runId);
+        }
       } catch (err) {
         this.log.error({ err, taskId: task.id }, 'scheduling task failed');
       }

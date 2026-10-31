@@ -111,6 +111,25 @@ async function acceptRunInTx(tx: Prisma.TransactionClient, outbox: Outbox, runId
   queueRunStatus(outbox, runId, 'running');
 }
 
+/** A queued run whose assignment never reached the worker: lost, and its task is ready again without using an attempt. */
+export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: string) {
+  const now = new Date();
+  const outbox: Outbox = [];
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.taskRun.updateMany({
+      where: { id: runId, status: 'queued' },
+      data: { status: 'lost', finishedAt: now, error: 'assignment not delivered to the worker' },
+    });
+    if (count === 0) return;
+    await tx.agentSession.updateMany({ where: { runId }, data: { status: 'lost', endedAt: now } });
+    const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId } });
+    await tx.task.update({ where: { id: run.taskId }, data: { attempts: { decrement: 1 } } });
+    await setTaskStatus(tx, outbox, run.taskId, 'ready');
+    queueRunStatus(outbox, runId, 'lost');
+  });
+  hub.publishAll(outbox);
+}
+
 export async function markRunning(prisma: PrismaClient, hub: EventHub, runId: string, workerId: string) {
   const run = await findLeasedRun(prisma, runId, workerId);
   if (!run) throw new LeaseError(runId);
