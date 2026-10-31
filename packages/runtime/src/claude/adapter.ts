@@ -19,6 +19,9 @@ const BUILTIN_TOOLS = [
   'KillShell',
   'TodoWrite',
   'Skill',
+  'ListMcpResourcesTool',
+  'ReadMcpResourceTool',
+  'ReadMcpResourceDirTool',
 ];
 
 /** spec.allowedTools plus Skill/Agent when skills/subagents are pinned, so pinning implies the grant. */

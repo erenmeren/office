@@ -73,6 +73,9 @@ describe('ClaudeAdapter', () => {
     expect(options.disallowedTools).toContain('Bash');
     expect(options.disallowedTools).not.toContain('Read');
     expect(options.disallowedTools).toContain('mcp__*');
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining(['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool']),
+    );
   });
 
   it('passes skills, skillsDir and subagents and grants Skill and Agent', async () => {
