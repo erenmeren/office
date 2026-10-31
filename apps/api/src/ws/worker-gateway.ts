@@ -8,6 +8,7 @@ import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
 import { appendEvent } from '../services/event-store.js';
 import { completeRun, findLeasedRun, markRunning, renewLeases } from '../services/run-service.js';
+import { recordSubagentEvent } from '../services/subagent-service.js';
 
 interface Connection {
   socket: WebSocket;
@@ -203,7 +204,11 @@ export class WorkerGateway {
           projectId: run.session.projectId,
           payload: redactSecrets(msg.event.payload),
         };
-        if ((await appendEvent(this.prisma, event)).inserted) this.hub.publish(`run:${event.runId}`, event);
+        if (!(await appendEvent(this.prisma, event)).inserted) return;
+        this.hub.publish(`run:${event.runId}`, event);
+        await recordSubagentEvent(this.prisma, event).catch((err: unknown) =>
+          this.log.error({ err, runId: event.runId, seq: event.seq }, 'failed to record subagent event'),
+        );
         return;
       }
       case 'run.result':

@@ -34,6 +34,9 @@ function toolUseEvents(id: string, tool: string, rawInput: unknown): EventBody[]
       payload: { toolUseId: id, description: str(input.description), subagentType: str(input.subagent_type) },
     });
   }
+  if (tool === 'Skill') {
+    events.push({ type: 'agent.skill.invoked', payload: { toolUseId: id, skill: str(input.skill) ?? str(input.command) } });
+  }
   if (FILE_TOOLS.has(tool)) {
     events.push({ type: 'agent.file.changed', payload: { path: str(input.file_path) ?? str(input.notebook_path) } });
   }
@@ -47,7 +50,18 @@ function rawEvents(msg: SDKMessage): EventBody[] {
   switch (msg.type) {
     case 'system':
       if (msg.subtype === 'init') {
-        return [{ type: 'agent.started', payload: { model: msg.model, tools: msg.tools, sdkSessionId: msg.session_id } }];
+        return [
+          {
+            type: 'agent.started',
+            payload: {
+              model: msg.model,
+              tools: msg.tools,
+              sdkSessionId: msg.session_id,
+              slashCommands: msg.slash_commands,
+              agents: msg.agents ?? [],
+            },
+          },
+        ];
       }
       if (msg.subtype === 'task_notification') {
         return [

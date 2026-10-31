@@ -3,7 +3,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { ZodError } from 'zod';
-import { InvalidTransitionError } from '@office/shared';
+import { InvalidTransitionError, SkillValidationError } from '@office/shared';
 import type { PrismaClient } from '@office/db';
 import type { Config } from './config.js';
 import { HttpError } from './lib/errors.js';
@@ -13,6 +13,7 @@ import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { projectRoutes } from './routes/projects.js';
 import { agentRoutes } from './routes/agents.js';
+import { skillRoutes } from './routes/skills.js';
 import { taskRoutes } from './routes/tasks.js';
 import { runRoutes } from './routes/runs.js';
 import { workerRoutes } from './routes/workers.js';
@@ -44,7 +45,12 @@ export async function buildApp(
     if (err instanceof ZodError) {
       return reply.code(400).send({ error: 'validation_error', details: err.issues });
     }
-    if (err instanceof HttpError) return reply.code(err.status).send({ error: err.code });
+    if (err instanceof HttpError) {
+      return reply.code(err.status).send(err.detail ? { error: err.code, message: err.detail } : { error: err.code });
+    }
+    if (err instanceof SkillValidationError) {
+      return reply.code(400).send({ error: 'invalid_skill', code: err.code, message: err.message });
+    }
     if (err instanceof InvalidTransitionError) return reply.code(409).send({ error: 'invalid_transition' });
     // Prisma unique-constraint violation (concurrent duplicates)
     if ((err as { code?: string }).code === 'P2002') return reply.code(409).send({ error: 'conflict' });
@@ -63,6 +69,7 @@ export async function buildApp(
   await app.register(authRoutes, { cookieSecure: config.cookieSecure });
   await app.register(projectRoutes);
   await app.register(agentRoutes);
+  await app.register(skillRoutes, { config });
 
   const hub = new EventHub();
   const gateway = new WorkerGateway(app.prisma, hub, config, app.log);

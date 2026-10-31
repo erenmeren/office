@@ -1,19 +1,19 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { canTransitionTask, type OfficeEvent } from '@office/shared';
+import { canTransitionTask, type OfficeEvent, type RunStatus } from '@office/shared';
 import { EventLog, type LogRow } from '@/components/event-log';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { post } from '@/lib/api';
-import { useAgents, useTask } from '@/lib/queries';
+import { useAgents, useRunSubagents, useTask } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
 
-function RunEvents({ runId, onStatus }: { runId: string; onStatus: () => void }) {
+function RunEvents({ runId, onStatus }: { runId: string; onStatus: (runId: string) => void }) {
   const [events, setEvents] = useState(new Map<number, OfficeEvent>());
   const [replayAt, setReplayAt] = useState<number>();
 
@@ -25,7 +25,7 @@ function RunEvents({ runId, onStatus }: { runId: string; onStatus: () => void })
         } else if (m.type === 'replay.done') {
           setReplayAt((prev) => prev ?? m.lastSeq); // a reconnect replays again; keep the first divider
         } else if (m.type === 'run.status.changed') {
-          onStatus();
+          onStatus(runId);
         }
       }),
     [runId, onStatus],
@@ -39,12 +39,55 @@ function RunEvents({ runId, onStatus }: { runId: string; onStatus: () => void })
   return <EventLog rows={rows} />;
 }
 
+const ACTIVE_RUN: RunStatus[] = ['queued', 'running', 'waiting_reply', 'waiting_approval'];
+const time = (s: string | null) => s && new Date(s).toLocaleTimeString();
+
+function Subagents({ runId, active }: { runId: string; active: boolean }) {
+  const subagents = useRunSubagents(runId, active);
+  if (!subagents.data?.length) return <p className="text-sm text-muted-foreground">No subagents.</p>;
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Type</TableHead>
+          <TableHead>Description</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Started</TableHead>
+          <TableHead>Ended</TableHead>
+          <TableHead>Summary</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {subagents.data.map((s) => (
+          <TableRow key={s.id}>
+            <TableCell className="font-mono">{s.subagentType}</TableCell>
+            <TableCell className="whitespace-normal">{s.description}</TableCell>
+            <TableCell>
+              <Badge variant="outline">{s.status}</Badge>
+            </TableCell>
+            <TableCell>{time(s.startedAt)}</TableCell>
+            <TableCell>{time(s.endedAt)}</TableCell>
+            <TableCell className="whitespace-pre-wrap">{s.summary}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 export default function TaskPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const task = useTask(id);
   const agents = useAgents();
   const refresh = useCallback(() => qc.invalidateQueries({ queryKey: ['task', id] }), [qc, id]);
+  const onRunStatus = useCallback(
+    (runId: string) => {
+      void refresh();
+      void qc.invalidateQueries({ queryKey: ['run-subagents', runId] });
+    },
+    [qc, refresh],
+  );
 
   useEffect(
     () =>
@@ -93,15 +136,28 @@ export default function TaskPage() {
             </TableHeader>
             <TableBody>
               {t.runs.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-mono">{r.id.slice(0, 8)}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{r.status}</Badge>
-                  </TableCell>
-                  <TableCell>{r.startedAt && new Date(r.startedAt).toLocaleTimeString()}</TableCell>
-                  <TableCell>{r.finishedAt && new Date(r.finishedAt).toLocaleTimeString()}</TableCell>
-                  <TableCell>${r.costUsd.toFixed(4)}</TableCell>
-                </TableRow>
+                <Fragment key={r.id}>
+                  <TableRow>
+                    <TableCell className="font-mono">{r.id.slice(0, 8)}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{r.status}</Badge>
+                    </TableCell>
+                    <TableCell>{time(r.startedAt)}</TableCell>
+                    <TableCell>{time(r.finishedAt)}</TableCell>
+                    <TableCell>${r.costUsd.toFixed(4)}</TableCell>
+                  </TableRow>
+                  {!!r.session?.skillsSnapshot?.length && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="space-x-1">
+                        {r.session.skillsSnapshot.map((s) => (
+                          <Badge key={s.skillId} variant="secondary" className="font-mono">
+                            {s.name}@{s.version} ({s.mode})
+                          </Badge>
+                        ))}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
               ))}
             </TableBody>
           </Table>
@@ -118,6 +174,17 @@ export default function TaskPage() {
       )}
       {latest?.error && <p className="whitespace-pre-wrap text-sm text-destructive">{latest.error}</p>}
 
+      {latest && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Subagents (run {latest.id.slice(0, 8)})</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Subagents runId={latest.id} active={ACTIVE_RUN.includes(latest.status)} />
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle>Events{latest && ` (run ${latest.id.slice(0, 8)})`}</CardTitle>
@@ -125,7 +192,7 @@ export default function TaskPage() {
         <CardContent>
           {/* the run's session exists only once a worker accepted it; polling picks it up */}
           {latest?.session ? (
-            <RunEvents key={latest.id} runId={latest.id} onStatus={refresh} />
+            <RunEvents key={latest.id} runId={latest.id} onStatus={onRunStatus} />
           ) : (
             <p className="text-sm text-muted-foreground">Waiting for a worker…</p>
           )}

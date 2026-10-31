@@ -6,6 +6,7 @@
     "tools": ["Bash", "Agent", "Write"],
     "session_id": "sess-1",
     "apiKeySource": "none",
+    "slash_commands": ["/tdd"],
     "uuid": "u0"
   },
   {

@@ -13,7 +13,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   },
 }));
 
-const { ClaudeAdapter } = await import('./adapter.js');
+const { ClaudeAdapter, effectiveAllowedTools } = await import('./adapter.js');
 
 const spec: RunSpec = {
   runId: 'r1',
@@ -29,6 +29,8 @@ const spec: RunSpec = {
   maxBudgetUsd: 0.01,
   maxConcurrentSubagents: 4,
   maxSubagentDepth: 1,
+  skills: [],
+  subagents: [],
 };
 const init = { type: 'system', subtype: 'init', model: 'm', tools: [], session_id: 'sess-9', apiKeySource: 'none' };
 const base = { is_error: false, total_cost_usd: 0.01, num_turns: 1, duration_ms: 5, usage: { input_tokens: 1, output_tokens: 2 }, session_id: 'sess-9' };
@@ -70,5 +72,53 @@ describe('ClaudeAdapter', () => {
     expect(options.settingSources).toEqual(['project']);
     expect(options.disallowedTools).toContain('Bash');
     expect(options.disallowedTools).not.toContain('Read');
+    expect(options.disallowedTools).toContain('mcp__*');
+    expect(options.disallowedTools).toEqual(
+      expect.arrayContaining(['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool']),
+    );
+  });
+
+  it('passes skills, skillsDir and subagents and grants Skill and Agent', async () => {
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+    const skill = { name: 'tdd', version: 1, checksum: 'c', mode: 'eager' as const, files: {} };
+    const sub = { name: 'reviewer', description: 'd', prompt: 'p', skills: ['tdd'] };
+    await new ClaudeAdapter().run(
+      { ...spec, skills: [skill], subagents: [sub], skillsDir: '/tmp/x/.office' },
+      { emit: () => {} },
+      new AbortController().signal,
+    );
+    const { options } = h.calls[0] as { options: Record<string, unknown> };
+    expect(options.additionalDirectories).toEqual(['/tmp/x/.office']);
+    expect(options.skills).toEqual(['tdd']);
+    expect(options.agents).toEqual({ reviewer: { description: 'd', prompt: 'p', skills: ['tdd'] } });
+    expect(options.allowedTools).toEqual(['Read', 'Skill', 'Agent', 'Task']);
+    expect(options.disallowedTools).not.toContain('Skill');
+    expect(options.disallowedTools).not.toContain('Agent');
+    expect(options.disallowedTools).not.toContain('Task');
+  });
+
+  it('omits skill and subagent options when none are pinned', async () => {
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+    await run();
+    const { options } = h.calls[0] as { options: Record<string, unknown> };
+    expect(options.additionalDirectories).toBeUndefined();
+    expect(options.skills).toBeUndefined();
+    expect(options.agents).toBeUndefined();
+  });
+});
+
+describe('effectiveAllowedTools', () => {
+  const skill = { name: 'tdd', version: 1, checksum: 'c', mode: 'eager' as const, files: {} };
+  const sub = { name: 'reviewer', description: 'd', prompt: 'p', skills: [] };
+
+  it('adds Skill only with skills and Agent only with subagents', () => {
+    expect(effectiveAllowedTools(spec)).toEqual(['Read']);
+    expect(effectiveAllowedTools({ ...spec, skills: [skill] })).toEqual(['Read', 'Skill']);
+    expect(effectiveAllowedTools({ ...spec, subagents: [sub] })).toEqual(['Read', 'Agent', 'Task']);
+  });
+
+  it('does not duplicate Skill or Agent', () => {
+    const s = { ...spec, allowedTools: ['Skill', 'Agent', 'Task'], skills: [skill], subagents: [sub] };
+    expect(effectiveAllowedTools(s)).toEqual(['Skill', 'Agent', 'Task']);
   });
 });

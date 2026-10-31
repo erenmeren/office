@@ -42,6 +42,7 @@ export const EventType = z.enum([
   'agent.tool.failed',
   'agent.file.changed',
   'agent.command.executed',
+  'agent.skill.invoked',
   'agent.subagent.spawned',
   'agent.subagent.completed',
   'agent.message.sent',

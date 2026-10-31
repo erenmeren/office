@@ -18,6 +18,8 @@ const spec: RunSpec = {
   maxBudgetUsd: 0.05,
   maxConcurrentSubagents: 4,
   maxSubagentDepth: 1,
+  skills: [],
+  subagents: [],
 };
 
 const result = await new ClaudeAdapter().run(

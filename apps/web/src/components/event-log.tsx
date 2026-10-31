@@ -7,7 +7,15 @@ import { Badge } from '@/components/ui/badge';
 export type LogRow = { kind: 'event'; event: OfficeEvent } | { kind: 'replay.done'; lastSeq: number };
 
 function summary(e: OfficeEvent): string {
-  const p = e.payload as { tool?: unknown; input?: { command?: unknown; path?: unknown }; text?: unknown };
+  const p = e.payload as {
+    tool?: unknown;
+    input?: { command?: unknown; path?: unknown };
+    text?: unknown;
+    skill?: unknown;
+    subagentType?: unknown;
+  };
+  if (e.type === 'agent.skill.invoked') return `skill ${typeof p.skill === 'string' ? p.skill : ''}`.trim();
+  if (e.type === 'agent.subagent.spawned') return `subagent ${typeof p.subagentType === 'string' ? p.subagentType : ''}`.trim();
   if (typeof p.tool === 'string') {
     const arg = p.input?.command ?? p.input?.path;
     return `${p.tool} ${typeof arg === 'string' ? arg.slice(0, 80) : ''}`;

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { RunSkillSchema } from './skill.js';
+import { SubagentDefinitionSchema } from './subagent.js';
 
 export const RunSpecSchema = z.object({
   runId: z.string(),
@@ -16,6 +18,10 @@ export const RunSpecSchema = z.object({
   maxConcurrentSubagents: z.number().int().default(4),
   maxSubagentDepth: z.number().int().default(1),
   resumeSdkSessionId: z.string().optional(),
+  skills: z.array(RunSkillSchema).default([]),
+  subagents: z.array(SubagentDefinitionSchema).default([]),
+  // worker-filled: directory passed to additionalDirectories; never set by the API
+  skillsDir: z.string().optional(),
 });
 export type RunSpec = z.infer<typeof RunSpecSchema>;
 

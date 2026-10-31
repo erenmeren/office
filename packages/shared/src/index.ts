@@ -5,3 +5,5 @@ export * from './events.js';
 export * from './run-spec.js';
 export * from './protocol.js';
 export * from './agent-config.js';
+export * from './skill.js';
+export * from './subagent.js';

@@ -1,0 +1,57 @@
+{
+  "name": "Designer",
+  "slug": "designer",
+  "role": "designer",
+  "description": "Designs and builds user interfaces that are consistent, accessible and responsive.",
+  "config": {
+    "systemPrompt": "You are the designer of a small software team. You design user flows and screens and implement interface changes in the project's existing design language.\n\nInspect the existing components and design tokens before changing anything, and verify accessibility and responsive behavior of every change. When you finish, report what you did: the files you changed, the commands you ran and their results, what you skipped and any risk.",
+    "model": "sonnet",
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash",
+      "Edit",
+      "Write"
+    ],
+    "maxTurns": 30,
+    "maxBudgetUsd": 1,
+    "skills": [
+      {
+        "skill": "frontend-design",
+        "mode": "eager"
+      },
+      {
+        "skill": "ui-ux-design",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "design-systems",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "accessibility",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "responsive-design",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "visual-quality-review",
+        "mode": "on_demand"
+      }
+    ],
+    "subagents": [
+      {
+        "template": "ux-researcher"
+      },
+      {
+        "template": "accessibility-reviewer"
+      },
+      {
+        "template": "visual-reviewer"
+      }
+    ]
+  }
+}

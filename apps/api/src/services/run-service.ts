@@ -1,8 +1,9 @@
 import type { AgentSession, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
-import { AgentConfigSchema, RunSpecSchema, type OfficeEvent, type RunResult } from '@office/shared';
+import { RunSpecSchema, skillPromptSection, type OfficeEvent, type RunResult } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
 import type { EventHub, Outbox, RunStatusChanged } from './event-hub.js';
+import { loadVersion } from './agent-service.js';
 import { appendEvent } from './event-store.js';
 import { setTaskStatus } from './task-service.js';
 
@@ -44,8 +45,8 @@ export async function createRunForTask(
     prisma.project.findUniqueOrThrow({ where: { id: task.projectId } }),
   ]);
   if (!agent.currentVersionId) throw new Error(`Agent ${agent.id} has no current version`);
-  const version = await prisma.agentVersion.findUniqueOrThrow({ where: { id: agent.currentVersionId } });
-  const cfg = AgentConfigSchema.parse(version.config);
+  const { version, config: cfg, skills, subagents } = await loadVersion(prisma, agent.currentVersionId);
+  const section = skillPromptSection(skills);
 
   const outbox: Outbox = [];
   const created = await prisma.$transaction(async (tx) => {
@@ -66,6 +67,9 @@ export async function createRunForTask(
         model: cfg.model,
         status: 'starting',
         startedAt: new Date(),
+        skillsSnapshot: skills.map(({ skillId, skillVersionId, name, version, checksum, mode }) => ({
+          skillId, skillVersionId, name, version, checksum, mode,
+        })),
       },
     });
     await tx.task.update({ where: { id: task.id }, data: { attempts: { increment: 1 } } });
@@ -77,7 +81,7 @@ export async function createRunForTask(
       projectId: task.projectId,
       cwd: project.repoPath,
       prompt: `${task.title}\n\n${task.description}`,
-      systemPrompt: cfg.systemPrompt,
+      systemPrompt: cfg.systemPrompt + (section ? '\n\n' + section : ''),
       model: cfg.model,
       effort: cfg.effort,
       allowedTools: cfg.allowedTools,
@@ -85,6 +89,8 @@ export async function createRunForTask(
       maxBudgetUsd: cfg.maxBudgetUsd,
       maxConcurrentSubagents: cfg.maxConcurrentSubagents,
       maxSubagentDepth: cfg.maxSubagentDepth,
+      skills: skills.map(({ name, version, checksum, mode, files }) => ({ name, version, checksum, mode, files })),
+      subagents,
     });
     return { run, session, spec };
   });

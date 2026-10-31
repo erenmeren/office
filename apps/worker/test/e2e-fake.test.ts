@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,7 +74,7 @@ describe('worker end to end with the fake runtime', () => {
     });
     prisma = createPrisma(config.databaseUrl);
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SessionEvent","UsageRecord","AgentSession","TaskRun","Task","AgentVersion","Agent","Worker","Project","UserSession","User" CASCADE',
+      'TRUNCATE TABLE "SubagentRun","SessionEvent","UsageRecord","AgentSession","TaskRun","Task","AgentSubagent","AgentSkill","AgentVersion","Agent","SkillVersion","Skill","Worker","Project","UserSession","User" CASCADE',
     );
     app = await buildApp(config, { prisma, logger: false });
     await app.listen({ port: 0, host: '127.0.0.1' });
@@ -125,6 +125,39 @@ describe('worker end to end with the fake runtime', () => {
     expect(run.resultText).toContain('Fix the bug');
     expect(await prisma.usageRecord.count({ where: { runId } })).toBe(1);
     expect((await prisma.worker.findUniqueOrThrow({ where: { id: workerId } })).status).toBe('online');
+  });
+
+  it('a task of an agent with an eager skill and a subagent records the skill snapshot, the skill invocation and the subagent run', async () => {
+    const { enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
+    await connect(enrollToken);
+    const name = 'e2e-skill';
+    const skill = (
+      await req('POST', '/skills', { name, files: { 'SKILL.md': `---\nname: ${name}\ndescription: d\n---\nbody` } })
+    ).json();
+    const agent = (
+      await req('POST', '/agents', {
+        name: 'S', slug: 's', role: 'dev',
+        config: {
+          systemPrompt: 'be nice', model: 'sonnet', allowedTools: ['Read'],
+          skills: [{ skillId: skill.id, mode: 'eager' }],
+          subagents: [{ name: 'helper', description: 'helps', prompt: 'help', skills: [name] }],
+        },
+      })
+    ).json();
+    const task = (
+      await req('POST', '/tasks', { projectId, agentId: agent.id, title: 'T', description: 'use SUBAGENT' })
+    ).json();
+    await app.scheduler.tick();
+    const runId = (await waitTask(task.id, 'done')).runs[0].id;
+    const run = (await req('GET', `/runs/${runId}`)).json();
+    expect(run.session.skillsSnapshot).toEqual([
+      expect.objectContaining({ name, version: 1, mode: 'eager', skillId: skill.id, checksum: expect.any(String), skillVersionId: expect.any(String) }),
+    ]);
+    const events = (await req('GET', `/runs/${runId}/events`)).json() as { type: string; payload: { skill?: string } }[];
+    expect(events.some((e) => e.type === 'agent.skill.invoked' && e.payload.skill === name)).toBe(true);
+    const subs = (await req('GET', `/runs/${runId}/subagents`)).json() as { status: string }[];
+    expect(subs.map((s) => s.status)).toEqual(['completed']);
+    expect(readdirSync(join(home, 'runs'))).toEqual([]);
   });
 
   it('retries on a second attempt after the worker dies mid-run and reconnects', async () => {

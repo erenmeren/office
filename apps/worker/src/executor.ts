@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { removeRunRoot, materializeSkills } from './skills.js';
 import { redactSecrets, type RuntimeAdapter } from '@office/runtime';
 import type { EventBody, OfficeEvent, RunResult, RunSpec, WorkerToApi } from '@office/shared';
 
@@ -27,6 +28,7 @@ export class RunExecutor {
     private adapter: RuntimeAdapter,
     private send: (msg: WorkerToApi) => void,
     private workspaceRoots: string[],
+    private runsDir: string,
   ) {}
 
   activeRunIds(): string[] {
@@ -68,11 +70,14 @@ export class RunExecutor {
     };
     let result: RunResult;
     try {
-      result = await this.adapter.run(spec, { emit }, signal);
+      const skillsDir = await materializeSkills(this.runsDir, spec.runId, spec.skills);
+      result = await this.adapter.run(skillsDir ? { ...spec, skillsDir } : spec, { emit }, signal);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       emit({ type: 'agent.failed', payload: { error } });
       result = { status: 'failed', error, usage: NO_USAGE };
+    } finally {
+      await removeRunRoot(this.runsDir, spec.runId).catch(() => {});
     }
     this.send({ type: 'run.result', runId: spec.runId, sessionId: spec.sessionId, result });
   }

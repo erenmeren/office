@@ -95,13 +95,15 @@ model Agent {
 }
 
 model AgentVersion {
-  id        String    @id @default(uuid())
-  createdAt DateTime  @default(now())
+  id        String          @id @default(uuid())
+  createdAt DateTime        @default(now())
   agentId   String
   version   Int
   config    Json
-  agent     Agent     @relation(fields: [agentId], references: [id])
+  agent     Agent           @relation(fields: [agentId], references: [id])
   runs      TaskRun[]
+  skills    AgentSkill[]
+  subagents AgentSubagent[]
 
   @@unique([agentId, version])
   @@index([agentId])
@@ -181,6 +183,7 @@ model AgentSession {
   agent          Agent          @relation(fields: [agentId], references: [id])
   project        Project        @relation(fields: [projectId], references: [id])
   events         SessionEvent[]
+  subagentRuns   SubagentRun[]
 
   @@index([agentId])
   @@index([projectId])
@@ -217,4 +220,77 @@ model UsageRecord {
   @@index([runId])
   @@index([projectId])
   @@index([agentId])
+}
+
+model Skill {
+  id               String         @id @default(uuid())
+  createdAt        DateTime       @default(now())
+  name             String         @unique
+  description      String
+  source           String
+  sourceRef        String?
+  status           String         @default("pending_review")
+  currentVersionId String?
+  versions         SkillVersion[]
+  agentSkills      AgentSkill[]
+}
+
+model SkillVersion {
+  id          String       @id @default(uuid())
+  createdAt   DateTime     @default(now())
+  skillId     String
+  version     Int
+  files       Json
+  checksum    String
+  createdBy   String       @default("owner")
+  skill       Skill        @relation(fields: [skillId], references: [id])
+  agentSkills AgentSkill[]
+
+  @@unique([skillId, version])
+  @@index([skillId])
+}
+
+model AgentSkill {
+  id             String       @id @default(uuid())
+  createdAt      DateTime     @default(now())
+  agentVersionId String
+  skillId        String
+  skillVersionId String
+  mode           String
+  agentVersion   AgentVersion @relation(fields: [agentVersionId], references: [id])
+  skill          Skill        @relation(fields: [skillId], references: [id])
+  skillVersion   SkillVersion @relation(fields: [skillVersionId], references: [id])
+
+  @@unique([agentVersionId, skillId])
+  @@index([agentVersionId])
+  @@index([skillId])
+  @@index([skillVersionId])
+}
+
+model AgentSubagent {
+  id             String       @id @default(uuid())
+  createdAt      DateTime     @default(now())
+  agentVersionId String
+  name           String
+  definition     Json
+  agentVersion   AgentVersion @relation(fields: [agentVersionId], references: [id])
+
+  @@unique([agentVersionId, name])
+  @@index([agentVersionId])
+}
+
+model SubagentRun {
+  id           String       @id @default(uuid())
+  createdAt    DateTime     @default(now())
+  sessionId    String
+  toolUseId    String       @unique
+  subagentType String?
+  description  String?
+  status       String       @default("running")
+  summary      String?
+  startedAt    DateTime
+  endedAt      DateTime?
+  session      AgentSession @relation(fields: [sessionId], references: [id])
+
+  @@index([sessionId])
 }
