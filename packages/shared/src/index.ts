@@ -4,3 +4,4 @@ export * from './task-state.js';
 export * from './events.js';
 export * from './run-spec.js';
 export * from './protocol.js';
+export * from './agent-config.js';
