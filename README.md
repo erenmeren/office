@@ -46,13 +46,15 @@ cp .env.example .env
 
 `.env` is git-ignored and must never be committed. Set at least `COOKIE_SECRET` to a random string of 32 characters or more, and `OFFICE_WORKSPACE_ROOTS` to the directory (or a colon-separated list of directories) under which the worker may run agents. The other values match the Compose setup.
 
-The API and the worker read their configuration from the process environment only, so export `.env` into the shell before starting them by hand:
+The API and the worker read their configuration from the process environment only; they do not load `.env` themselves. For the API and the web app, export `.env` into the shell before starting them by hand:
 
 ```bash
 set -a; . ./.env; set +a
 ```
 
-`scripts/dev-all.sh` does this for you, then starts infra, applies migrations and runs `pnpm dev`.
+The worker needs only the `OFFICE_*` variables: `OFFICE_API_URL`, `OFFICE_WORKER_HOME`, `OFFICE_WORKSPACE_ROOTS`, `OFFICE_RUNTIME`, `OFFICE_WORKER_CAPACITY`, and optionally `OFFICE_ENROLL_TOKEN` and `OFFICE_WORKER_NAME`. Agent sessions inherit the worker's environment, so exporting the whole `.env` into the worker's shell also exposes `DATABASE_URL` and `COOKIE_SECRET` to every agent session. Export only the `OFFICE_*` variables for the worker (see section 9 and `docs/security.md`).
+
+`scripts/dev-all.sh` exports the whole `.env` for convenience, then starts infra, applies migrations and runs `pnpm dev`. Because it starts the worker too, use it only with throwaway local values.
 
 ## 6. Seed
 
@@ -84,11 +86,11 @@ Phase 1 has no separate projects page. The **New task** page has an "Add project
 On the **Workers** page, create a worker with a name. The page shows a one-time enrollment token and the command to start the worker with it:
 
 ```bash
-set -a; . ./.env; set +a
+set -a; . <(grep '^OFFICE_' .env); set +a   # only the worker's variables
 OFFICE_ENROLL_TOKEN=<token> pnpm --filter @office/worker dev
 ```
 
-The worker exchanges the token for a long-lived credential, saves it to `$OFFICE_WORKER_HOME/credentials.json` (mode 0600, default `~/.office-worker`), and connects. Later starts need no token:
+The worker exchanges the token for a long-lived credential, saves it to `$OFFICE_WORKER_HOME/credentials.json` (mode 0600, default `~/.office-worker`), and connects. Later starts need no token, only the same `OFFICE_*` variables:
 
 ```bash
 pnpm --filter @office/worker dev

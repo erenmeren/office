@@ -2,7 +2,7 @@
 
 | Phase | Status |
 |-------|--------|
-| 1 | in progress |
+| 1 | done |
 | 2 | not started |
 | 3 | not started |
 | 4 | not started |
@@ -12,7 +12,7 @@
 ## Outstanding
 
 Phase 1:
-- Acceptance criterion not met: no `agent.tool.started` for `Write` and no `agent.file.changed` were produced in the real Claude run. In all three attempts the model created `hello.txt` with a single `Bash` command (see "Task 10 real Claude acceptance run" below). Everything else in the Phase 1 acceptance held. Phase 1 stays `in progress` until the owner accepts this result or a run shows a `Write` with `agent.file.changed`.
+- Acceptance criterion met in the Write-requested run: with the description asking for the Write tool, the run produced `agent.tool.started` for `Write` and `agent.file.changed` for `hello.txt` (see "Task 10 real Claude acceptance run (Write tool requested)" below). With the original wording the model created the file with a single `Bash` command in all three attempts (see "Task 10 real Claude acceptance run").
 - Visual browser click-through of the acceptance flow (login, submit the task in the UI, watch the live log, reload after an API restart) was not performed by the implementer, who had no browser. The flow was driven through the HTTP API and the UI WebSocket instead, and the web pages answered HTTP 200. It remains for the owner.
 - The dashboard and workers pages do not poll or subscribe for updates; they show fresh data only on reload (Task 9).
 - The agent's child process inherits the worker's whole environment except `CLAUDE*` and `AI_AGENT` keys; with `.env` exported (as `scripts/dev-all.sh` does) that includes `DATABASE_URL` and `COOKIE_SECRET` (see `docs/security.md`).
@@ -90,3 +90,30 @@ File on disk after attempt 3: `/home/meren/projects/office-workspaces/office-san
 Replay after restart: the API process was killed (health check failed), restarted at 2026-10-31T15:54:30Z, and each of the three runs was re-subscribed over `/ws/ui` with `afterSeq: 0`. Each replayed seqs 1 to 6 (`agent.started`, `agent.tool.started`, `agent.command.executed`, `agent.tool.completed`, `agent.text`, `agent.completed`) from the database, followed by `replay.done` with `lastSeq` 6. `GET /tasks/c0e0e558-d8a3-4fe9-a79e-b5905f7aecd5` still returned status `done` with the succeeded run, cost and result text. The worker reconnected by itself after the restart and was `online`.
 
 Worker log note: the SDK printed `[CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked for: Read, Glob, Grep, Bash, Edit, Write. Bare allowedTools entries auto-approve the whole tool before the callback is consulted.` This is expected in Phase 1 (no approvals) and is recorded in `docs/security.md` for Phase 4.
+
+### Task 10 real Claude acceptance run (Write tool requested)
+
+Date: 2026-10-31. Result: **passed**. One attempt, no retry. Same project `office-sandbox`, agent `developer` (version 1, `sonnet`), worker `e973b79e-8611-4552-b949-b291d5fd493e` started with `OFFICE_RUNTIME=claude` and its saved credential. `hello.txt` was deleted before the run so the Write was a real creation. Driven through `POST /tasks` and `/ws/ui` as in the run above.
+
+Task: title `Create hello.txt`, description `Create a file named hello.txt in the current directory containing the single line "Hello from Agent Office", then show its contents with cat. Use the Write tool to create the file, not a shell redirect.`
+
+Task `dc7e7d65-76af-42c9-88d6-be9703002aa8`, run `0d4988f2-13bf-47cd-a131-883a73061bb4`, session `1b99b47d-79b8-46e1-8289-38fc1431a2e4`, SDK session `01b315ce-df57-4721-85cf-81a147b50eb7`. Run started 2026-10-31T16:11:48.921Z, finished 16:11:54.927Z, status `succeeded`; task `done`, attempts 1. Cost 0.0421047 USD.
+
+Events, all received live over `/ws/ui`:
+
+```
+seq 1 agent.started           2026-10-31T16:11:49.267Z  model claude-sonnet-5-5
+seq 2 agent.tool.started      2026-10-31T16:11:51.483Z  tool Write, file_path /home/meren/projects/office-workspaces/office-sandbox/hello.txt, content "Hello from Agent Office\n"
+seq 3 agent.file.changed      2026-10-31T16:11:51.483Z  path /home/meren/projects/office-workspaces/office-sandbox/hello.txt
+seq 4 agent.tool.completed    2026-10-31T16:11:51.506Z  "File created successfully at: .../hello.txt"
+seq 5 agent.tool.started      2026-10-31T16:11:52.816Z  tool Bash: cat /home/meren/projects/office-workspaces/office-sandbox/hello.txt
+seq 6 agent.command.executed  2026-10-31T16:11:52.816Z  cat /home/meren/projects/office-workspaces/office-sandbox/hello.txt
+seq 7 agent.tool.completed    2026-10-31T16:11:52.858Z  "Hello from Agent Office"
+seq 8 agent.text              2026-10-31T16:11:54.239Z
+seq 9 agent.completed         2026-10-31T16:11:54.257Z  costUsd 0.0421047, numTurns 3, durationMs 5007
+run.status.changed succeeded
+```
+
+File on disk: `/home/meren/projects/office-workspaces/office-sandbox/hello.txt`, 24 bytes, `Hello from Agent Office` plus a newline, sha256 `ec3c94d325c2638a2448fb45ceb38bab0083cf8399ebc8ca6aaccfb3e7762ad2`.
+
+Replay after restart: the API was killed (health check failed) and restarted at 2026-10-31T16:12:11Z; re-subscribing to `run:0d4988f2-13bf-47cd-a131-883a73061bb4` with `afterSeq: 0` replayed seqs 1 to 9 with the same event types from the database, then `replay.done` with `lastSeq` 9. `GET /tasks/dc7e7d65-76af-42c9-88d6-be9703002aa8` returned `done` with the succeeded run and its cost; the web task page returned HTTP 200.
