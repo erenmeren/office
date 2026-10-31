@@ -50,5 +50,7 @@ describe('agents', () => {
     expect(p.statusCode).toBe(201);
     expect(p.json().defaultBranch).toBe('main');
     expect((await req('GET', `/projects/${p.json().id}`)).statusCode).toBe(200);
+    const dup = await req('POST', '/projects', { name: 'P2', slug: 'p', repoPath: '/tmp/p2' });
+    expect(dup.statusCode).toBe(409);
   });
 });

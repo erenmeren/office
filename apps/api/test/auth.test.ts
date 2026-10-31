@@ -8,6 +8,15 @@ describe('auth', () => {
   });
   afterAll(() => t.close());
 
+  it('concurrent setups create exactly one owner', async () => {
+    const setup = (email: string) =>
+      t.app.inject({ method: 'POST', url: '/auth/setup', payload: { email, password: 'password123' } });
+    const res = await Promise.all([setup('a@example.com'), setup('b@example.com')]);
+    expect(res.map((r) => r.statusCode).sort()).toEqual([201, 409]);
+    expect(await t.prisma.user.count()).toBe(1);
+    await t.prisma.$executeRawUnsafe('TRUNCATE TABLE "UserSession","User" CASCADE');
+  });
+
   it('reports setupRequired when no users', async () => {
     const res = await t.app.inject({ method: 'GET', url: '/auth/me' });
     expect(res.statusCode).toBe(200);

@@ -29,6 +29,8 @@ export async function buildApp(
       return reply.code(400).send({ error: 'validation_error', details: err.issues });
     }
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.code });
+    // Prisma unique-constraint violation (concurrent duplicates)
+    if ((err as { code?: string }).code === 'P2002') return reply.code(409).send({ error: 'conflict' });
     app.log.error(err);
     const status = (err as { statusCode?: number }).statusCode ?? 500;
     return reply.code(status).send({ error: status === 500 ? 'internal_error' : err.message });
