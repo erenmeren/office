@@ -35,6 +35,7 @@ const result = await new ClaudeAdapter().run(
       events.push(e);
       const p = e.payload as Record<string, unknown>;
       if (e.type === 'agent.started') console.log('event', e.type, JSON.stringify({ tools: p.tools, agents: p.agents }));
+      else if (e.type === 'agent.completed') console.log('event', e.type, JSON.stringify(p));
       else if (e.type.startsWith('agent.subagent.')) console.log('event', e.type, JSON.stringify(p));
       else if (e.type === 'agent.tool.started') console.log('event', e.type, p.tool, JSON.stringify(p.input));
       else console.log('event', e.type);
@@ -46,5 +47,7 @@ console.log('result', JSON.stringify(result, null, 2));
 const started = events.find((e) => e.type === 'agent.started');
 const tools = ((started?.payload as { tools?: string[] } | undefined)?.tools ?? []) as string[];
 const spawned = events.some((e) => e.type === 'agent.subagent.spawned');
-console.log('check', JSON.stringify({ agentInTools: tools.includes('Agent'), spawned }));
-if (!tools.includes('Agent') || !spawned || !result.resultText?.includes('SUBAGENT_OK')) process.exitCode = 1;
+// the SDK lists the subagent tool as Task in init and calls it Agent
+const subagentTool = tools.includes('Agent') || tools.includes('Task');
+console.log('check', JSON.stringify({ subagentTool, spawned }));
+if (!subagentTool || !spawned || !result.resultText?.includes('SUBAGENT_OK')) process.exitCode = 1;

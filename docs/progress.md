@@ -22,8 +22,9 @@ Phase 2:
 - `ProjectAgent` (which agents belong to which project) is deferred to Phase 4; the Chief's planning needs it, nothing in Phase 2 does.
 - Approvals (Phase 4): pinning skills or subagents adds `Skill` (skills) or `Agent` and `Task` (subagents) to the allowed tools, which the SDK auto-approves before `canUseTool` (see `docs/security.md`).
 - Skill frontmatter parsing supports single-line `key: value` only; multi-line (folded or block) values are not supported.
+- The adapter's `RunResult.usage` keeps only the last SDK result; when the stream has two completions (as in the subagent smoke), the recorded cost may be too low. Not verified whether the SDK's `total_cost_usd` is cumulative.
 - In the subagent smoke, a second `agent.started` in the same run listed the machine's claude.ai MCP connector tools (Gmail, Notion, Claude Docs). Not investigated: whether agent sessions can call them, and how to exclude them (see "Runtime subagent smoke").
-- In the acceptance runs the designer session had no subagent tool: the adapter granted `Agent` but left `Task` in `disallowedTools`, and the SDK lists the subagent tool as `Task` in the session's tools, so it was removed. Fixed after the acceptance (both `Agent` and `Task` are granted when subagents are pinned) and checked by the runtime subagent smoke below, which spawned the subagent and returned `SUBAGENT_OK`. The smoke script still exits 1, because its check expects `Agent` in `agent.started.payload.tools` and the SDK lists the tool as `Task`; the check needs a decision. A platform run with a subagent (a `SubagentRun` row from a real session) has not been done yet.
+- In the acceptance runs the designer session had no subagent tool: the adapter granted `Agent` but left `Task` in `disallowedTools`, and the SDK lists the subagent tool as `Task` in the session's tools, so it was removed. Fixed after the acceptance (both `Agent` and `Task` are granted when subagents are pinned) and checked by the runtime subagent smoke below (exit 0: the subagent was spawned and returned `SUBAGENT_OK`). A platform run with a subagent (a `SubagentRun` row from a real session) has not been done yet.
 
 Phase 3 (messaging and memory): message bus and inbox runs, agent MCP tools, human chat as a real session, task summaries, project memory, context pack, memory UI.
 
@@ -77,31 +78,34 @@ result {
 
 ### Runtime subagent smoke
 
-Date: 2026-10-31, after the acceptance run. Fix: `effectiveAllowedTools` in `packages/runtime/src/claude/adapter.ts` now adds both `Agent` and `Task` when subagents are pinned, so neither is in `disallowedTools`. Command: `pnpm --filter @office/runtime exec tsx scripts/smoke-subagent.ts` (model `haiku`, `maxBudgetUsd` 0.10, `allowedTools: []`, no skills, one subagent `echoer` (`Reply with exactly: SUBAGENT_OK`, model `haiku`), prompt `Use the echoer subagent and return exactly what it replies.`, system prompt `Delegate to the echoer subagent; do not answer yourself.`). One attempt, exit 1.
+Date: 2026-10-31, after the acceptance run. Fix: `effectiveAllowedTools` in `packages/runtime/src/claude/adapter.ts` now adds both `Agent` and `Task` when subagents are pinned, so neither is in `disallowedTools`. Command: `pnpm --filter @office/runtime exec tsx scripts/smoke-subagent.ts` (model `haiku`, `maxBudgetUsd` 0.10, `allowedTools: []`, no skills, one subagent `echoer` (`Reply with exactly: SUBAGENT_OK`, model `haiku`), prompt `Use the echoer subagent and return exactly what it replies.`, system prompt `Delegate to the echoer subagent; do not answer yourself.`). The script passes when `agent.started.payload.tools` contains `Agent` or `Task`, an `agent.subagent.spawned` event is seen and the result contains `SUBAGENT_OK`.
 
-Result: the subagent works. The agent called `Agent` with `subagent_type` `echoer`, the adapter emitted `agent.subagent.spawned` and `agent.subagent.completed` (summary `SUBAGENT_OK`), and the run succeeded with resultText `SUBAGENT_OK`. The script exited 1 only because its check requires `Agent` in `agent.started.payload.tools`, and the SDK lists the subagent tool there as `Task` (first entry); `Agent` is not in that list. The check `{"agentInTools":false,"spawned":true}` was printed. The adapter was not changed again, since the failure points at the check, not the adapter.
+Attempt 1 (2026-10-31T20:15:31Z) exited 1. The subagent worked (`agent.subagent.spawned`, `agent.subagent.completed` with summary `SUBAGENT_OK`, resultText `SUBAGENT_OK`, reported cost 0.006620055 USD), but the script's check then required `Agent` in `tools`, and the SDK lists the subagent tool there as `Task`. The check was changed to accept either name; the adapter was not changed.
+
+Attempt 2 (2026-10-31T20:17:59Z), exit 0, check `{"subagentTool":true,"spawned":true}`:
 
 ```
 [CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked for: Agent, Task. ...
 event agent.started {"tools":["Task","AskUserQuestion","CronCreate","CronDelete","CronList","DesignSync","EnterPlanMode","EnterWorktree","ExitPlanMode","ExitWorktree","Glob","Grep","ListAgents","PushNotification","Read","RemoteTrigger","ReportFindings","ScheduleWakeup","SendMessage","SendToProject","SendToProjectContext","ToolSearch","Workflow"],"agents":["claude","echoer","Explore","general-purpose","Plan","statusline-setup"]}
-event agent.tool.started Agent {"subagent_type":"echoer","description":"Run echoer subagent","prompt":"Please respond to this echo request. Return your reply exactly as you produce it."}
-event agent.subagent.spawned {"toolUseId":"toolu_015nh19BRhHCfMTqqbiKHndz","description":"Run echoer subagent","subagentType":"echoer"}
+event agent.tool.started Agent {"description":"Run echoer subagent","subagent_type":"echoer","prompt":"Echo request: reply with your response exactly as you would return it."}
+event agent.subagent.spawned {"toolUseId":"toolu_012aDCcSEudcyD4z8Utj1HC9","description":"Run echoer subagent","subagentType":"echoer"}
 event agent.tool.completed
-event agent.text
-event agent.subagent.completed {"toolUseId":"toolu_015nh19BRhHCfMTqqbiKHndz","status":"completed","summary":"SUBAGENT_OK"}
 event agent.thinking
 event agent.text
-event agent.completed
-event agent.started {"tools":["Task","AskUserQuestion", ... ,"ListMcpResourcesTool", ... ,"mcp__claude_ai_Claude_Docs__batch", ... ,"mcp__claude_ai_Gmail__send_message", ... ,"mcp__claude_ai_Notion__notion-wait-session"],"agents":[...same...]}
+event agent.completed {"resultText":"The echoer subagent is still running. I'll return its reply verbatim once it finishes.","costUsd":0.00188837,"numTurns":2,"durationMs":2597}
+event agent.thinking
 event agent.text
-event agent.completed
-result {"status":"succeeded","resultText":"SUBAGENT_OK","sdkSessionId":"c6816612-2634-4282-a639-8e57edfe7fca","usage":{"inputTokens":2,"outputTokens":12,"costUsd":0.006620055,"numTurns":1,"durationMs":1305}}
-check {"agentInTools":false,"spawned":true}
+event agent.subagent.completed {"toolUseId":"toolu_012aDCcSEudcyD4z8Utj1HC9","status":"completed","summary":"SUBAGENT_OK"}
+event agent.started {"tools":["Task", ... 106 mcp__claude_ai_* connector tools (Claude_Docs 8, Gmail 30, Notion 68) ...],"agents":[...same...]}
+event agent.text
+event agent.completed {"resultText":"SUBAGENT_OK","costUsd":0.00286565,"numTurns":1,"durationMs":720}
+result {"status":"succeeded","resultText":"SUBAGENT_OK","sdkSessionId":"e4e357f8-cd95-47d5-91f8-6752c648dd82","usage":{"inputTokens":2,"outputTokens":12,"costUsd":0.00286565,"numTurns":1,"durationMs":720}}
+check {"subagentTool":true,"spawned":true}
 ```
 
-Cost: the result reports 0.006620055 USD, which is the usage of the last of the two `agent.completed` events (numTurns 1); the first completion's cost was not printed, so the run's full cost is not known from this output.
+Cost: the result reports 0.00286565 USD, which is only the last `agent.completed`. The run had two completions: the first (0.00188837 USD) ended while the subagent was still running, and the second came after the subagent's result. The adapter's `RunResult.usage` takes `total_cost_usd` from the last SDK result only. It is not verified whether that value is cumulative for the session (then 0.00286565 USD is the full cost) or covers only the second completion (then the full cost is 0.00475402 USD and the run under-reports).
 
-Observations: the stream contained a second `agent.started` and `agent.completed` after the first completion. The second `agent.started` listed the machine's claude.ai MCP connector tools (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Notion__*`, `mcp__claude_ai_Claude_Docs__*`), which the first did not. It produced only `agent.text` and `agent.completed`, with no tool call. Where those connector tools come from, and whether a run can call them, has not been investigated (see Outstanding).
+Observations: in both attempts, a second `agent.started`/`agent.completed` pair appeared after the first completion. The second `agent.started` listed the machine's claude.ai MCP connector tools (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Notion__*`, `mcp__claude_ai_Claude_Docs__*`); the first did not. No connector tool was called. Where those tools come from, and whether a run can call them, has not been investigated (see Outstanding).
 
 ### Phase 2 acceptance (real Claude)
 
