@@ -17,6 +17,8 @@ function spec(prompt: string): RunSpec {
     maxBudgetUsd: 0,
     maxConcurrentSubagents: 4,
     maxSubagentDepth: 1,
+    skills: [],
+    subagents: [],
   };
 }
 
@@ -58,5 +60,35 @@ describe('FakeAdapter', () => {
     const res = await p;
     expect(res.status).toBe('cancelled');
     expect(events.at(-1)?.type).toBe('agent.cancelled');
+  });
+
+  it('invokes only eager skills', async () => {
+    const { events, sink } = collect();
+    const s = spec('hello');
+    s.skills = [
+      { name: 'tdd', version: 1, checksum: 'c', mode: 'eager', files: {} },
+      { name: 'docs', version: 1, checksum: 'c', mode: 'on_demand', files: {} },
+    ];
+    await new FakeAdapter().run(s, sink, new AbortController().signal);
+    const invoked = events.filter((e) => e.type === 'agent.skill.invoked');
+    expect(invoked).toEqual([{ type: 'agent.skill.invoked', payload: { toolUseId: 'fake-skill-tdd', skill: 'tdd' } }]);
+    expect(events.slice(0, 4).map((e) => e.type)).toEqual([
+      'agent.started',
+      'agent.tool.started',
+      'agent.skill.invoked',
+      'agent.tool.completed',
+    ]);
+  });
+
+  it('spawns and completes a subagent on SUBAGENT prompt', async () => {
+    const { events, sink } = collect();
+    const s = spec('run SUBAGENT');
+    s.subagents = [{ name: 'reviewer', description: 'd', prompt: 'p', skills: [] }];
+    await new FakeAdapter().run(s, sink, new AbortController().signal);
+    const spawned = events.find((e) => e.type === 'agent.subagent.spawned');
+    const completed = events.find((e) => e.type === 'agent.subagent.completed');
+    expect(spawned?.payload).toEqual({ toolUseId: 'fake-sub-1', subagentType: 'reviewer', description: 'fake subagent' });
+    expect(completed?.payload).toEqual({ toolUseId: 'fake-sub-1', status: 'completed', summary: 'done' });
+    expect(events.indexOf(spawned!)).toBeLessThan(events.indexOf(completed!));
   });
 });

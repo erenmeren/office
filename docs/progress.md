@@ -27,6 +27,40 @@ Phase 5 (hybrid workers): remote workers, remote clone, worker capabilities.
 
 Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, project membership, interactive PTY shell.
 
+## Phase 2 evidence
+
+### Runtime skill smoke
+
+Date: 2026-10-31. Command: `pnpm --filter @office/runtime exec tsx scripts/smoke-skills.ts` (model `haiku`, `maxBudgetUsd` 0.05, `allowedTools: []`, one eager skill `office-smoke`, prompt `Follow your instructions.`, system prompt from `skillPromptSection`). First attempt, exit 0.
+
+Layout that worked: `additionalDirectories` (no plugin fallback needed). The skill was written to `<mkdtemp>/.office/.claude/skills/office-smoke/SKILL.md` and `skillsDir = <mkdtemp>/.office` was passed as `additionalDirectories: [skillsDir]`, with the `skills: ['office-smoke']` filter. Task 6 materializes skills to `<skillsDir>/.claude/skills/<name>/`.
+
+Result: `agent.started.slashCommands` lists `office-smoke` (bare name, no leading `/`); `agent.skill.invoked office-smoke` emitted; status `succeeded`; resultText `SKILL_OK`; costUsd 0.00484578.
+
+Observations: `slashCommands` also lists built-in commands and other bundled skills, so the `skills` option does not narrow that list. The SDK prints a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` warning for `Skill`: a bare `allowedTools` entry auto-approves the tool before `canUseTool` runs, which is the intended grant when skills are pinned.
+
+```
+event agent.started {"slashCommands":["office-smoke","deep-research","design","design-sync","dataviz","update-config","verify","debug","code-review","simplify","batch","fewer-permission-prompts","doctor","loop","schedule","send-to-project","claude-api","workflow-authoring","run","run-skill-generator","plugin-authoring","advisor","agents","auto-mode-setup","autocompact","clear","color","compact","config","output-style","context","effort","fast","focus","heapdump","init","mcp","import","model","__remote-workflow","workflow-launch-exec","reload-plugins","reload-skills","rename","ultrareview","security-review","usage-credits","extra-usage","usage","insights","recap","skill-doctor","goal","design-consent","design-revoke","list-agents","team-onboarding"],"agents":["claude","Explore","general-purpose","Plan","statusline-setup"]}
+event agent.tool.started Skill {"skill":"office-smoke"}
+event agent.skill.invoked office-smoke
+event agent.tool.completed
+event agent.thinking
+event agent.text
+event agent.completed
+result {
+  "status": "succeeded",
+  "resultText": "SKILL_OK",
+  "sdkSessionId": "ef299388-a488-4ab5-8e9f-fade829c25e4",
+  "usage": {
+    "inputTokens": 4,
+    "outputTokens": 184,
+    "costUsd": 0.00484578,
+    "numTurns": 3,
+    "durationMs": 3676
+  }
+}
+```
+
 ## Phase 1 evidence
 
 ### Task 4 runtime smoke (real Claude)

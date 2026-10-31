@@ -21,7 +21,7 @@ describe('RunExecutor', () => {
   const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
     runId: 'run-1', sessionId: 'sess-1', agentId: 'agent-1', projectId: 'proj-1',
     cwd: join(root, 'repo'), prompt: 'do it', systemPrompt: 'sys', model: 'sonnet', allowedTools: [],
-    maxTurns: 5, maxBudgetUsd: 1, maxConcurrentSubagents: 4, maxSubagentDepth: 1, ...over,
+    maxTurns: 5, maxBudgetUsd: 1, maxConcurrentSubagents: 4, maxSubagentDepth: 1, skills: [], subagents: [], ...over,
   });
   const done = () => sent.some((m) => m.type === 'run.result' || m.type === 'run.rejected');
 

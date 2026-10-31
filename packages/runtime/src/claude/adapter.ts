@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, type AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
 import type { RunResult, RunSpec } from '@office/shared';
 import { redactSecrets } from '../redact.js';
 import type { EventSink, RuntimeAdapter } from '../types.js';
@@ -21,6 +21,14 @@ const BUILTIN_TOOLS = [
   'Skill',
 ];
 
+/** spec.allowedTools plus Skill/Agent when skills/subagents are pinned, so pinning implies the grant. */
+export function effectiveAllowedTools(spec: RunSpec): string[] {
+  const tools = [...spec.allowedTools];
+  if (spec.skills.length > 0 && !tools.includes('Skill')) tools.push('Skill');
+  if (spec.subagents.length > 0 && !tools.includes('Agent')) tools.push('Agent');
+  return tools;
+}
+
 export class ClaudeAdapter implements RuntimeAdapter {
   readonly name = 'claude' as const;
 
@@ -35,6 +43,23 @@ export class ClaudeAdapter implements RuntimeAdapter {
       return { status: 'cancelled', usage: ZERO_USAGE };
     };
 
+    const allowedTools = effectiveAllowedTools(spec);
+    const agents = spec.subagents.length
+      ? Object.fromEntries(
+          spec.subagents.map(({ name, description, prompt, skills, tools, model, maxTurns }): [string, AgentDefinition] => [
+            name,
+            {
+              description,
+              prompt,
+              skills,
+              ...(tools && { tools }),
+              ...(model && { model }),
+              ...(maxTurns && { maxTurns }),
+            },
+          ]),
+        )
+      : undefined;
+
     let result: RunResult | undefined;
     try {
       const q = query({
@@ -44,20 +69,23 @@ export class ClaudeAdapter implements RuntimeAdapter {
           model: spec.model,
           effort: spec.effort,
           systemPrompt: spec.systemPrompt,
-          allowedTools: spec.allowedTools,
-          disallowedTools: BUILTIN_TOOLS.filter((t) => !spec.allowedTools.includes(t)),
+          allowedTools,
+          disallowedTools: BUILTIN_TOOLS.filter((t) => !allowedTools.includes(t)),
           permissionMode: 'default',
           maxTurns: spec.maxTurns,
           maxBudgetUsd: spec.maxBudgetUsd,
           // Project settings are trusted workspace content (owner-controlled repos); deny rules still cap the tool surface. See docs/security.md.
           settingSources: ['project'],
           resume: spec.resumeSdkSessionId,
+          additionalDirectories: spec.skillsDir ? [spec.skillsDir] : undefined,
+          skills: spec.skills.length ? spec.skills.map((s) => s.name) : undefined,
+          agents,
           env: buildChildEnv(process.env, spec),
           abortController,
           // allowedTools auto-approves listed tools; disallowedTools blocks ungranted built-ins
           // ahead of project allow rules; this is the deny path for anything else that asks.
           canUseTool: async (toolName) =>
-            spec.allowedTools.includes(toolName)
+            allowedTools.includes(toolName)
               ? { behavior: 'allow' }
               : { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' },
         },

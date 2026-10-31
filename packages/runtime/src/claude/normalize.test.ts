@@ -27,7 +27,13 @@ describe('normalizeSdkMessage', () => {
   });
 
   it('builds the expected payloads', () => {
-    expect(out[0]![0]!.payload).toEqual({ model: 'claude-haiku-5-5', tools: ['Bash', 'Agent', 'Write'], sdkSessionId: 'sess-1' });
+    expect(out[0]![0]!.payload).toEqual({
+      model: 'claude-haiku-5-5',
+      tools: ['Bash', 'Agent', 'Write'],
+      sdkSessionId: 'sess-1',
+      slashCommands: ['/tdd'],
+      agents: [],
+    });
     expect(out[1]![2]!.payload).toEqual({ toolUseId: 'tu-1', tool: 'Bash', input: { command: 'echo hi' } });
     expect(out[1]![3]!.payload).toEqual({ command: 'echo hi' });
     expect(out[3]![1]!.payload).toEqual({ toolUseId: 'tu-2', description: 'Explore repo', subagentType: 'Explore' });
@@ -36,6 +42,19 @@ describe('normalizeSdkMessage', () => {
     expect(out[6]![0]!.payload).toEqual({ toolUseId: 'tu-2', status: 'completed', summary: 'explored' });
     expect(out[7]![0]!.payload).toEqual({ resultText: 'done', costUsd: 0.01, numTurns: 3, durationMs: 1200 });
     expect(out[8]![0]!.payload).toEqual({ subtype: 'error_max_turns', errors: ['max turns reached'] });
+  });
+
+  it('emits agent.skill.invoked for a Skill tool_use', () => {
+    const msg = {
+      type: 'assistant',
+      parent_tool_use_id: null,
+      session_id: 's',
+      uuid: 'u',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-s', name: 'Skill', input: { skill: 'tdd' } }] },
+    } as unknown as SDKMessage;
+    const evs = normalizeSdkMessage(msg);
+    expect(evs.map((e) => e.type)).toEqual(['agent.tool.started', 'agent.skill.invoked']);
+    expect(evs[1]!.payload).toEqual({ toolUseId: 'tu-s', skill: 'tdd' });
   });
 
   it('never leaks thinking content', () => {
