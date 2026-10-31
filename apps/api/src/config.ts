@@ -1,3 +1,6 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 
 const EnvSchema = z.object({
@@ -10,6 +13,7 @@ const EnvSchema = z.object({
   OFFICE_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
   OFFICE_HEARTBEAT_SECONDS: z.coerce.number().int().positive().default(10),
   OFFICE_SCHEDULER_INTERVAL_MS: z.coerce.number().int().nonnegative().default(2000),
+  OFFICE_SKILL_IMPORT_ROOTS: z.string().optional(),
 });
 
 export interface Config {
@@ -23,6 +27,17 @@ export interface Config {
   heartbeatSeconds: number;
   schedulerIntervalMs: number;
   cookieSecure: boolean;
+  skillImportRoots: string[];
+}
+
+const defaultSkillRoot = resolve(fileURLToPath(new URL('../../../templates/skills', import.meta.url)));
+
+function realOrGiven(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
@@ -43,5 +58,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     heartbeatSeconds: e.OFFICE_HEARTBEAT_SECONDS,
     schedulerIntervalMs: e.OFFICE_SCHEDULER_INTERVAL_MS,
     cookieSecure: env.NODE_ENV === 'production',
+    skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot]).map(realOrGiven),
   };
 }
