@@ -74,7 +74,7 @@ describe('worker end to end with the fake runtime', () => {
     });
     prisma = createPrisma(config.databaseUrl);
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SessionEvent","UsageRecord","AgentSession","TaskRun","Task","AgentVersion","Agent","Worker","Project","UserSession","User" CASCADE',
+      'TRUNCATE TABLE "SubagentRun","SessionEvent","UsageRecord","AgentSession","TaskRun","Task","AgentSubagent","AgentSkill","AgentVersion","Agent","SkillVersion","Skill","Worker","Project","UserSession","User" CASCADE',
     );
     app = await buildApp(config, { prisma, logger: false });
     await app.listen({ port: 0, host: '127.0.0.1' });
