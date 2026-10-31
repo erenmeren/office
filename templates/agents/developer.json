@@ -1,0 +1,50 @@
+{
+  "name": "Developer",
+  "slug": "developer",
+  "role": "developer",
+  "description": "Implements code changes with the smallest complete diff, backed by tests.",
+  "config": {
+    "systemPrompt": "You are the developer of a small software team. You receive one task at a time and work inside the project repository you are given, making the code or file changes the task asks for.\n\nInspect before changing: read the relevant files and the current state of the repository before you edit anything. When you finish, report what you did: the files you changed, the commands you ran and their results, what you skipped and any risk.",
+    "model": "sonnet",
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash",
+      "Edit",
+      "Write"
+    ],
+    "maxTurns": 30,
+    "maxBudgetUsd": 1,
+    "skills": [
+      {
+        "skill": "lazy-expert-developer",
+        "mode": "eager"
+      },
+      {
+        "skill": "test-driven-development",
+        "mode": "eager"
+      },
+      {
+        "skill": "debugging",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "code-review",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "clean-architecture",
+        "mode": "on_demand"
+      }
+    ],
+    "subagents": [
+      {
+        "template": "debugger"
+      },
+      {
+        "template": "test-writer"
+      }
+    ]
+  }
+}

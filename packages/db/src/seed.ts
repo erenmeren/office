@@ -1,23 +1,54 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  AgentConfigInputSchema,
+  AgentConfigSchema,
+  SubagentDefinitionSchema,
+  skillChecksum,
+  validateSkillFiles,
+  type SkillFiles,
+} from '@office/shared';
 import { config } from 'dotenv';
 import { createPrisma, type PrismaClient } from './index.js';
 
-const DEVELOPER_CONFIG = {
-  systemPrompt: [
-    'You are the developer of a small software team. You receive one task at a time and work inside the project repository you are given, making the code or file changes the task asks for.',
-    'Inspect before changing: read the relevant files and the current state of the repository before you edit anything. When you finish, report what you did: the files you changed, the commands you ran and their results.',
-  ].join('\n\n'),
-  model: 'sonnet',
-  allowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write'],
-  maxTurns: 30,
-  maxBudgetUsd: 1,
+/** Regular files only, relative POSIX paths; skips dot-directories and symlinks (same contract as the API's readSkillDir). */
+export function readSkillDir(dir: string): SkillFiles {
+  const files: SkillFiles = {};
+  const walk = (rel: string) => {
+    for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (!e.name.startsWith('.')) walk(r);
+      } else if (e.isFile()) {
+        files[r] = readFileSync(join(dir, r), 'utf8');
+      }
+    }
+  };
+  walk('');
+  return files;
+}
+
+type AgentTemplate = {
+  name: string;
+  slug: string;
+  role: string;
+  description: string;
+  config: Record<string, unknown> & {
+    skills?: { skill: string; mode?: string }[];
+    subagents?: (Record<string, unknown> | { template: string })[];
+  };
 };
 
-/** Idempotent by slug. Returns the lines it would print. */
-export async function seed(prisma: PrismaClient, workspaceRoot: string): Promise<string[]> {
+const readJson = (path: string): unknown => JSON.parse(readFileSync(path, 'utf8'));
+
+/** Idempotent by project slug, skill name and agent slug. Returns the lines it would print. */
+export async function seed(
+  prisma: PrismaClient,
+  workspaceRoot: string,
+  templatesDir = fileURLToPath(new URL('../../../templates', import.meta.url)),
+): Promise<string[]> {
   const log: string[] = [];
   const repoPath = join(workspaceRoot, 'office-sandbox');
   if (!existsSync(join(repoPath, '.git'))) {
@@ -36,16 +67,73 @@ export async function seed(prisma: PrismaClient, workspaceRoot: string): Promise
     log.push(`project office-sandbox created ${created.id}`);
   }
 
-  const agent = await prisma.agent.findUnique({ where: { slug: 'developer' } });
-  if (agent) {
-    log.push(`agent developer exists ${agent.id}`);
-  } else {
+  const skillsDir = join(templatesDir, 'skills');
+  for (const dirName of readdirSync(skillsDir).sort()) {
+    const dir = join(skillsDir, dirName);
+    const files = readSkillDir(dir);
+    const { name, description } = validateSkillFiles(files, dirName);
+    const existing = await prisma.skill.findUnique({ where: { name } });
+    if (existing) {
+      log.push(`skill ${name} exists ${existing.id}`);
+      continue;
+    }
     const created = await prisma.$transaction(async (tx) => {
-      const a = await tx.agent.create({ data: { name: 'Developer', slug: 'developer', role: 'developer' } });
-      const v = await tx.agentVersion.create({ data: { agentId: a.id, version: 1, config: DEVELOPER_CONFIG } });
+      const skill = await tx.skill.create({
+        data: { name, description, source: 'local', sourceRef: dir, status: 'approved' },
+      });
+      const v = await tx.skillVersion.create({
+        data: { skillId: skill.id, version: 1, files, checksum: skillChecksum(files) },
+      });
+      return tx.skill.update({ where: { id: skill.id }, data: { currentVersionId: v.id } });
+    });
+    log.push(`skill ${name} created ${created.id}`);
+  }
+
+  const agentsDir = join(templatesDir, 'agents');
+  for (const file of readdirSync(agentsDir).filter((f) => f.endsWith('.json')).sort()) {
+    const t = readJson(join(agentsDir, file)) as AgentTemplate;
+    const existing = await prisma.agent.findUnique({ where: { slug: t.slug } });
+    if (existing) {
+      log.push(`agent ${t.slug} exists ${existing.id}`);
+      continue;
+    }
+    const pins = [];
+    for (const { skill: skillName, mode } of t.config.skills ?? []) {
+      const skill = await prisma.skill.findUnique({ where: { name: skillName } });
+      if (!skill?.currentVersionId || skill.status !== 'approved') {
+        throw new Error(`agent ${t.slug}: skill ${skillName} missing or not approved`);
+      }
+      pins.push({ skillId: skill.id, skillVersionId: skill.currentVersionId, mode, name: skill.name });
+    }
+    const subagents = (t.config.subagents ?? []).map((s) =>
+      'template' in s ? readJson(join(templatesDir, 'subagents', `${s.template as string}.json`)) : s,
+    );
+    const input = AgentConfigInputSchema.parse({ ...t.config, skills: pins, subagents });
+    const names = new Set(pins.map((p) => p.name));
+    for (const s of input.subagents) {
+      const unknown = s.skills.find((n) => !names.has(n));
+      if (unknown) throw new Error(`agent ${t.slug}: subagent ${s.name} uses unpinned skill ${unknown}`);
+    }
+    const created = await prisma.$transaction(async (tx) => {
+      const a = await tx.agent.create({
+        data: { name: t.name, slug: t.slug, role: t.role, description: t.description },
+      });
+      const v = await tx.agentVersion.create({
+        data: { agentId: a.id, version: 1, config: AgentConfigSchema.parse(input) },
+      });
+      for (const p of input.skills) {
+        await tx.agentSkill.create({
+          data: { agentVersionId: v.id, skillId: p.skillId, skillVersionId: p.skillVersionId!, mode: p.mode },
+        });
+      }
+      for (const s of input.subagents) {
+        await tx.agentSubagent.create({
+          data: { agentVersionId: v.id, name: s.name, definition: SubagentDefinitionSchema.parse(s) },
+        });
+      }
       return tx.agent.update({ where: { id: a.id }, data: { currentVersionId: v.id } });
     });
-    log.push(`agent developer created ${created.id}`);
+    log.push(`agent ${t.slug} created ${created.id}`);
   }
   return log;
 }
