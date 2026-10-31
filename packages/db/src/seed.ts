@@ -68,7 +68,8 @@ export async function seed(
   }
 
   const skillsDir = join(templatesDir, 'skills');
-  for (const dirName of readdirSync(skillsDir).sort()) {
+  const skillDirs = readdirSync(skillsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  for (const dirName of skillDirs.sort()) {
     const dir = join(skillsDir, dirName);
     const files = readSkillDir(dir);
     const { name, description } = validateSkillFiles(files, dirName);

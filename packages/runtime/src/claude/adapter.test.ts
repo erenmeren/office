@@ -72,6 +72,7 @@ describe('ClaudeAdapter', () => {
     expect(options.settingSources).toEqual(['project']);
     expect(options.disallowedTools).toContain('Bash');
     expect(options.disallowedTools).not.toContain('Read');
+    expect(options.disallowedTools).toContain('mcp__*');
   });
 
   it('passes skills, skillsDir and subagents and grants Skill and Agent', async () => {

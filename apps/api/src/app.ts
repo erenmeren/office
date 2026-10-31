@@ -45,7 +45,9 @@ export async function buildApp(
     if (err instanceof ZodError) {
       return reply.code(400).send({ error: 'validation_error', details: err.issues });
     }
-    if (err instanceof HttpError) return reply.code(err.status).send({ error: err.code });
+    if (err instanceof HttpError) {
+      return reply.code(err.status).send(err.detail ? { error: err.code, message: err.detail } : { error: err.code });
+    }
     if (err instanceof SkillValidationError) {
       return reply.code(400).send({ error: 'invalid_skill', code: err.code, message: err.message });
     }

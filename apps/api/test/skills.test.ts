@@ -77,6 +77,15 @@ describe('skills', () => {
     expect(res.json().sourceRef.endsWith(':skills/git-skill')).toBe(true);
   });
 
+  it('reports the git failure cause with 400 git_clone_failed', async () => {
+    const notRepo = join(root, 'not-a-repo');
+    await mkdir(notRepo, { recursive: true });
+    const res = await req('POST', '/skills/import', { source: 'git', url: `file://${notRepo}` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe('git_clone_failed');
+    expect(res.json().message).toBeTruthy();
+  });
+
   it('rejects hostile file paths and bad frontmatter with 400 invalid_skill and writes nothing', async () => {
     const before = await t.prisma.skill.count();
     const a = await req('POST', '/skills', { files: { 'SKILL.md': md('x'), '../x.md': 'x' } });

@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { skillChecksum, validateSkillFiles, type SkillFiles, type SkillStatus } from '@office/shared';
 import type { PrismaClient } from '@office/db';
+import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
 import { isUnderRoot } from '../lib/paths.js';
@@ -100,8 +101,9 @@ export async function importGit(
     await run('git', ['clone', '--depth', '1', ...(ref ? ['--branch', ref] : []), '--', url, tmp], {
       timeout: 60_000,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ALLOW_PROTOCOL: 'https:file' },
-    }).catch(() => {
-      throw new HttpError(400, 'git_clone_failed');
+    }).catch((err: { stderr?: string; code?: unknown }) => {
+      const cause = err.stderr?.trim().split('\n')[0] || String(err.code ?? 'unknown');
+      throw new HttpError(400, 'git_clone_failed', redactSecrets(cause).slice(0, 200));
     });
     const dir = resolve(tmp, path ?? '.');
     const real = await realpath(dir).catch(() => null);
