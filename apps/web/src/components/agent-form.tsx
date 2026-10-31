@@ -242,7 +242,9 @@ export function AgentForm({
           <CardTitle>Skills</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          {approved.length === 0 && <p className="text-sm text-muted-foreground">No approved skills.</p>}
+          {skills.isPending && <p className="text-sm text-muted-foreground">Loading skills…</p>}
+          {skills.isError && <p className="text-sm text-destructive">{String(skills.error)}</p>}
+          {skills.isSuccess && approved.length === 0 && <p className="text-sm text-muted-foreground">No approved skills.</p>}
           {approved.map((s) => {
             const pin = pins[s.id];
             return (
@@ -331,7 +333,8 @@ export function AgentForm({
       </Card>
 
       {error && <p className="whitespace-pre-wrap text-sm text-destructive">{error}</p>}
-      <Button type="submit" disabled={busy}>
+      {/* without the skill list the payload would drop every pin */}
+      <Button type="submit" disabled={busy || !skills.isSuccess}>
         {submitLabel}
       </Button>
     </form>

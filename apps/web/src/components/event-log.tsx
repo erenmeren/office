@@ -14,8 +14,8 @@ function summary(e: OfficeEvent): string {
     skill?: unknown;
     subagentType?: unknown;
   };
-  if (e.type === 'agent.skill.invoked') return `skill ${String(p.skill)}`;
-  if (e.type === 'agent.subagent.spawned') return `subagent ${String(p.subagentType)}`;
+  if (e.type === 'agent.skill.invoked') return `skill ${typeof p.skill === 'string' ? p.skill : ''}`.trim();
+  if (e.type === 'agent.subagent.spawned') return `subagent ${typeof p.subagentType === 'string' ? p.subagentType : ''}`.trim();
   if (typeof p.tool === 'string') {
     const arg = p.input?.command ?? p.input?.path;
     return `${p.tool} ${typeof arg === 'string' ? arg.slice(0, 80) : ''}`;
