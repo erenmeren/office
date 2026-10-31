@@ -75,7 +75,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
           effort: spec.effort,
           systemPrompt: spec.systemPrompt,
           allowedTools,
-          // no MCP server is pinned in Phase 2; Phase 3 allows mcp__office__* explicitly
+          // no MCP server is pinned in Phase 2; Phase 3 must replace this wildcard with a list that excludes mcp__office__*
           disallowedTools: [...BUILTIN_TOOLS.filter((t) => !allowedTools.includes(t)), 'mcp__*'],
           permissionMode: 'default',
           maxTurns: spec.maxTurns,

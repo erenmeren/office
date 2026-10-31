@@ -106,6 +106,7 @@ check {"subagentTool":true,"spawned":true}
 Cost: the result reports 0.00286565 USD, the full cost of the run. The run had two completions: the first (0.00188837 USD) ended while the subagent was still running, and the second came after the subagent's result. The adapter's `RunResult.usage` takes `total_cost_usd` from the last SDK result, and the SDK typings define it as cumulative (`SDKResultMessage.total_cost_usd`: each result carries the running total so far, so the latest result is read rather than summed).
 
 Attempt 3 (2026-10-31T20:29:37Z), after the fix that always passes `mcp__*` in `disallowedTools`, exit 0, check `{"subagentTool":true,"spawned":true}`. Tools-list check: no `mcp__` name appears in either `agent.started.payload.tools` list (`grep -c mcp__` on the output: 0). The second list adds the built-in `ListMcpResourcesTool`, `ReadMcpResourceTool` and `ReadMcpResourceDirTool`, which are not `mcp__` tools; they are not in the allow list, so `canUseTool` denies them. Cost 0.00218026 USD (cumulative, per the note above).
+Since e8ceb84 these three are in `BUILTIN_TOOLS` and therefore in `disallowedTools` unless allowed.
 
 ```
 [CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked for: Agent, Task. ...
@@ -125,7 +126,7 @@ result {"status":"succeeded","resultText":"SUBAGENT_OK","sdkSessionId":"3548a096
 check {"subagentTool":true,"spawned":true}
 ```
 
-Observations: in both attempts, a second `agent.started`/`agent.completed` pair appeared after the first completion. The second `agent.started` listed the machine's claude.ai MCP connector tools (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Notion__*`, `mcp__claude_ai_Claude_Docs__*`); the first did not. No connector tool was called. Where those tools come from, and whether a run can call them, has not been investigated (see Outstanding).
+Observations: in both attempts, a second `agent.started`/`agent.completed` pair appeared after the first completion. The second `agent.started` listed the machine's claude.ai MCP connector tools (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Notion__*`, `mcp__claude_ai_Claude_Docs__*`); the first did not. No connector tool was called. They come from the machine's claude.ai login; since 6fbcd89 the adapter passes `mcp__*` in `disallowedTools`, and attempt 3 listed no `mcp__` tool.
 
 ### Phase 2 acceptance (real Claude)
 
