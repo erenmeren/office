@@ -141,7 +141,7 @@ Expected: FAIL, modules not found.
 
 - [ ] **Step 3: Implement the five modules**
 
-`TASK_TRANSITIONS` encodes spec §8.2: `planned→[ready,blocked,cancelled]`, `ready→[queued,cancelled,blocked]`, `queued→[running,ready,cancelled]`, `running→[waiting_reply,waiting_approval,review,failed,cancelled,ready]`, `waiting_reply→[running,failed,cancelled]`, `waiting_approval→[running,failed,cancelled]`, `review→[done,running,failed]`, `blocked→[ready,cancelled]`, `done→[]`, `failed→[ready]`, `cancelled→[]`. (`failed→ready` exists for an explicit owner retry.)
+`TASK_TRANSITIONS` encodes spec §8.2: `planned→[ready,blocked,cancelled]`, `ready→[queued,cancelled,blocked]`, `queued→[running,ready,cancelled,failed]`, `running→[waiting_reply,waiting_approval,review,failed,cancelled,ready]`, `waiting_reply→[running,failed,cancelled]`, `waiting_approval→[running,failed,cancelled]`, `review→[done,running,failed]`, `blocked→[ready,cancelled]`, `done→[]`, `failed→[ready]`, `cancelled→[]`. (`failed→ready` exists for an explicit owner retry.)
 
 - [ ] **Step 4: Run tests, verify pass**
 
