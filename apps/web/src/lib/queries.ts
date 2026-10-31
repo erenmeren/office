@@ -62,3 +62,26 @@ export const useTask = (id: string) =>
     queryFn: () => api<Task & { runs: TaskRun[] }>(`/tasks/${id}`),
     refetchInterval: (q) => (q.state.data && TERMINAL.includes(q.state.data.status) ? false : 3000),
   });
+
+export type SkillStatus = 'pending_review' | 'approved' | 'rejected';
+export interface SkillVersion {
+  id: string;
+  version: number;
+  checksum: string;
+  createdAt: string;
+  files?: Record<string, string>;
+}
+export interface Skill {
+  id: string;
+  name: string;
+  description: string;
+  source: 'local' | 'git' | 'ui';
+  sourceRef: string | null;
+  status: SkillStatus;
+  currentVersionId: string | null;
+  createdAt: string;
+  currentVersion: SkillVersion | null;
+  versions?: SkillVersion[];
+}
+export const useSkills = () => useQuery({ queryKey: ['skills'], queryFn: () => api<Skill[]>('/skills') });
+export const useSkill = (id: string) => useQuery({ queryKey: ['skill', id], queryFn: () => api<Skill>(`/skills/${id}`) });
