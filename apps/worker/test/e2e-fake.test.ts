@@ -174,6 +174,25 @@ describe('worker end to end with the fake runtime', () => {
     expect(done.runs.map((r: { status: string }) => r.status)).toEqual(['succeeded']);
   }, 20_000);
 
+  it('aborts active runs when the API closes the connection with a fatal code', async () => {
+    const { id: workerId, enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
+    const fake = new FakeAdapter();
+    let aborted = false;
+    const adapter: RuntimeAdapter = {
+      name: 'fake',
+      run: (spec, sink, signal) => {
+        signal.addEventListener('abort', () => (aborted = true));
+        return fake.run(spec, sink, signal);
+      },
+    };
+    await connect(enrollToken, adapter);
+    const task = (await req('POST', '/tasks', { projectId, agentId, title: 'SLOW revoked', description: 'd' })).json();
+    await app.scheduler.tick();
+    await waitTask(task.id, 'running');
+    app.gateway.disconnect(workerId);
+    await until(() => aborted, 'adapter aborted');
+  }, 20_000);
+
   it('keeps a result produced while disconnected and sends it after reconnecting', async () => {
     const { enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
     const fake = new FakeAdapter();

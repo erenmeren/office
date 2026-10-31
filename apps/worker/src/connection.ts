@@ -102,6 +102,7 @@ export class WorkerConnection {
       if (FATAL_CLOSE_CODES.has(code)) {
         this.log.error({ code }, 'API closed the connection; not reconnecting');
         this.stopped = true;
+        for (const runId of this.executor.activeRunIds()) this.executor.cancel(runId);
         this.failStart(new Error(`API closed the connection (code ${code})`));
         return;
       }

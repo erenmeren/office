@@ -1,4 +1,4 @@
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { resolve } from 'node:path';
 
@@ -20,14 +20,17 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
   if (runtime !== 'claude' && runtime !== 'fake') throw new Error(`Invalid OFFICE_RUNTIME: ${runtime}`);
   const capacity = Number(env.OFFICE_WORKER_CAPACITY ?? 2);
   if (!Number.isInteger(capacity) || capacity < 1) throw new Error('Invalid OFFICE_WORKER_CAPACITY');
+  const roots = (env.OFFICE_WORKSPACE_ROOTS ?? '').split(':').filter(Boolean);
+  if (roots.length === 0) throw new Error('OFFICE_WORKSPACE_ROOTS is empty or missing; set it to a colon-separated list of directories');
   return {
     apiUrl: env.OFFICE_API_URL,
     home: resolve(expandHome(env.OFFICE_WORKER_HOME ?? '~/.office-worker')),
     enrollToken: env.OFFICE_ENROLL_TOKEN || undefined,
-    workspaceRoots: (env.OFFICE_WORKSPACE_ROOTS ?? '')
-      .split(':')
-      .filter(Boolean)
-      .map((p) => realpathSync(resolve(expandHome(p)))),
+    workspaceRoots: roots.map((p) => {
+      const abs = resolve(expandHome(p));
+      if (!existsSync(abs)) throw new Error(`Workspace root does not exist: ${abs} (OFFICE_WORKSPACE_ROOTS)`);
+      return realpathSync(abs);
+    }),
     runtime,
     capacity,
     name: env.OFFICE_WORKER_NAME || hostname(),
