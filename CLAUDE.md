@@ -33,8 +33,14 @@ A control plane that turns Claude Code sessions into a persistent AI software te
 
 - `pnpm infra:up` - start Postgres (5433) and Redis (6380)
 - `pnpm db:migrate` - apply Prisma migrations
+- `pnpm seed` - seed the `office-sandbox` project and the `developer` agent (idempotent)
+- `scripts/dev-all.sh` - export `.env`, start infra, migrate, run `pnpm dev`
 - `pnpm dev` - run all packages in watch mode
 - `pnpm test` - run all tests
+
+## Docs
+
+`README.md` (runbook), `docs/architecture.md`, `docs/worker-protocol.md`, `docs/development.md`, `docs/security.md`.
 
 ## Rule
 

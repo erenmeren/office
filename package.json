@@ -10,7 +10,8 @@
     "infra:down": "docker compose -f infra/compose.yaml down",
     "db:generate": "pnpm --filter @office/db generate",
     "db:migrate": "pnpm --filter @office/db migrate:dev",
-    "dev": "pnpm -r --parallel dev"
+    "dev": "pnpm -r --parallel dev",
+    "seed": "pnpm --filter @office/db seed"
   },
   "devDependencies": {
     "@types/node": "^26",

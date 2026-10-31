@@ -11,6 +11,22 @@
 
 ## Outstanding
 
+Phase 1:
+- Acceptance criterion not met: no `agent.tool.started` for `Write` and no `agent.file.changed` were produced in the real Claude run. In all three attempts the model created `hello.txt` with a single `Bash` command (see "Task 10 real Claude acceptance run" below). Everything else in the Phase 1 acceptance held. Phase 1 stays `in progress` until the owner accepts this result or a run shows a `Write` with `agent.file.changed`.
+- Visual browser click-through of the acceptance flow (login, submit the task in the UI, watch the live log, reload after an API restart) was not performed by the implementer, who had no browser. The flow was driven through the HTTP API and the UI WebSocket instead, and the web pages answered HTTP 200. It remains for the owner.
+- The dashboard and workers pages do not poll or subscribe for updates; they show fresh data only on reload (Task 9).
+- The agent's child process inherits the worker's whole environment except `CLAUDE*` and `AI_AGENT` keys; with `.env` exported (as `scripts/dev-all.sh` does) that includes `DATABASE_URL` and `COOKIE_SECRET` (see `docs/security.md`).
+
+Phase 2 (agents and skills): skill registry and versions, skill materialization, native subagents, Agent Studio (agent editing in the UI).
+
+Phase 3 (messaging and memory): message bus and inbox runs, agent MCP tools, human chat as a real session, task summaries, project memory, context pack, memory UI.
+
+Phase 4 (Chief and orchestration): per-run git worktrees and the mission branch, dummy env template, platform-side `checkCommand`, approvals (`canUseTool` gates, `approvalTimeoutMinutes`), scheduler budgets, `waiting_reply` / `waiting_approval` lifecycle, Chief planning and evidence-based review (Phase 1 auto-moves `review` to `done`), required consultations, Mission Control.
+
+Phase 5 (hybrid workers): remote workers, remote clone, worker capabilities.
+
+Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, project membership, interactive PTY shell.
+
 ## Phase 1 evidence
 
 ### Task 4 runtime smoke (real Claude)
@@ -37,3 +53,40 @@ result {
 
 Re-run after review fixes (`disallowedTools` added), same date: status `succeeded`, resultText `RUNTIME_OK`, costUsd 0.0034575, same three events.
 
+### Task 10 real Claude acceptance run
+
+Date: 2026-10-31. Result: **partial**. The run succeeded end to end, but the criterion "at least one `agent.tool.started` for `Write` with `agent.file.changed`" was not met: the model chose `Bash` to create the file in all three attempts (one run plus the two allowed retries). No platform error occurred.
+
+Setup: `pnpm infra:up`, `pnpm seed` (project `office-sandbox` `e844090c-2a16-4a62-a199-a251103a8736`, repository `/home/meren/projects/office-workspaces/office-sandbox`; agent `developer` `15e9d1b8-65b4-4350-96ca-067db9315e9d`, version 1, model `sonnet`, `maxBudgetUsd` 1). API (`pnpm --filter @office/api dev`), worker (`OFFICE_RUNTIME=claude`, enrolled once with an enrollment token from `POST /workers`, worker `e973b79e-8611-4552-b949-b291d5fd493e`, credential saved to `~/.office-worker/credentials.json`) and web (`pnpm --filter @office/web dev`) were started with the root `.env` exported. The worker used the machine's Claude Code login.
+
+Driver: the implementer had no browser, so the task was submitted with `POST /tasks` (cookie session of the owner account), and the live log was read over `/ws/ui` with `{"type":"subscribe","topic":"run:<runId>","afterSeq":0}`, the same messages the task page uses. `GET /`, `GET /login` and `GET /tasks/c0e0e558-d8a3-4fe9-a79e-b5905f7aecd5` on the web app returned HTTP 200.
+
+Task: title `Create hello.txt`, description `Create a file named hello.txt in the current directory containing the single line "Hello from Agent Office", then show its contents with cat.`
+
+| Attempt | Task | Run | Session | SDK session | Events | Cost (USD) | Task status |
+|---|---|---|---|---|---|---|---|
+| 1 | `c0e0e558-d8a3-4fe9-a79e-b5905f7aecd5` | `1b4f13e6-1f0b-4663-95c1-87b6da7e1c7c` | `1746f603-8803-4dbe-8af8-8680cab1313a` | `6fcedd53-de1e-46f7-a6ac-2008f13cb98e` | 6 | 0.1079112 | done |
+| 2 | `49a8a425-93fc-4004-b45d-d76b6b49234a` | `e967bc80-d477-44b0-897b-99f056155c2d` | `f9b0feb4-b304-46eb-97f3-52c5e476e2b8` | `fa29be03-0c2a-4bb6-a857-8ab90b9e571a` | 6 | 0.0262102 | done |
+| 3 | `dd04c924-883c-4eaf-8436-d047412601d0` | `f7072bcd-3fcc-44b4-9841-14b0a37fa5f2` | `89c94db5-1da1-4059-817f-e7fa8c5582d3` | `e99b176e-2157-41ca-91aa-8f15e3b86939` | 6 | 0.0263482 | done |
+
+Total cost 0.1604696 USD. `hello.txt` was removed before attempts 2 and 3 so that each attempt had to create it.
+
+Attempt 1 events as received live over `/ws/ui` (run started 2026-10-31T15:52:43.609Z, finished 15:52:51.117Z):
+
+```
+seq 1 agent.started           2026-10-31T15:52:44.205Z  model claude-sonnet-5-5
+seq 2 agent.tool.started      2026-10-31T15:52:49.029Z  tool Bash: ls hello.txt 2>&1; printf 'Hello from Agent Office\n' > hello.txt && cat hello.txt
+seq 3 agent.command.executed  2026-10-31T15:52:49.030Z  same command
+seq 4 agent.tool.completed    2026-10-31T15:52:49.078Z  "ls: cannot access 'hello.txt': No such file or directory\nHello from Agent Office"
+seq 5 agent.text              2026-10-31T15:52:50.573Z
+seq 6 agent.completed         2026-10-31T15:52:50.587Z  costUsd 0.10791119999999998, numTurns 2, durationMs 6688
+run.status.changed succeeded; GET /tasks/<id>: status done, attempts 1
+```
+
+Attempts 2 and 3 produced the same six event types in the same order (attempt 2 used `git status --short && echo "Hello from Agent Office" > hello.txt && cat hello.txt`).
+
+File on disk after attempt 3: `/home/meren/projects/office-workspaces/office-sandbox/hello.txt`, 24 bytes, content `Hello from Agent Office` plus a newline, sha256 `ec3c94d325c2638a2448fb45ceb38bab0083cf8399ebc8ca6aaccfb3e7762ad2` (the same hash after attempt 1).
+
+Replay after restart: the API process was killed (health check failed), restarted at 2026-10-31T15:54:30Z, and each of the three runs was re-subscribed over `/ws/ui` with `afterSeq: 0`. Each replayed seqs 1 to 6 (`agent.started`, `agent.tool.started`, `agent.command.executed`, `agent.tool.completed`, `agent.text`, `agent.completed`) from the database, followed by `replay.done` with `lastSeq` 6. `GET /tasks/c0e0e558-d8a3-4fe9-a79e-b5905f7aecd5` still returned status `done` with the succeeded run, cost and result text. The worker reconnected by itself after the restart and was `online`.
+
+Worker log note: the SDK printed `[CLAUDE_SDK_CAN_USE_TOOL_SHADOWED] Warning: canUseTool will not be invoked for: Read, Glob, Grep, Bash, Edit, Write. Bare allowedTools entries auto-approve the whole tool before the callback is consulted.` This is expected in Phase 1 (no approvals) and is recorded in `docs/security.md` for Phase 4.
