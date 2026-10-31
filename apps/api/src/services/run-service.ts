@@ -123,6 +123,13 @@ export async function completeRun(
   const now = new Date();
   const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
+    // run.accepted never reached us (e.g. socket dropped): accept implicitly so the result is not lost
+    if (run.status === 'queued') {
+      await tx.taskRun.update({ where: { id: runId }, data: { status: 'running', startedAt: now } });
+      await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
+      if (run.task.status !== 'running') await setTaskStatus(tx, outbox, run.taskId, 'running');
+      queueRunStatus(outbox, runId, 'running');
+    }
     // guarded again here so a lease expiring between the check and the write still loses
     const { count } = await tx.taskRun.updateMany({
       where: { id: runId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: now } },

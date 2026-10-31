@@ -206,6 +206,21 @@ describe('scheduler', () => {
     expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('failed');
   });
 
+  it('accepts a succeeded result before run.accepted (implicit accept)', async () => {
+    const task = await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    w.send({
+      type: 'run.result', runId: spec.runId, sessionId: spec.sessionId,
+      result: { status: 'succeeded', resultText: 'ok', usage },
+    });
+    await until(async () => (await getTask(task.id)).status === 'done', 'task done');
+    const run = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
+    expect(run.status).toBe('succeeded');
+    expect(run.startedAt).not.toBeNull();
+    expect(await t.prisma.usageRecord.count({ where: { runId: spec.runId } })).toBe(1);
+  });
+
   it('a heartbeat moves the lease forward', async () => {
     await createTask();
     const w = await worker();
