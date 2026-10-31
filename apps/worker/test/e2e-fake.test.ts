@@ -2,11 +2,13 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { WebSocket } from 'ws';
 import pino from 'pino';
 import { buildApp, loadConfig } from '@office/api';
 import { createPrisma } from '@office/db';
-import { FakeAdapter } from '@office/runtime';
+import { FakeAdapter, type RuntimeAdapter } from '@office/runtime';
+import type { WorkerToApi } from '@office/shared';
 import { WorkerConnection } from '../src/connection.js';
 import { loadCredential } from '../src/credentials.js';
 
@@ -34,13 +36,30 @@ describe('worker end to end with the fake runtime', () => {
   const req = (method: 'GET' | 'POST', url: string, payload?: object) =>
     app.inject({ method, url, headers: { cookie }, payload });
   const getTask = async (id: string) => (await req('GET', `/tasks/${id}`)).json();
-  const connect = async (enrollToken?: string) => {
+  const waitTask = (id: string, status: string) =>
+    until(async () => {
+      const t = await getTask(id);
+      return t.status === status && t;
+    }, `task ${status}`);
+  type Hello = Extract<WorkerToApi, { type: 'hello' }>;
+  type GatewayInternals = {
+    conns: Map<string, { socket: WebSocket }>;
+    hello: (socket: WebSocket, msg: Hello) => Promise<string | undefined>;
+  };
+  const gatewayInternals = () => app.gateway as unknown as GatewayInternals;
+  // drops the TCP connection from the server side (client sees 1006, which is not a fatal close code)
+  const dropWorkerSocket = () => {
+    for (const { socket } of gatewayInternals().conns.values()) socket.terminate();
+  };
+  const spyHellos = () => vi.spyOn(gatewayInternals(), 'hello');
+  const helloRunIds = (spy: ReturnType<typeof spyHellos>) => spy.mock.calls.map(([, msg]) => msg.activeRunIds);
+  const connect = async (enrollToken?: string, adapter: RuntimeAdapter = new FakeAdapter()) => {
     const c = new WorkerConnection(
       {
         apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken, workspaceRoots: [tempRoot],
         runtime: 'fake', capacity: 1, name: 'e2e',
       },
-      { adapter: new FakeAdapter(), heartbeatMs: 200, logger: pino({ level: 'silent' }) },
+      { adapter, heartbeatMs: 200, reconnectBaseMs: 300, logger: pino({ level: 'silent' }) },
     );
     connections.push(c);
     await c.start();
@@ -137,5 +156,54 @@ describe('worker end to end with the fake runtime', () => {
     }, 'task done');
     expect(done.attempts).toBe(2);
     expect(done.runs.map((r: { status: string }) => r.status)).toEqual(['lost', 'succeeded']);
+  }, 20_000);
+
+  it('reconnects after a dropped socket and reattaches the running run', async () => {
+    const { enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
+    const hellos = spyHellos();
+    await connect(enrollToken);
+    const task = (await req('POST', '/tasks', { projectId, agentId, title: 'SLOW reattach', description: 'd' })).json();
+    await app.scheduler.tick();
+    const runId = (await waitTask(task.id, 'running')).runs[0].id;
+
+    dropWorkerSocket();
+    await until(() => hellos.mock.calls.length === 2, 'second hello');
+    expect(helloRunIds(hellos)).toEqual([[], [runId]]);
+    const done = await waitTask(task.id, 'done');
+    expect(done.attempts).toBe(1);
+    expect(done.runs.map((r: { status: string }) => r.status)).toEqual(['succeeded']);
+  }, 20_000);
+
+  it('keeps a result produced while disconnected and sends it after reconnecting', async () => {
+    const { enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
+    const fake = new FakeAdapter();
+    let finished = false;
+    // the socket drops just before the run returns, so its result is produced while disconnected
+    const adapter: RuntimeAdapter = {
+      name: 'fake',
+      run: async (spec, sink, signal) => {
+        const result = await fake.run(spec, sink, signal);
+        // wait until the API has stored accepted and all five events, so only the result is in flight
+        await until(async () => (await prisma.sessionEvent.count({ where: { sessionId: spec.sessionId } })) === 5, 'events stored');
+        dropWorkerSocket();
+        await until(() => app.gateway.onlineWorkers().length === 0, 'worker offline');
+        await new Promise((r) => setTimeout(r, 50));
+        finished = true;
+        return result;
+      },
+    };
+    const hellos = spyHellos();
+    await connect(enrollToken, adapter);
+    const task = (await req('POST', '/tasks', { projectId, agentId, title: 'quick job', description: 'd' })).json();
+    await app.scheduler.tick();
+
+    await until(() => hellos.mock.calls.length === 2, 'second hello');
+    expect(finished).toBe(true);
+    // the run is no longer executing; its id is reported because the result is still unsent
+    const runId = (await getTask(task.id)).runs[0].id;
+    expect(helloRunIds(hellos)).toEqual([[], [runId]]);
+    const done = await waitTask(task.id, 'done');
+    expect(done.attempts).toBe(1);
+    expect(done.runs.map((r: { status: string }) => r.status)).toEqual(['succeeded']);
   }, 20_000);
 });

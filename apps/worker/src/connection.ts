@@ -15,6 +15,8 @@ const FATAL_CLOSE_CODES = new Set([4401, 4403, 4409]);
 export interface ConnectionOptions {
   adapter: RuntimeAdapter;
   heartbeatMs?: number;
+  /** First reconnect delay; doubles up to 30 s. Default 1 s. */
+  reconnectBaseMs?: number;
   logger?: Logger;
 }
 
@@ -22,9 +24,12 @@ export class WorkerConnection {
   private executor: RunExecutor;
   private log: Logger;
   private heartbeatMs: number;
+  private reconnectBaseMs: number;
   private socket?: WebSocket;
   private credential: string | null = null;
-  private backoffMs = MIN_BACKOFF_MS;
+  private backoffMs: number;
+  // results produced while disconnected, sent after the next welcome
+  private unsentResults = new Map<string, WorkerToApi>();
   private heartbeatTimer?: NodeJS.Timeout;
   private reconnectTimer?: NodeJS.Timeout;
   private stopped = false;
@@ -36,6 +41,8 @@ export class WorkerConnection {
   ) {
     this.log = opts.logger ?? pino({ level: process.env.LOG_LEVEL ?? 'info' });
     this.heartbeatMs = opts.heartbeatMs ?? 10_000;
+    this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
+    this.backoffMs = this.reconnectBaseMs;
     this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots);
   }
 
@@ -82,7 +89,7 @@ export class WorkerConnection {
         capacity: this.config.capacity,
         allowedRoots: this.config.workspaceRoots,
         // reattach: the API renews leases of runs still executing here
-        activeRunIds: this.executor.activeRunIds(),
+        activeRunIds: this.activeRunIds(),
       });
     });
     socket.on('message', (data) => {
@@ -123,10 +130,11 @@ export class WorkerConnection {
           await saveCredential(this.config.home, msg.credential);
           this.credential = msg.credential;
         }
-        this.backoffMs = MIN_BACKOFF_MS;
+        this.backoffMs = this.reconnectBaseMs;
+        for (const result of this.unsentResults.values()) this.send(result);
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = setInterval(
-          () => this.send({ type: 'heartbeat', capacity: this.config.capacity, activeRunIds: this.executor.activeRunIds() }),
+          () => this.send({ type: 'heartbeat', capacity: this.config.capacity, activeRunIds: this.activeRunIds() }),
           this.heartbeatMs,
         );
         this.log.info({ workerId: msg.workerId }, 'connected to API');
@@ -152,8 +160,22 @@ export class WorkerConnection {
     this.started = undefined;
   }
 
-  // shortcut: messages sent while disconnected are dropped (no buffer); results lost this way end in lease expiry and a retry
+  /** Executing runs plus finished runs whose result is not sent yet; both keep their lease. */
+  private activeRunIds(): string[] {
+    return [...new Set([...this.executor.activeRunIds(), ...this.unsentResults.keys()])];
+  }
+
+  // shortcut: only run.result is preserved across a disconnect; events produced while disconnected are dropped
+  // (gaps in the stored stream), add a send buffer if event completeness matters
   private send(msg: WorkerToApi) {
-    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(msg));
+    const open = this.socket?.readyState === WebSocket.OPEN;
+    if (msg.type === 'run.result') {
+      if (!open) {
+        this.unsentResults.set(msg.runId, msg);
+        return;
+      }
+      this.unsentResults.delete(msg.runId);
+    }
+    if (open) this.socket!.send(JSON.stringify(msg));
   }
 }

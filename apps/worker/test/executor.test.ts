@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -52,10 +52,27 @@ describe('RunExecutor', () => {
     expect(executor.activeRunIds()).toEqual([]);
   });
 
-  it('rejects a cwd outside the allowed roots', async () => {
-    executor.accept(spec({ cwd: root + '-other/repo' }));
+  it('rejects an existing sibling directory that shares the root prefix', async () => {
+    // `<root>-other` starts with `<root>` as a string but is not under it by segment
+    mkdirSync(root + '-other/repo', { recursive: true });
+    try {
+      executor.accept(spec({ cwd: root + '-other/repo' }));
+    } finally {
+      rmSync(root + '-other', { recursive: true, force: true });
+    }
     expect(sent).toEqual([{ type: 'run.rejected', runId: 'run-1', reason: 'cwd outside allowed roots' }]);
     expect(executor.activeRunIds()).toEqual([]);
+  });
+
+  it('rejects a symlink inside a root that points outside it', async () => {
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'office-outside-')));
+    symlinkSync(outside, join(root, 'escape'));
+    try {
+      executor.accept(spec({ cwd: join(root, 'escape') }));
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+    expect(sent).toEqual([{ type: 'run.rejected', runId: 'run-1', reason: 'cwd outside allowed roots' }]);
   });
 
   it('cancels a running SLOW prompt', async () => {
