@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import websocket from '@fastify/websocket';
 import { ZodError } from 'zod';
+import { InvalidTransitionError } from '@office/shared';
 import type { PrismaClient } from '@office/db';
 import type { Config } from './config.js';
 import { HttpError } from './lib/errors.js';
@@ -12,6 +13,20 @@ import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { projectRoutes } from './routes/projects.js';
 import { agentRoutes } from './routes/agents.js';
+import { taskRoutes } from './routes/tasks.js';
+import { runRoutes } from './routes/runs.js';
+import { workerRoutes } from './routes/workers.js';
+import { EventHub } from './services/event-hub.js';
+import { Scheduler } from './services/scheduler.js';
+import { WorkerGateway } from './ws/worker-gateway.js';
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    hub: EventHub;
+    gateway: WorkerGateway;
+    scheduler: Scheduler;
+  }
+}
 
 export { loadConfig } from './config.js';
 export type { Config } from './config.js';
@@ -29,6 +44,7 @@ export async function buildApp(
       return reply.code(400).send({ error: 'validation_error', details: err.issues });
     }
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.code });
+    if (err instanceof InvalidTransitionError) return reply.code(409).send({ error: 'invalid_transition' });
     // Prisma unique-constraint violation (concurrent duplicates)
     if ((err as { code?: string }).code === 'P2002') return reply.code(409).send({ error: 'conflict' });
     app.log.error(err);
@@ -46,6 +62,19 @@ export async function buildApp(
   await app.register(authRoutes, { cookieSecure: config.cookieSecure });
   await app.register(projectRoutes);
   await app.register(agentRoutes);
+
+  const hub = new EventHub();
+  const gateway = new WorkerGateway(app.prisma, hub, config, app.log);
+  const scheduler = new Scheduler(app.prisma, hub, gateway, config, app.log);
+  app.decorate('hub', hub);
+  app.decorate('gateway', gateway);
+  app.decorate('scheduler', scheduler);
+  gateway.register(app);
+  await app.register(taskRoutes);
+  await app.register(runRoutes);
+  await app.register(workerRoutes);
+  app.addHook('onReady', async () => scheduler.start());
+  app.addHook('onClose', async () => scheduler.stop());
 
   return app;
 }
