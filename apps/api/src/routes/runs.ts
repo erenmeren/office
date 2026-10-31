@@ -18,4 +18,11 @@ export async function runRoutes(app: FastifyInstance) {
     if (!session) throw new HttpError(404, 'not_found');
     return listEvents(app.prisma, session.id, afterSeq);
   });
+
+  app.get('/runs/:id/subagents', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = await app.prisma.agentSession.findUnique({ where: { runId: id } });
+    if (!session) throw new HttpError(404, 'not_found');
+    return app.prisma.subagentRun.findMany({ where: { sessionId: session.id }, orderBy: { startedAt: 'asc' } });
+  });
 }
