@@ -35,7 +35,7 @@ OFFICE_ENROLL_TOKEN=<token from the Workers page> pnpm --filter @office/worker d
 
 The API and the worker read the process environment only; they do not load `.env` themselves. Prisma's config, the seed and the vitest configs do load the root `.env`.
 
-- API: `DATABASE_URL`, `API_PORT`, `COOKIE_SECRET` (at least 32 characters), `WEB_ORIGIN`, `OFFICE_DATA_DIR`, and optionally `OFFICE_LEASE_SECONDS` (60), `OFFICE_HEARTBEAT_SECONDS` (10), `OFFICE_SCHEDULER_INTERVAL_MS` (2000).
+- API: `DATABASE_URL`, `API_PORT`, `COOKIE_SECRET` (at least 32 characters), `WEB_ORIGIN`, `OFFICE_DATA_DIR`, and optionally `API_HOST` (`127.0.0.1`), `OFFICE_LEASE_SECONDS` (60), `OFFICE_HEARTBEAT_SECONDS` (10), `OFFICE_SCHEDULER_INTERVAL_MS` (2000).
 - Worker: `OFFICE_API_URL`, `OFFICE_WORKER_HOME` (`~/.office-worker`), `OFFICE_WORKSPACE_ROOTS` (colon-separated; every root must exist), `OFFICE_RUNTIME` (`claude` or `fake`), `OFFICE_WORKER_CAPACITY`, optionally `OFFICE_ENROLL_TOKEN` and `OFFICE_WORKER_NAME` (defaults to the host name).
 - Web: `NEXT_PUBLIC_API_URL`.
 - Tests: `DATABASE_URL_TEST` (the `office_test` database, created by the Compose init script).

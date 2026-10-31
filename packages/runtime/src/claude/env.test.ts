@@ -1,10 +1,14 @@
 import { expect, it } from 'vitest';
 import { buildChildEnv } from './env.js';
 
-it('strips CLAUDE* and AI_AGENT and sets subagent limits', () => {
+it('strips CLAUDE*, AI_AGENT and Office secrets and sets subagent limits', () => {
   expect(
     buildChildEnv(
-      { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'x', AI_AGENT: '1', PATH: '/bin', HOME: '/h' },
+      {
+        CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'x', AI_AGENT: '1', PATH: '/bin', HOME: '/h',
+        DATABASE_URL: 'pg://a', DATABASE_URL_TEST: 'pg://b', COOKIE_SECRET: 's', REDIS_URL: 'redis://r',
+        OFFICE_API_URL: 'ws://x', OFFICE_ENROLL_TOKEN: 't',
+      },
       { maxConcurrentSubagents: 3, maxSubagentDepth: 1 },
     ),
   ).toEqual({

@@ -44,7 +44,7 @@ Copy the template and edit it:
 cp .env.example .env
 ```
 
-`.env` is git-ignored and must never be committed. Set at least `COOKIE_SECRET` to a random string of 32 characters or more, and `OFFICE_WORKSPACE_ROOTS` to the directory (or a colon-separated list of directories) under which the worker may run agents. The other values match the Compose setup.
+`.env` is git-ignored and must never be committed. Set at least `COOKIE_SECRET` to a random string of 32 characters or more, and `OFFICE_WORKSPACE_ROOTS` to the directory (or a colon-separated list of directories) under which the worker may run agents; the worker refuses to start if the list is empty or a directory does not exist. The other values match the Compose setup. The API listens on `127.0.0.1` only; set `API_HOST` (for example `0.0.0.0`) to expose it on other interfaces, which also exposes the unauthenticated first-run `/auth/setup`.
 
 The API and the worker read their configuration from the process environment only; they do not load `.env` themselves. For the API and the web app, export `.env` into the shell before starting them by hand:
 
@@ -52,7 +52,7 @@ The API and the worker read their configuration from the process environment onl
 set -a; . ./.env; set +a
 ```
 
-The worker needs only the `OFFICE_*` variables: `OFFICE_API_URL`, `OFFICE_WORKER_HOME`, `OFFICE_WORKSPACE_ROOTS`, `OFFICE_RUNTIME`, `OFFICE_WORKER_CAPACITY`, and optionally `OFFICE_ENROLL_TOKEN` and `OFFICE_WORKER_NAME`. Agent sessions inherit the worker's environment, so exporting the whole `.env` into the worker's shell also exposes `DATABASE_URL` and `COOKIE_SECRET` to every agent session. Export only the `OFFICE_*` variables for the worker (see section 9 and `docs/security.md`).
+The worker needs only the `OFFICE_*` variables: `OFFICE_API_URL`, `OFFICE_WORKER_HOME`, `OFFICE_WORKSPACE_ROOTS`, `OFFICE_RUNTIME`, `OFFICE_WORKER_CAPACITY`, and optionally `OFFICE_ENROLL_TOKEN` and `OFFICE_WORKER_NAME`. Agent sessions inherit the worker's environment minus `CLAUDE*`, `AI_AGENT`, `DATABASE_URL*`, `COOKIE_SECRET`, `REDIS_URL` and `OFFICE_*`; any other secret exported into the worker's shell reaches every agent session. Export only the `OFFICE_*` variables for the worker (see section 9 and `docs/security.md`).
 
 `scripts/dev-all.sh` exports the whole `.env` for convenience, then starts infra, applies migrations and runs `pnpm dev`. Because it starts the worker too, use it only with throwaway local values.
 

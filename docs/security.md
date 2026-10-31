@@ -37,13 +37,13 @@ This describes what Phase 1 enforces and what it does not yet. The target model 
 - The agent version's `allowedTools` are passed as `allowedTools`; every built-in tool not in that list is passed as `disallowedTools`. A `canUseTool` callback denies any tool that is not in the allow list.
 - Project settings (`settingSources: ['project']`) are loaded because project repositories are owner-controlled. Deny rules still cap the tool surface.
 - `maxTurns` and `maxBudgetUsd` from the agent version are passed to the SDK. The budget is the SDK's soft limit.
-- The child process gets the worker's environment without `CLAUDE*` and `AI_AGENT` keys, so it uses the machine's Claude Code login or `ANTHROPIC_API_KEY`.
+- The child process gets the worker's environment without `CLAUDE*` and `AI_AGENT` keys, so it uses the machine's Claude Code login or `ANTHROPIC_API_KEY`. Office's own keys are dropped too: `DATABASE_URL*`, `COOKIE_SECRET`, `REDIS_URL` and every `OFFICE_*` key.
 
 ## Not yet enforced
 
 - **Approvals** (Phase 4): there are no approval gates. Allowed tools, including `Bash`, `Edit` and `Write`, run without asking: listing a tool in `allowedTools` auto-approves it, so `canUseTool` is not consulted for it (the SDK logs a `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` warning saying so). Destructive commands, sensitive paths, `git push`, merge and deploy are not gated. Approval gates in `canUseTool`, a PreToolUse hook or equivalent, and `approvalTimeoutMinutes` come in Phase 4.
 - **Budgets** (Phase 4): only the per-run SDK soft budget exists. The scheduler does not enforce per-agent daily budgets or hard caps.
-- **Worker environment** (Phase 4): the agent's child process inherits the worker's whole environment apart from the keys above. Start the worker with only the variables it needs; if you export the whole `.env` (as `scripts/dev-all.sh` does for convenience), the agent can read `DATABASE_URL` and `COOKIE_SECRET`. Use this only with throwaway local values.
+- **Worker environment** (Phase 4): the agent's child process inherits the worker's whole environment apart from the keys above. Start the worker with only the variables it needs; any other secret in its environment (for example one added to `.env`, which `scripts/dev-all.sh` exports whole for convenience) reaches the agent. Use this only with throwaway local values.
 - **Project authorization and membership** (Phase 6): there is one owner, who can see every project. `ProjectMember` and per-project authorization are not built.
 - **Audit log** (Phase 6): agent edits, approvals and worker revocations are not written to an audit log yet. Agent edits are traceable through immutable `AgentVersion` rows.
 - **Untrusted content**: tool output and agent text are rendered as text in the UI, never executed. Skills, agent messages and memory (Phases 2 and 3) will be treated the same way.

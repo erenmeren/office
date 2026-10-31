@@ -15,7 +15,7 @@ Phase 1:
 - Acceptance criterion met in the Write-requested run: with the description asking for the Write tool, the run produced `agent.tool.started` for `Write` and `agent.file.changed` for `hello.txt` (see "Task 10 real Claude acceptance run (Write tool requested)" below). With the original wording the model created the file with a single `Bash` command in all three attempts (see "Task 10 real Claude acceptance run").
 - Visual browser click-through of the acceptance flow (login, submit the task in the UI, watch the live log, reload after an API restart) was not performed by the implementer, who had no browser. The flow was driven through the HTTP API and the UI WebSocket instead, and the web pages answered HTTP 200. It remains for the owner.
 - The dashboard and workers pages do not poll or subscribe for updates; they show fresh data only on reload (Task 9).
-- The agent's child process inherits the worker's whole environment except `CLAUDE*` and `AI_AGENT` keys; with `.env` exported (as `scripts/dev-all.sh` does) that includes `DATABASE_URL` and `COOKIE_SECRET` (see `docs/security.md`).
+- The agent's child process inherits the worker's environment except `CLAUDE*`, `AI_AGENT`, `DATABASE_URL*`, `COOKIE_SECRET`, `REDIS_URL` and `OFFICE_*` keys; any other secret exported into the worker reaches the agent (see `docs/security.md`).
 
 Phase 2 (agents and skills): skill registry and versions, skill materialization, native subagents, Agent Studio (agent editing in the UI).
 
