@@ -3,7 +3,7 @@ import type { TaskStatus } from './enums.js';
 export const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   planned: ['ready', 'blocked', 'cancelled'],
   ready: ['queued', 'cancelled', 'blocked'],
-  queued: ['running', 'ready', 'cancelled'],
+  queued: ['running', 'ready', 'cancelled', 'failed'], // failed: lease lost before accept, no attempts left
   running: ['waiting_reply', 'waiting_approval', 'review', 'failed', 'cancelled', 'ready'],
   waiting_reply: ['running', 'failed', 'cancelled'],
   waiting_approval: ['running', 'failed', 'cancelled'],

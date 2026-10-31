@@ -22,6 +22,10 @@ describe('task state machine', () => {
     expect(transitionTask('running', 'failed')).toBe('failed');
   });
 
+  it('allows queued -> failed (run lost or failed before it started, no attempts left)', () => {
+    expect(transitionTask('queued', 'failed')).toBe('failed');
+  });
+
   it('allows planned -> ready, planned -> blocked, ready -> cancelled', () => {
     expect(transitionTask('planned', 'ready')).toBe('ready');
     expect(transitionTask('planned', 'blocked')).toBe('blocked');

@@ -1,8 +1,8 @@
 import type { AgentSession, PrismaClient, Task, TaskRun } from '@office/db';
-import { AgentConfigSchema, RunSpecSchema, canTransitionTask, type OfficeEvent, type RunResult } from '@office/shared';
+import { AgentConfigSchema, RunSpecSchema, type OfficeEvent, type RunResult } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
-import type { EventHub, RunStatusChanged } from './event-hub.js';
+import type { EventHub, Outbox, RunStatusChanged } from './event-hub.js';
 import { appendEvent } from './event-store.js';
 import { setTaskStatus } from './task-service.js';
 
@@ -16,9 +16,8 @@ export class LeaseError extends Error {
 const LEASED = ['queued', 'running'] as const;
 const leaseUntil = (config: Config) => new Date(Date.now() + config.leaseSeconds * 1000);
 
-function publishRunStatus(hub: EventHub, runId: string, status: RunStatusChanged['status']) {
-  const msg: RunStatusChanged = { type: 'run.status.changed', runId, status };
-  hub.publish(`run:${runId}`, msg);
+function queueRunStatus(outbox: Outbox, runId: string, status: RunStatusChanged['status']) {
+  outbox.push({ topic: `run:${runId}`, message: { type: 'run.status.changed', runId, status } });
 }
 
 /** The run if `workerId` owns it with a live lease, else null. */
@@ -48,7 +47,8 @@ export async function createRunForTask(
   const version = await prisma.agentVersion.findUniqueOrThrow({ where: { id: agent.currentVersionId } });
   const cfg = AgentConfigSchema.parse(version.config);
 
-  return prisma.$transaction(async (tx) => {
+  const outbox: Outbox = [];
+  const created = await prisma.$transaction(async (tx) => {
     const run = await tx.taskRun.create({
       data: {
         taskId: task.id,
@@ -69,7 +69,7 @@ export async function createRunForTask(
       },
     });
     await tx.task.update({ where: { id: task.id }, data: { attempts: { increment: 1 } } });
-    await setTaskStatus(tx, hub, task.id, 'queued');
+    await setTaskStatus(tx, outbox, task.id, 'queued');
     const spec = RunSpecSchema.parse({
       runId: run.id,
       sessionId: session.id,
@@ -88,17 +88,21 @@ export async function createRunForTask(
     });
     return { run, session, spec };
   });
+  hub.publishAll(outbox);
+  return created;
 }
 
 export async function markRunning(prisma: PrismaClient, hub: EventHub, runId: string, workerId: string) {
   const run = await findLeasedRun(prisma, runId, workerId);
   if (!run) throw new LeaseError(runId);
+  const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
     await tx.taskRun.update({ where: { id: runId }, data: { status: 'running', startedAt: new Date() } });
     await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
-    if (run.task.status !== 'running') await setTaskStatus(tx, hub, run.taskId, 'running');
+    if (run.task.status !== 'running') await setTaskStatus(tx, outbox, run.taskId, 'running');
+    queueRunStatus(outbox, runId, 'running');
   });
-  publishRunStatus(hub, runId, 'running');
+  hub.publishAll(outbox);
 }
 
 export async function renewLeases(prisma: PrismaClient, workerId: string, runIds: string[], config: Config) {
@@ -117,6 +121,7 @@ export async function completeRun(
   if (!run || !run.session) throw new LeaseError(runId);
   const r = redactSecrets(result);
   const now = new Date();
+  const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
     // guarded again here so a lease expiring between the check and the write still loses
     const { count } = await tx.taskRun.updateMany({
@@ -147,13 +152,14 @@ export async function completeRun(
     });
     if (r.status === 'succeeded') {
       // Phase 1 auto-closes review; the Chief takes it over in Phase 4.
-      await setTaskStatus(tx, hub, run.taskId, 'review');
-      await setTaskStatus(tx, hub, run.taskId, 'done');
+      await setTaskStatus(tx, outbox, run.taskId, 'review');
+      await setTaskStatus(tx, outbox, run.taskId, 'done');
     } else {
-      await setTaskStatus(tx, hub, run.taskId, r.status);
+      await setTaskStatus(tx, outbox, run.taskId, r.status);
     }
+    queueRunStatus(outbox, runId, r.status);
   });
-  publishRunStatus(hub, runId, r.status);
+  hub.publishAll(outbox);
 }
 
 /** Marks every expired leased run `lost` and requeues or fails its task. Returns the lost runs. */
@@ -164,6 +170,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
   });
   const lost: Array<{ runId: string; workerId: string | null }> = [];
   for (const run of expired) {
+    const outbox: Outbox = [];
     const changed = await prisma.$transaction(async (tx) => {
       // re-check inside the transaction so a concurrent result or renewal wins
       const { count } = await tx.taskRun.updateMany({
@@ -175,13 +182,12 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         await tx.agentSession.update({ where: { id: run.session.id }, data: { status: 'lost', endedAt: now } });
       }
       const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
-      const to = task.attempts < task.maxAttempts ? 'ready' : 'failed';
-      // shortcut: a `queued` task with no attempts left has no legal move (queued -> failed is not in
-      // TASK_TRANSITIONS) and stays queued until cancelled; widen the state machine if this shows up.
-      if (canTransitionTask(task.status, to)) await setTaskStatus(tx, hub, task.id, to);
+      await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
+      queueRunStatus(outbox, run.id, 'lost');
       return true;
     });
     if (!changed) continue;
+    hub.publishAll(outbox);
     lost.push({ runId: run.id, workerId: run.workerId });
     if (run.session) {
       const max = await prisma.sessionEvent.aggregate({ where: { sessionId: run.session.id }, _max: { seq: true } });
@@ -197,7 +203,6 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
       };
       if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${run.id}`, event);
     }
-    publishRunStatus(hub, run.id, 'lost');
   }
   return lost;
 }

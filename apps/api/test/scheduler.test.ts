@@ -182,6 +182,88 @@ describe('scheduler', () => {
     expect(types).toEqual(['run.lease.lost']);
   });
 
+  it('fails a queued task whose lease is lost before accept with no attempts left', async () => {
+    const task = await createTask();
+    await t.prisma.task.update({ where: { id: task.id }, data: { maxAttempts: 1 } });
+    const w = await worker();
+    const spec = await assign(w);
+    expect((await getTask(task.id)).status).toBe('queued');
+    await expireRun(spec.runId);
+    await t.app.scheduler.tick();
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('lost');
+    expect((await getTask(task.id)).status).toBe('failed');
+  });
+
+  it('accepts a failed result before run.accepted', async () => {
+    const task = await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    w.send({
+      type: 'run.result', runId: spec.runId, sessionId: spec.sessionId,
+      result: { status: 'failed', error: 'boom', usage },
+    });
+    await until(async () => (await getTask(task.id)).status === 'failed', 'task failed');
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('failed');
+  });
+
+  it('a heartbeat moves the lease forward', async () => {
+    await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    await accept(w, spec);
+    const soon = new Date(Date.now() + 1000);
+    await t.prisma.taskRun.update({ where: { id: spec.runId }, data: { leaseExpiresAt: soon } });
+    w.send({ type: 'heartbeat', capacity: 1, activeRunIds: [spec.runId] });
+    await flush(w);
+    const run = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
+    expect(run.leaseExpiresAt!.getTime()).toBeGreaterThan(soon.getTime() + 30_000);
+  });
+
+  it('a reconnecting worker reattaches its running run before the lease is expired', async () => {
+    const task = await createTask();
+    const w1 = await worker();
+    const spec = await assign(w1);
+    await accept(w1, spec);
+    await w1.close();
+    await until(() => t.app.gateway.onlineWorkers().length === 0, 'worker gone');
+    await expireRun(spec.runId);
+    const w2 = await connectFakeWorker(t.app, {
+      credential: w1.credential, name: 'w', capacity: 1, allowedRoots: ['/tmp/office-ws'], activeRunIds: [spec.runId],
+    });
+    workers.push(w2);
+    expect(t.app.gateway.onlineWorkers()[0]!.activeRuns).toBe(1);
+    await t.app.scheduler.tick();
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('running');
+    expect((await getTask(task.id)).status).toBe('running');
+  });
+
+  it("rejects another worker's result for a live run", async () => {
+    const task = await createTask();
+    const w1 = await worker();
+    const w2 = await worker();
+    const spec = await assign(w1);
+    await accept(w1, spec);
+    succeed(w2, spec);
+    const err = await w2.waitFor('error');
+    expect(err.message).toMatch(/lease/i);
+    expect((await getTask(task.id)).status).toBe('running');
+    const run = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
+    expect(run).toMatchObject({ status: 'running', resultText: null, costUsd: 0 });
+    expect(await t.prisma.usageRecord.count()).toBe(0);
+  });
+
+  it('cancelling a running task cancels its run and tells the worker', async () => {
+    const task = await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    await accept(w, spec);
+    const res = await req('POST', `/tasks/${task.id}/cancel`);
+    expect(res.json().status).toBe('cancelled');
+    expect(await w.waitFor('run.cancel')).toEqual({ type: 'run.cancel', runId: spec.runId });
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('cancelled');
+    expect(t.app.gateway.onlineWorkers()[0]!.activeRuns).toBe(0);
+  });
+
   it('respects worker capacity', async () => {
     const t1 = await createTask('first');
     const t2 = await createTask('second');

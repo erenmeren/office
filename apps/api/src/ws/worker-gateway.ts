@@ -116,21 +116,18 @@ export class WorkerGateway {
       return undefined;
     };
     let credential: string | undefined;
-    let worker;
+    let match;
     if (msg.enrollToken) {
-      worker = await this.prisma.worker.findFirst({
-        where: { enrollTokenHash: hashToken(msg.enrollToken), status: 'pending' },
-      });
+      match = { enrollTokenHash: hashToken(msg.enrollToken), status: 'pending' as const };
       credential = generateToken();
     } else if (msg.credential) {
-      worker = await this.prisma.worker.findFirst({
-        where: { credentialHash: hashToken(msg.credential), status: { not: 'revoked' } },
-      });
+      match = { credentialHash: hashToken(msg.credential), status: { not: 'revoked' as const } };
     }
-    if (!worker) return fail();
-
-    await this.prisma.worker.update({
-      where: { id: worker.id },
+    const worker = match && (await this.prisma.worker.findFirst({ where: match, select: { id: true } }));
+    if (!match || !worker) return fail();
+    // the match is re-checked in the write, so a concurrent enroll or revoke wins over this hello
+    const { count } = await this.prisma.worker.updateMany({
+      where: { id: worker.id, ...match },
       data: {
         name: msg.name,
         capacity: msg.capacity,
@@ -140,18 +137,19 @@ export class WorkerGateway {
         ...(credential ? { credentialHash: hashToken(credential), enrollTokenHash: null } : {}),
       },
     });
-    const activeRuns = await this.syncRuns(worker.id, msg.activeRunIds);
+    if (count === 0) return fail();
+    await renewLeases(this.prisma, worker.id, msg.activeRunIds, this.config);
+    const activeRuns = await this.leasedRuns(worker.id);
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');
     this.conns.set(worker.id, { socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, activeRuns });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
     return worker.id;
   }
 
-  /** Renews leases for the reported runs this worker still owns and returns that set. */
-  private async syncRuns(workerId: string, runIds: string[]) {
-    await renewLeases(this.prisma, workerId, runIds, this.config);
+  /** Every run the DB says this worker holds; the worker's own report is not trusted for capacity. */
+  private async leasedRuns(workerId: string) {
     const owned = await this.prisma.taskRun.findMany({
-      where: { id: { in: runIds }, workerId, status: { in: ['queued', 'running'] } },
+      where: { workerId, status: { in: ['queued', 'running'] } },
       select: { id: true },
     });
     return new Set(owned.map((r) => r.id));
@@ -166,9 +164,14 @@ export class WorkerGateway {
           where: { id: workerId },
           data: { lastHeartbeatAt: new Date(), capacity: msg.capacity },
         });
-        const activeRuns = await this.syncRuns(workerId, msg.activeRunIds);
+        await renewLeases(this.prisma, workerId, msg.activeRunIds, this.config);
         const conn = this.conns.get(workerId);
-        if (conn) Object.assign(conn, { capacity: msg.capacity, activeRuns });
+        const before = new Set(conn?.activeRuns);
+        const activeRuns = await this.leasedRuns(workerId);
+        if (!conn) return;
+        // keep runs assigned while the query ran; they may not have been visible to it
+        for (const id of conn.activeRuns) if (!before.has(id)) activeRuns.add(id);
+        Object.assign(conn, { capacity: msg.capacity, activeRuns });
         return;
       }
       case 'run.accepted':

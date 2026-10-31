@@ -8,6 +8,9 @@ export type TaskStatusChanged = {
 };
 export type HubMessage = OfficeEvent | RunStatusChanged | TaskStatusChanged;
 
+/** Messages collected inside a transaction; publish them with `hub.publishAll` only after it commits. */
+export type Outbox = Array<{ topic: string; message: HubMessage }>;
+
 type Listener = (message: unknown) => void;
 
 /** In-process pub/sub. Topics: `run:<runId>`, `task:<taskId>`, `global`. */
@@ -22,6 +25,10 @@ export class EventHub {
         // a broken subscriber must not break the publisher
       }
     }
+  }
+
+  publishAll(outbox: Outbox): void {
+    for (const { topic, message } of outbox) this.publish(topic, message);
   }
 
   subscribe(topic: string, fn: Listener): () => void {
