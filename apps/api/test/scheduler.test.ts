@@ -221,6 +221,21 @@ describe('scheduler', () => {
     expect(await t.prisma.usageRecord.count({ where: { runId: spec.runId } })).toBe(1);
   });
 
+  it('rejects a result before run.accepted when the lease already expired', async () => {
+    const task = await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    await expireRun(spec.runId);
+    succeed(w, spec);
+    expect((await w.waitFor('error')).message).toMatch(/lease/i);
+    const run = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
+    expect(run).toMatchObject({ status: 'queued', startedAt: null });
+    expect((await getTask(task.id)).status).toBe('queued');
+    expect(await t.prisma.usageRecord.count()).toBe(0);
+    await t.app.scheduler.tick();
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('lost');
+  });
+
   it('a heartbeat moves the lease forward', async () => {
     await createTask();
     const w = await worker();

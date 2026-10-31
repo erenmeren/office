@@ -1,4 +1,4 @@
-import type { AgentSession, PrismaClient, Task, TaskRun } from '@office/db';
+import type { AgentSession, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
 import { AgentConfigSchema, RunSpecSchema, type OfficeEvent, type RunResult } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
@@ -92,16 +92,30 @@ export async function createRunForTask(
   return created;
 }
 
+/**
+ * queued -> running, guarded on the lease and decided on in-transaction state. If a concurrent
+ * accept already moved the run to running this is a no-op; any other state loses the lease.
+ */
+async function acceptRunInTx(tx: Prisma.TransactionClient, outbox: Outbox, runId: string, workerId: string, now: Date) {
+  const { count } = await tx.taskRun.updateMany({
+    where: { id: runId, workerId, status: 'queued', leaseExpiresAt: { gt: now } },
+    data: { status: 'running', startedAt: now },
+  });
+  if (count === 0) {
+    if ((await tx.taskRun.findUnique({ where: { id: runId } }))?.status === 'running') return;
+    throw new LeaseError(runId);
+  }
+  await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
+  const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId }, include: { task: true } });
+  if (run.task.status !== 'running') await setTaskStatus(tx, outbox, run.taskId, 'running');
+  queueRunStatus(outbox, runId, 'running');
+}
+
 export async function markRunning(prisma: PrismaClient, hub: EventHub, runId: string, workerId: string) {
   const run = await findLeasedRun(prisma, runId, workerId);
   if (!run) throw new LeaseError(runId);
   const outbox: Outbox = [];
-  await prisma.$transaction(async (tx) => {
-    await tx.taskRun.update({ where: { id: runId }, data: { status: 'running', startedAt: new Date() } });
-    await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
-    if (run.task.status !== 'running') await setTaskStatus(tx, outbox, run.taskId, 'running');
-    queueRunStatus(outbox, runId, 'running');
-  });
+  await prisma.$transaction((tx) => acceptRunInTx(tx, outbox, runId, workerId, new Date()));
   hub.publishAll(outbox);
 }
 
@@ -124,12 +138,7 @@ export async function completeRun(
   const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
     // run.accepted never reached us (e.g. socket dropped): accept implicitly so the result is not lost
-    if (run.status === 'queued') {
-      await tx.taskRun.update({ where: { id: runId }, data: { status: 'running', startedAt: now } });
-      await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
-      if (run.task.status !== 'running') await setTaskStatus(tx, outbox, run.taskId, 'running');
-      queueRunStatus(outbox, runId, 'running');
-    }
+    if (run.status === 'queued') await acceptRunInTx(tx, outbox, runId, workerId, now);
     // guarded again here so a lease expiring between the check and the write still loses
     const { count } = await tx.taskRun.updateMany({
       where: { id: runId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: now } },
