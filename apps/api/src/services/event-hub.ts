@@ -27,6 +27,10 @@ export class EventHub {
     }
   }
 
+  subscriberCount(topic: string): number {
+    return this.topics.get(topic)?.size ?? 0;
+  }
+
   publishAll(outbox: Outbox): void {
     for (const { topic, message } of outbox) this.publish(topic, message);
   }

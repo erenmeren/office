@@ -1,9 +1,13 @@
 import type { AddressInfo } from 'node:net';
+import Fastify from 'fastify';
+import websocket from '@fastify/websocket';
 import WebSocket from 'ws';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { OfficeEvent, RunSpec, UiClientMessage, UiServerMessage } from '@office/shared';
 import { UiServerMessageSchema } from '@office/shared';
 import { makeApp } from './helpers.js';
+import { UiGateway } from '../src/ws/ui-gateway.js';
+import { listEvents } from '../src/services/event-store.js';
 import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
 
 describe('ui gateway', () => {
@@ -30,8 +34,7 @@ describe('ui gateway', () => {
     msgs: UiServerMessage[] = [];
     ws: WebSocket;
     closed: Promise<number>;
-    constructor(headers: Record<string, string> | undefined) {
-      const { port } = t.app.server.address() as AddressInfo;
+    constructor(headers: Record<string, string> | undefined, port = (t.app.server.address() as AddressInfo).port) {
       this.ws = new WebSocket(`ws://127.0.0.1:${port}/ws/ui`, { headers });
       this.ws.on('message', (d) => this.msgs.push(UiServerMessageSchema.parse(JSON.parse(String(d)))));
       this.closed = new Promise((r) => this.ws.on('close', (code) => r(code)));
@@ -53,6 +56,18 @@ describe('ui gateway', () => {
       return until(() => this.msgs.find((m) => m.type === 'replay.done' && m.topic === topic), 'replay.done');
     }
   }
+  // A second, unauthenticated server sharing the real hub and DB, with an injectable listEvents.
+  let extra: ReturnType<typeof Fastify>[] = [];
+  const connectWith = async (list: typeof listEvents) => {
+    const app2 = Fastify();
+    await app2.register(websocket);
+    new UiGateway(t.prisma, t.app.hub, app2.log, list).register(app2);
+    await app2.listen({ port: 0, host: '127.0.0.1' });
+    extra.push(app2);
+    const c = new UiClient({}, (app2.server.address() as AddressInfo).port);
+    await c.open();
+    return c;
+  };
   const connect = async () => {
     const c = new UiClient({ Cookie: cookie });
     await c.open();
@@ -81,6 +96,8 @@ describe('ui gateway', () => {
   });
   afterEach(async () => {
     for (const c of clients) c.ws.close();
+    for (const a of extra) await a.close();
+    extra = [];
     await w.close();
     await t.close();
   });
@@ -122,16 +139,47 @@ describe('ui gateway', () => {
     expect(c.seqs(topic)).toEqual([3, 4]);
   });
 
-  it('drops live events already replayed, even when published during replay', async () => {
+  it('buffers live events during replay and drops those already replayed', async () => {
+    const topic = `run:${spec.runId}`;
+    let entered!: () => void;
+    const inReplay = new Promise<void>((r) => (entered = r));
+    let release!: () => void;
+    const block = new Promise<void>((r) => (release = r));
+    const c = await connectWith(async (...args) => {
+      const page = await listEvents(...args);
+      entered();
+      await block;
+      return page;
+    });
+    c.send({ type: 'subscribe', topic });
+    await inReplay;
+    t.app.hub.publish(topic, event(3)); // duplicate of a replayed event
+    t.app.hub.publish(topic, event(4)); // new
+    release();
+    await c.done(topic);
+    await until(() => c.seqs(topic).includes(4), 'live seq 4');
+    expect(c.msgs.map((m) => (m.type === 'event' ? m.event.seq : m.type))).toEqual([1, 2, 3, 'replay.done', 4]);
+  });
+
+  it('removes the hub subscription when the socket closes while subscribing', async () => {
     const topic = `run:${spec.runId}`;
     const c = await connect();
     c.send({ type: 'subscribe', topic });
-    t.app.hub.publish(topic, event(3)); // races with replay; buffered or dropped, never duplicated
-    t.app.hub.publish(topic, event(2));
-    await c.done(topic);
-    workerEvent(4);
-    await until(() => c.seqs(topic).includes(4), 'live seq 4');
-    expect(c.seqs(topic)).toEqual([1, 2, 3, 4]);
+    c.ws.close();
+    await c.closed;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(t.app.hub.subscriberCount(topic)).toBe(0);
+  });
+
+  it('reports a failed replay and leaves no subscription', async () => {
+    const topic = `run:${spec.runId}`;
+    const c = await connectWith(async () => {
+      throw new Error('db down');
+    });
+    c.send({ type: 'subscribe', topic });
+    await until(() => c.msgs.length > 0, 'error message');
+    expect(c.msgs).toEqual([{ type: 'error', message: 'replay failed' }]);
+    expect(t.app.hub.subscriberCount(topic)).toBe(0);
   });
 
   it('stops delivering after unsubscribe', async () => {

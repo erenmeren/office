@@ -17,6 +17,7 @@ export class UiGateway {
     private prisma: PrismaClient,
     private hub: EventHub,
     private log: FastifyBaseLogger,
+    private list: typeof listEvents = listEvents,
   ) {}
 
   /** Authentication is done by the app-wide onRequest hook: an unauthenticated upgrade gets HTTP 401. */
@@ -27,6 +28,7 @@ export class UiGateway {
   private accept(socket: WebSocket) {
     const subs = new Map<string, Sub>();
     let chain = Promise.resolve();
+    let closed = false;
     const send = (msg: UiServerMessage) => {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
     };
@@ -43,6 +45,7 @@ export class UiGateway {
         where: { runId: topic.slice(4) },
         select: { id: true },
       });
+      if (closed) return;
       if (!session) return send({ type: 'error', message: 'run not found' });
 
       // live messages are buffered until replay is done, then go through the same dedup as later ones
@@ -60,12 +63,24 @@ export class UiGateway {
       sub.unsubscribe = this.hub.subscribe(topic, (m) => (buffer ? buffer.push(m) : live(m)));
       subs.set(topic, sub);
 
-      for (;;) {
-        const page = await listEvents(this.prisma, session.id, sub.lastSeq, PAGE);
-        if (subs.get(topic) !== sub) return; // unsubscribed or replaced meanwhile
-        for (const event of page) send({ type: 'event', topic, event });
-        if (page.length > 0) sub.lastSeq = page[page.length - 1]!.seq;
-        if (page.length < PAGE) break;
+      const drop = () => {
+        sub.unsubscribe();
+        if (subs.get(topic) === sub) subs.delete(topic);
+      };
+      try {
+        for (;;) {
+          const page = await this.list(this.prisma, session.id, sub.lastSeq, PAGE);
+          if (closed) return drop();
+          if (subs.get(topic) !== sub) return; // unsubscribed or replaced meanwhile
+          for (const event of page) send({ type: 'event', topic, event });
+          if (page.length > 0) sub.lastSeq = page[page.length - 1]!.seq;
+          if (page.length < PAGE) break;
+        }
+      } catch (err) {
+        this.log.error({ err, topic }, 'ui replay failed');
+        buffer = undefined;
+        drop();
+        return send({ type: 'error', message: 'replay failed' });
       }
       send({ type: 'replay.done', topic, lastSeq: sub.lastSeq });
       const pending = buffer;
@@ -74,6 +89,7 @@ export class UiGateway {
     };
 
     const handle = async (raw: string) => {
+      if (closed) return;
       let json: unknown;
       try {
         json = JSON.parse(raw);
@@ -94,6 +110,7 @@ export class UiGateway {
       chain = chain.then(() => handle(String(data))).catch((err) => this.log.error({ err }, 'ui message failed'));
     });
     socket.on('close', () => {
+      closed = true;
       for (const s of subs.values()) s.unsubscribe();
       subs.clear();
     });
