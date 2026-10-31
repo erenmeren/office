@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FakeAdapter } from '@office/runtime';
+import { FakeAdapter, type RuntimeAdapter } from '@office/runtime';
 import type { RunSpec, WorkerToApi } from '@office/shared';
 import { RunExecutor } from '../src/executor.js';
 
@@ -18,6 +18,7 @@ describe('RunExecutor', () => {
   let root: string;
   let sent: WorkerToApi[];
   let executor: RunExecutor;
+  let runsDir: string;
   const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
     runId: 'run-1', sessionId: 'sess-1', agentId: 'agent-1', projectId: 'proj-1',
     cwd: join(root, 'repo'), prompt: 'do it', systemPrompt: 'sys', model: 'sonnet', allowedTools: [],
@@ -29,7 +30,8 @@ describe('RunExecutor', () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'office-exec-')));
     mkdirSync(join(root, 'repo'));
     sent = [];
-    executor = new RunExecutor(new FakeAdapter(), (m) => sent.push(m), [root]);
+    runsDir = join(root, 'runs');
+    executor = new RunExecutor(new FakeAdapter(), (m) => sent.push(m), [root], runsDir);
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -95,11 +97,48 @@ describe('RunExecutor', () => {
       { name: 'fake', run: async () => { throw new Error('boom'); } },
       (m) => sent.push(m),
       [root],
+      runsDir,
     );
     boom.accept(spec());
     await until(done, 'result');
     expect(sent.map((m) => m.type)).toEqual(['run.accepted', 'run.event', 'run.result']);
     expect(sent[1]).toMatchObject({ event: { type: 'agent.failed', seq: 1, payload: { error: 'boom' } } });
     expect(sent[2]).toMatchObject({ result: { status: 'failed', error: 'boom' } });
+  });
+
+  const withSkill = {
+    name: 'tdd', version: 1, checksum: 'c', mode: 'eager' as const,
+    files: { 'SKILL.md': '---\nname: tdd\ndescription: d\n---\nbody' },
+  };
+
+  it('removes the run root after success, failure and cancel', async () => {
+    for (const prompt of ['ok', 'FAIL it', 'SLOW work']) {
+      sent = [];
+      executor.accept(spec({ prompt, skills: [withSkill] }));
+      if (prompt === 'SLOW work') {
+        await until(() => sent.filter((m) => m.type === 'run.event').length >= 4, 'four events');
+        expect(existsSync(join(runsDir, 'run-1', '.office'))).toBe(true);
+        executor.cancel('run-1');
+      }
+      await until(() => done() && executor.activeRunIds().length === 0, 'result');
+      expect(existsSync(join(runsDir, 'run-1'))).toBe(false);
+    }
+  });
+
+  it('passes skillsDir to the adapter when the spec has skills', async () => {
+    const seen: RunSpec[] = [];
+    const inner = new FakeAdapter();
+    const rec: RuntimeAdapter = { name: 'fake', run: (s, sink, sig) => (seen.push(s), inner.run(s, sink, sig)) };
+    new RunExecutor(rec, (m) => sent.push(m), [root], runsDir).accept(spec({ skills: [withSkill] }));
+    await until(done, 'result');
+    expect(seen[0]!.skillsDir).toBe(join(runsDir, 'run-1', '.office'));
+  });
+
+  it('turns a hostile skill into agent.failed and a failed result without running the adapter', async () => {
+    executor.accept(spec({ skills: [{ ...withSkill, name: '../evil' }] }));
+    await until(done, 'result');
+    expect(sent.at(-1)).toMatchObject({ type: 'run.result', result: { status: 'failed' } });
+    expect(sent.some((m) => m.type === 'run.event' && m.event.type === 'agent.failed')).toBe(true);
+    expect(existsSync(join(runsDir, 'run-1'))).toBe(false);
   });
 });

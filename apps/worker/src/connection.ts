@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import pino, { type Logger } from 'pino';
 import WebSocket from 'ws';
 import type { RuntimeAdapter } from '@office/runtime';
@@ -5,6 +6,7 @@ import { ApiToWorkerSchema, type ApiToWorker, type WorkerToApi } from '@office/s
 import type { WorkerConfig } from './config.js';
 import { loadCredential, saveCredential } from './credentials.js';
 import { RunExecutor } from './executor.js';
+import { sweepRunRoots } from './skills.js';
 
 const MIN_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
@@ -33,21 +35,24 @@ export class WorkerConnection {
   private heartbeatTimer?: NodeJS.Timeout;
   private reconnectTimer?: NodeJS.Timeout;
   private stopped = false;
+  private runsDir: string;
   private started?: { resolve: () => void; reject: (err: Error) => void };
 
   constructor(
     private config: WorkerConfig,
     opts: ConnectionOptions,
   ) {
+    this.runsDir = join(config.home, 'runs');
     this.log = opts.logger ?? pino({ level: process.env.LOG_LEVEL ?? 'info' });
     this.heartbeatMs = opts.heartbeatMs ?? 10_000;
     this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
     this.backoffMs = this.reconnectBaseMs;
-    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots);
+    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir);
   }
 
   /** Connects and resolves once the API welcomes this worker. */
   async start(): Promise<void> {
+    await sweepRunRoots(this.runsDir, []); // no runs are active at start
     this.credential = await loadCredential(this.config.home);
     if (!this.credential && !this.config.enrollToken) {
       throw new Error('No saved credential and no enroll token (OFFICE_ENROLL_TOKEN)');
