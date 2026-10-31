@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TaskStatus {
+  planned
+  ready
+  queued
+  running
+  waiting_reply
+  waiting_approval
+  review
+  done
+  failed
+  cancelled
+  blocked
+}
+
+enum RunStatus {
+  queued
+  running
+  waiting_reply
+  waiting_approval
+  succeeded
+  failed
+  cancelled
+  lost
+}
+
+enum RunKind {
+  task
+  inbox
+  plan
+  review
+  summary
+  chat
+}
+
+enum WorkerStatus {
+  pending
+  online
+  offline
+  revoked
+}
+
+model User {
+  id           String        @id @default(uuid())
+  createdAt    DateTime      @default(now())
+  email        String        @unique
+  passwordHash String
+  sessions     UserSession[]
+}
+
+model UserSession {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model Project {
+  id            String         @id @default(uuid())
+  createdAt     DateTime       @default(now())
+  name          String
+  slug          String         @unique
+  repoPath      String
+  defaultBranch String         @default("main")
+  tasks         Task[]
+  sessions      AgentSession[]
+  usage         UsageRecord[]
+}
+
+model Agent {
+  id               String         @id @default(uuid())
+  createdAt        DateTime       @default(now())
+  name             String
+  slug             String         @unique
+  role             String
+  description      String         @default("")
+  isActive         Boolean        @default(true)
+  currentVersionId String?
+  versions         AgentVersion[]
+  tasks            Task[]
+  sessions         AgentSession[]
+  usage            UsageRecord[]
+}
+
+model AgentVersion {
+  id        String    @id @default(uuid())
+  createdAt DateTime  @default(now())
+  agentId   String
+  version   Int
+  config    Json
+  agent     Agent     @relation(fields: [agentId], references: [id])
+  runs      TaskRun[]
+
+  @@unique([agentId, version])
+  @@index([agentId])
+}
+
+model Worker {
+  id              String       @id @default(uuid())
+  createdAt       DateTime     @default(now())
+  name            String
+  status          WorkerStatus @default(pending)
+  enrollTokenHash String?
+  credentialHash  String?
+  capacity        Int          @default(1)
+  allowedRoots    String[]
+  lastHeartbeatAt DateTime?
+  runs            TaskRun[]
+}
+
+model Task {
+  id          String     @id @default(uuid())
+  createdAt   DateTime   @default(now())
+  projectId   String
+  agentId     String
+  title       String
+  description String     @default("")
+  status      TaskStatus @default(ready)
+  priority    Int        @default(0)
+  maxAttempts Int        @default(2)
+  attempts    Int        @default(0)
+  updatedAt   DateTime   @updatedAt
+  project     Project    @relation(fields: [projectId], references: [id])
+  agent       Agent      @relation(fields: [agentId], references: [id])
+  runs        TaskRun[]
+
+  @@index([projectId])
+  @@index([agentId])
+}
+
+model TaskRun {
+  id             String        @id @default(uuid())
+  createdAt      DateTime      @default(now())
+  taskId         String
+  kind           RunKind       @default(task)
+  agentVersionId String
+  workerId       String?
+  status         RunStatus     @default(queued)
+  leaseExpiresAt DateTime?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  resultText     String?
+  error          String?
+  costUsd        Float         @default(0)
+  task           Task          @relation(fields: [taskId], references: [id])
+  agentVersion   AgentVersion  @relation(fields: [agentVersionId], references: [id])
+  worker         Worker?       @relation(fields: [workerId], references: [id])
+  session        AgentSession?
+  usage          UsageRecord[]
+
+  @@index([taskId])
+  @@index([agentVersionId])
+  @@index([workerId])
+}
+
+model AgentSession {
+  id             String         @id @default(uuid())
+  createdAt      DateTime       @default(now())
+  runId          String         @unique
+  agentId        String
+  projectId      String
+  sdkSessionId   String?
+  model          String
+  status         String
+  startedAt      DateTime
+  endedAt        DateTime?
+  skillsSnapshot Json?
+  run            TaskRun        @relation(fields: [runId], references: [id])
+  agent          Agent          @relation(fields: [agentId], references: [id])
+  project        Project        @relation(fields: [projectId], references: [id])
+  events         SessionEvent[]
+
+  @@index([agentId])
+  @@index([projectId])
+}
+
+model SessionEvent {
+  id        String       @id @default(uuid())
+  createdAt DateTime     @default(now())
+  sessionId String
+  seq       Int
+  type      String
+  ts        DateTime
+  payload   Json
+  session   AgentSession @relation(fields: [sessionId], references: [id])
+
+  @@unique([sessionId, seq])
+  @@index([sessionId, seq])
+}
+
+model UsageRecord {
+  id           String   @id @default(uuid())
+  createdAt    DateTime @default(now())
+  runId        String
+  projectId    String
+  agentId      String
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Float
+  run          TaskRun  @relation(fields: [runId], references: [id])
+  project      Project  @relation(fields: [projectId], references: [id])
+  agent        Agent    @relation(fields: [agentId], references: [id])
+
+  @@index([runId])
+  @@index([projectId])
+  @@index([agentId])
+}

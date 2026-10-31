@@ -1,0 +1,109 @@
+[
+  {
+    "type": "system",
+    "subtype": "init",
+    "model": "claude-haiku-5-5",
+    "tools": ["Bash", "Agent", "Write"],
+    "session_id": "sess-1",
+    "apiKeySource": "none",
+    "uuid": "u0"
+  },
+  {
+    "type": "assistant",
+    "parent_tool_use_id": null,
+    "session_id": "sess-1",
+    "uuid": "u1",
+    "message": {
+      "role": "assistant",
+      "content": [
+        { "type": "thinking", "thinking": "PRIVATE_THOUGHT plan", "signature": "sig" },
+        { "type": "text", "text": "Running echo" },
+        { "type": "tool_use", "id": "tu-1", "name": "Bash", "input": { "command": "echo hi" } }
+      ]
+    }
+  },
+  {
+    "type": "user",
+    "parent_tool_use_id": null,
+    "session_id": "sess-1",
+    "uuid": "u2",
+    "message": {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "tu-1", "content": "hi sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789", "is_error": false }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "parent_tool_use_id": null,
+    "session_id": "sess-1",
+    "uuid": "u3",
+    "message": {
+      "role": "assistant",
+      "content": [
+        { "type": "tool_use", "id": "tu-2", "name": "Agent", "input": { "description": "Explore repo", "subagent_type": "Explore", "prompt": "look" } }
+      ]
+    }
+  },
+  {
+    "type": "assistant",
+    "parent_tool_use_id": "tu-2",
+    "session_id": "sess-1",
+    "uuid": "u4",
+    "message": {
+      "role": "assistant",
+      "content": [
+        { "type": "tool_use", "id": "tu-3", "name": "Write", "input": { "file_path": "/tmp/x.ts", "content": "x" } }
+      ]
+    }
+  },
+  {
+    "type": "user",
+    "parent_tool_use_id": "tu-2",
+    "session_id": "sess-1",
+    "uuid": "u5",
+    "message": {
+      "role": "user",
+      "content": [
+        { "type": "tool_result", "tool_use_id": "tu-3", "content": [{ "type": "text", "text": "denied" }], "is_error": true }
+      ]
+    }
+  },
+  {
+    "type": "system",
+    "subtype": "task_notification",
+    "task_id": "task-1",
+    "tool_use_id": "tu-2",
+    "status": "completed",
+    "output_file": "/tmp/out",
+    "summary": "explored",
+    "session_id": "sess-1",
+    "uuid": "u6"
+  },
+  {
+    "type": "result",
+    "subtype": "success",
+    "result": "done",
+    "is_error": false,
+    "total_cost_usd": 0.01,
+    "num_turns": 3,
+    "duration_ms": 1200,
+    "usage": { "input_tokens": 10, "output_tokens": 5 },
+    "session_id": "sess-1",
+    "uuid": "u7"
+  },
+  {
+    "type": "result",
+    "subtype": "error_max_turns",
+    "errors": ["max turns reached"],
+    "is_error": true,
+    "total_cost_usd": 0.02,
+    "num_turns": 1,
+    "duration_ms": 900,
+    "usage": { "input_tokens": 1, "output_tokens": 1 },
+    "session_id": "sess-1",
+    "uuid": "u8"
+  },
+  { "type": "system", "subtype": "status", "status": null, "session_id": "sess-1", "uuid": "u9" }
+]

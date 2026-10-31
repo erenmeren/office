@@ -1,0 +1,22 @@
+{
+  "name": "office",
+  "private": true,
+  "packageManager": "pnpm@12",
+  "scripts": {
+    "build": "pnpm db:generate && pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "infra:up": "docker compose -f infra/compose.yaml up -d --wait",
+    "infra:down": "docker compose -f infra/compose.yaml down",
+    "db:generate": "pnpm --filter @office/db generate",
+    "db:migrate": "pnpm --filter @office/db migrate:dev",
+    "dev": "pnpm -r --parallel dev",
+    "seed": "pnpm --filter @office/db seed"
+  },
+  "devDependencies": {
+    "@types/node": "^26",
+    "tsx": "^4",
+    "typescript": "~5.9",
+    "vitest": "^5"
+  }
+}
