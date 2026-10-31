@@ -20,7 +20,10 @@ Messages on one socket are handled strictly in order.
 ### API to worker (`ApiToWorkerSchema`)
 
 - `welcome { workerId, credential? }`: authentication succeeded; `credential` is present only after enrollment, and the worker saves it to `$OFFICE_WORKER_HOME/credentials.json` (mode 0600).
-- `run.assign { spec }`: a leased run to execute; `RunSpec` carries run, session, agent and project ids, `cwd` (the project repository), prompt, system prompt, model, effort, allowed tools, turn and budget limits, subagent limits and an optional SDK session id to resume.
+- `run.assign { spec }`: a leased run to execute; `RunSpec` carries run, session, agent and project ids, `cwd` (the project repository), prompt, system prompt (with the skills section appended when skills are pinned), model, effort, allowed tools, turn and budget limits, subagent limits, an optional SDK session id to resume, and:
+  - `skills`: the agent version's pinned skills, each with `name`, `version`, `checksum`, `mode` (`eager` or `on_demand`) and `files` (relative path to content). The worker validates them and writes them to `<OFFICE_WORKER_HOME>/runs/<runId>/.office/.claude/skills/<name>/`, then removes the run root after the run.
+  - `subagents`: the version's native subagents (`name`, `description`, `prompt`, optional `tools`, `model`, `maxTurns`, and the pinned `skills` each may use), passed to the SDK as `agents`.
+  - `skillsDir`: filled in by the worker, never by the API: the `<runRoot>/.office` directory it materialized, passed to the SDK as `additionalDirectories`.
 - `run.cancel { runId }`: stop the run; the worker interrupts the SDK session and reports a `cancelled` result.
 - `error { message }`: the previous message was invalid or rejected (for example a `run.result` without a live lease).
 

@@ -3,7 +3,7 @@
 | Phase | Status |
 |-------|--------|
 | 1 | done |
-| 2 | not started |
+| 2 | done |
 | 3 | not started |
 | 4 | not started |
 | 5 | not started |
@@ -17,7 +17,12 @@ Phase 1:
 - The dashboard and workers pages do not poll or subscribe for updates; they show fresh data only on reload (Task 9).
 - The agent's child process inherits the worker's environment except `CLAUDE*`, `AI_AGENT`, `DATABASE_URL*`, `COOKIE_SECRET`, `REDIS_URL` and `OFFICE_*` keys; any other secret exported into the worker reaches the agent (see `docs/security.md`).
 
-Phase 2 (agents and skills): skill registry and versions, skill materialization, native subagents, Agent Studio (agent editing in the UI).
+Phase 2:
+- Visual browser click-through of the Phase 2 acceptance flow (Agent Studio pinning, the task page's Subagents card, snapshot chips and skill events) was not performed by the implementer, who had no browser. The flow was driven through the HTTP API instead, and the web pages answered HTTP 200 (see "Phase 2 acceptance (real Claude)" below). It remains for the owner.
+- `ProjectAgent` (which agents belong to which project) is deferred to Phase 4; the Chief's planning needs it, nothing in Phase 2 does.
+- Approvals (Phase 4): pinning skills or subagents adds `Skill` and `Agent` to the allowed tools, which the SDK auto-approves before `canUseTool` (see `docs/security.md`).
+- Skill frontmatter parsing supports single-line `key: value` only; multi-line (folded or block) values are not supported.
+- Subagent use was not exercised by a real run: the seeded subagents were offered to the designer run but not used, so `GET /runs/:id/subagents` was empty.
 
 Phase 3 (messaging and memory): message bus and inbox runs, agent MCP tools, human chat as a real session, task summaries, project memory, context pack, memory UI.
 
@@ -26,6 +31,14 @@ Phase 4 (Chief and orchestration): per-run git worktrees and the mission branch,
 Phase 5 (hybrid workers): remote workers, remote clone, worker capabilities.
 
 Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, project membership, interactive PTY shell.
+
+## Phase 2 decisions
+
+- Pinned skills are materialized by the worker under `<OFFICE_WORKER_HOME>/runs/<runId>/.office/.claude/skills/<name>/`, passed to the SDK as an additional directory, and removed after the run; stale run roots are swept when the worker starts.
+- Skills authored in the UI are `approved` on creation; imported skills (local directory or git) start as `pending_review` and must be approved before an agent can pin them.
+- `AgentSkill` and `AgentSubagent` rows belong to an `AgentVersion` and are immutable with it; changing pins or subagents creates a new agent version.
+- `ProjectAgent` is deferred to Phase 4 (the Chief's planning needs it; nothing in Phase 2 does).
+- Skill frontmatter parsing supports single-line `key: value` only.
 
 ## Phase 2 evidence
 
@@ -60,6 +73,104 @@ result {
   }
 }
 ```
+
+### Phase 2 acceptance (real Claude)
+
+Date: 2026-10-31. Result: **passed**. One attempt per task, no retry. Every expectation held for both runs: the pinned skill names are in `agent.started.payload.slashCommands`, at least one eager pin produced `agent.skill.invoked`, each `session.skillsSnapshot` equals its agent version's pins and the two snapshots differ, and both tasks reached `done`.
+
+Setup: infra already up; `pnpm --filter @office/shared build && pnpm --filter @office/db build && pnpm --filter @office/runtime build`; `pnpm seed` printed `exists` for the project, the 12 skills and the 5 agents. API (`pnpm --filter @office/api dev`), worker (`OFFICE_RUNTIME=claude pnpm --filter @office/worker dev`, worker `e973b79e-8611-4552-b949-b291d5fd493e`, reconnected with its saved credential) and web (`pnpm --filter @office/web dev`) were started with the root `.env` exported. The worker used the machine's Claude Code login. Project `office-sandbox` `e844090c-2a16-4a62-a199-a251103a8736`, repository `/home/meren/projects/office-workspaces/office-sandbox` (it held only the Phase 1 `hello.txt` before the runs).
+
+Driver: the implementer had no browser, so Agent Studio's save was done with the same API call it makes (`PUT /agents/:id`), tasks were submitted with `POST /tasks`, and progress was read by polling `GET /tasks/:id` every 3 s, then `GET /runs/:id`, `GET /runs/:id/events` and `GET /runs/:id/subagents` (cookie session of the owner account). The visual click-through remains for the owner (see Outstanding).
+
+Agent versions:
+
+- `developer` `15e9d1b8-65b4-4350-96ca-067db9315e9d`: `PUT /agents/:id` with the version 1 config plus `skills: [{ test-driven-development, eager }, { lazy-expert-developer, eager }]` and no subagents created version 2, `f1581cc8-a858-4f86-91ea-6405817bcbec` (model `sonnet`, 30 turns, budget 1 USD, tools Read, Glob, Grep, Bash, Edit, Write), with two pins.
+- `designer` `5397e684-03e4-40d3-b533-30eac6b952e2`: seeded version 1, `464cdc9a-bda7-45ba-9b02-d92e3e97c9d4` (model `sonnet`, budget 1 USD), `frontend-design` eager, `accessibility`, `design-systems`, `responsive-design`, `ui-ux-design`, `visual-quality-review` on demand, subagents `ux-researcher`, `accessibility-reviewer`, `visual-reviewer`.
+
+| Task | Agent | Task id | Run | Session | SDK session | Events | Cost (USD) | Task status |
+|---|---|---|---|---|---|---|---|---|
+| `Add a sum helper` | developer v2 | `df321e0f-d732-4ec1-8496-815888f913d1` | `749f2d1a-2fca-4054-a261-89d13a887020` | `22f71055-0a90-4ea2-a720-7e1d37a10705` | `d2f8ec21-a9a3-4973-a7a2-324d43ac5b45` | 27 | 0.1411956 | done |
+| `Landing page` | designer v1 | `fc25d794-8650-4c02-b8f4-70667690d7ac` | `d23801ca-6a49-44f7-9179-82b9629d59b0` | `8f0c0c4f-1047-4029-9097-3be7ad8982b3` | `178b104b-4453-4586-8e6f-e2831fb9dd9c` | 13 | 0.0892959 | done |
+
+Total cost 0.2304915 USD. Descriptions, verbatim: `Create sum.js exporting function sum(a, b) and a test file sum.test.js using node:test that checks sum(2, 3) === 5; run the test with node --test and show the output.` and `Create index.html with a responsive hero section for "Agent Office" using only inline CSS; keep it accessible.`
+
+Developer run (started 2026-10-31T20:05:04.191Z, finished 20:05:15.346Z, status `succeeded`, 10 turns):
+
+```
+seq 1  agent.started        2026-10-31T20:05:04.499Z  model claude-sonnet-5-5
+seq 2  agent.tool.started   Skill {"skill":"lazy-expert-developer"}
+seq 3  agent.skill.invoked  2026-10-31T20:05:06.353Z  lazy-expert-developer
+seq 5  agent.tool.started   Skill {"skill":"test-driven-development"}
+seq 6  agent.skill.invoked  2026-10-31T20:05:06.757Z  test-driven-development
+seq 12 agent.text           "Red step first: I'll write the test before `sum.js` exists."
+seq 13 agent.tool.started   Write sum.test.js            seq 14 agent.file.changed sum.test.js
+seq 16 agent.tool.started   Bash node --test 2>&1 | head -30   (fails: Cannot find module './sum')
+seq 20 agent.tool.started   Write sum.js                 seq 21 agent.file.changed sum.js
+seq 23 agent.tool.started   Bash node --test 2>&1        seq 25 "✔ sum(2, 3) === 5 ... pass 1, fail 0"
+seq 27 agent.completed      2026-10-31T20:05:14.808Z  costUsd 0.1411956, numTurns 10
+```
+
+Designer run (started 2026-10-31T20:05:30.242Z, finished 20:05:54.492Z, status `succeeded`, 5 turns):
+
+```
+seq 1  agent.started        2026-10-31T20:05:30.501Z  model claude-sonnet-5-5
+seq 2  agent.tool.started   Skill {"skill":"frontend-design"}
+seq 3  agent.skill.invoked  2026-10-31T20:05:32.482Z  frontend-design
+seq 5  agent.tool.started   Bash ls -A && git log --oneline | head -5
+seq 9  agent.tool.started   Write index.html             seq 10 agent.file.changed index.html
+seq 13 agent.completed      2026-10-31T20:05:54.070Z  costUsd 0.0892959, numTurns 5
+```
+
+The designer invoked only its eager skill; none of the five on-demand skills and none of the subagents was used.
+
+`slashCommands` in `agent.started`: the developer run's list (58 entries) starts with `lazy-expert-developer`, `test-driven-development`; the designer run's list (62 entries) starts with `accessibility`, `design-systems`, `frontend-design`, `responsive-design`, `ui-ux-design`, `visual-quality-review`. The rest of each list is built-in commands and bundled skills, as in the runtime smoke. `agent.started.payload.agents` for the designer run lists `accessibility-reviewer`, `ux-researcher` and `visual-reviewer` next to the built-in agents; the developer run lists only built-ins.
+
+`session.skillsSnapshot` (from `GET /runs/:id`), developer:
+
+```json
+[{"mode":"eager","name":"lazy-expert-developer","skillId":"41f4bf5b-2ef0-4fa3-a2b4-258970c3942b","version":1,"checksum":"b1b29155101e6c00ee236f81b951b6027ba3ce0a4b19d176b4c5d3ed1435d894","skillVersionId":"298d9144-6913-4b04-9e7c-0c565636d02e"},
+ {"mode":"eager","name":"test-driven-development","skillId":"884f98d0-69e6-44f2-88d9-8a89415a7460","version":1,"checksum":"5537e3f2a42f51459311e026c75e055efc14acf1a253a18f8d01b7d6636a5abe","skillVersionId":"103536c6-8b61-4d09-ac02-54bf3bc58cbb"}]
+```
+
+Designer:
+
+```json
+[{"mode":"on_demand","name":"accessibility","skillId":"1536ad40-704a-459f-9523-2091bfacb7be","version":1,"checksum":"11269c06321ac6e58740277703152adfe1c9092c265f5e7fde83ff6836bdb0a6","skillVersionId":"64d82660-5ded-4e6f-a05d-f27055b36d97"},
+ {"mode":"on_demand","name":"design-systems","skillId":"02511258-2292-4542-a010-11f30cedff62","version":1,"checksum":"7bf3860a34a186ebd2ff104dadfcad82df5f88130b45689bd240a34e522dd96b","skillVersionId":"0a622751-7952-4902-b9d1-b3f16efbd506"},
+ {"mode":"eager","name":"frontend-design","skillId":"399a2c50-711f-4a32-a8aa-2959b4fbf9f6","version":1,"checksum":"90ecdab3cb88caa43128f573a1e332c7fe6f7d6369c8ab60c88a591f44d6fbd4","skillVersionId":"f3778962-57f0-4b32-9654-807577af0d54"},
+ {"mode":"on_demand","name":"responsive-design","skillId":"18bb1c4b-9313-4e98-8579-12abbad5f56f","version":1,"checksum":"786f2b2cc8a847dfde56c6d22294c59779b4a94bbe60d697e7f7608a6fce9aa3","skillVersionId":"d69628d9-b823-49a4-845b-0e01a71eacaf"},
+ {"mode":"on_demand","name":"ui-ux-design","skillId":"9b7e8e30-da6d-4bd1-837a-d0e0ae756d13","version":1,"checksum":"ae656cf461a05920ce331f133449c897ef445dfb8c33bb6629abbe76e4a32662","skillVersionId":"1636d2be-88a2-4c93-8181-2b037050d78d"},
+ {"mode":"on_demand","name":"visual-quality-review","skillId":"3ed34bc9-0fb3-4949-b847-772d959cca83","version":1,"checksum":"916b4946ed86c4c30d0af95f40cf2dc8bc986b8f920bea48cecd4e7df0d64c7e","skillVersionId":"18d955b2-ec70-4b27-a1f3-22120e405bba"}]
+```
+
+Each snapshot's `skillId`, `skillVersionId`, `name`, `version` and `mode` match the pins of its agent version (`GET /agents/:id` `currentVersion.skills`), and each `checksum` matches the pinned `SkillVersion` (`GET /skills/:id` `currentVersion.checksum`).
+
+`GET /runs/:id/subagents`: `[]` for both runs.
+
+Files in the sandbox after both runs (left in place, uncommitted):
+
+```
+$ ls -la /home/meren/projects/office-workspaces/office-sandbox
+-rw-r--r-- 24   hello.txt     (Phase 1)
+-rw-r--r-- 5410 index.html    (designer run)
+-rw-r--r-- 66   sum.js        (developer run)
+-rw-r--r-- 181  sum.test.js   (developer run)
+$ sha256sum *
+ec3c94d325c2638a2448fb45ceb38bab0083cf8399ebc8ca6aaccfb3e7762ad2  hello.txt
+f83d15980960bc0a82fc90accb56254a0dcdc263c642fa120a79e524765dd126  index.html
+902f34f2ae20a060b53c1b271500fce4e4b80af9f86b95a15c0d3b7a7b443f16  sum.js
+87926306be79f5ef445eecff4fe511f3d648c4b3a4291d8f697da4601ecc2ddf  sum.test.js
+```
+
+Running `node --test` in the sandbox independently after the run: tests 1, pass 1, fail 0.
+
+Run roots: after both runs `/home/meren/.office-worker/runs` was empty, so the materialized skills were removed.
+
+Replay after restart: the API process was killed (health check failed) and restarted at 2026-10-31T20:06:28Z. `GET /runs/:id/events` returned the same `(seq, type)` lists as before the restart (developer seqs 1 to 27, designer seqs 1 to 13; SHA-256 of the lists identical before and after). Both tasks still returned `done`; the worker reconnected by itself and was `online`.
+
+Web pages (Next.js dev server, owner cookie): `GET /`, `/skills`, `/skills/884f98d0-69e6-44f2-88d9-8a89415a7460`, `/agents`, `/agents/15e9d1b8-65b4-4350-96ca-067db9315e9d`, `/tasks/df321e0f-d732-4ec1-8496-815888f913d1` and `/tasks/fc25d794-8650-4c02-b8f4-70667690d7ac` all returned HTTP 200.
+
+Worker log note: the SDK printed `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` for `Read, Glob, Grep, Bash, Edit, Write, Skill` (developer run) and for `Read, Glob, Grep, Bash, Edit, Write, Skill, Agent` (designer run), confirming that `Skill` and `Agent` are added to the allowed tools only when skills or subagents are pinned (see `docs/security.md`). The `tools` list in `agent.started` contains `Skill` for both runs but not `Agent` in either; the designer run did not spawn a subagent, so the `Agent` grant was not exercised.
 
 ## Phase 1 evidence
 

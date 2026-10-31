@@ -28,6 +28,11 @@ A control plane that turns Claude Code sessions into a persistent AI software te
 - Retries start from the latest safely integrated mission commit (mission branch head after the last successful fast-forward), never from the mission's original base commit.
 - `waiting_reply` and `waiting_approval` are separate lifecycle states on `TaskRun` and `Task`, with their own events and timeouts. Suspended-session recovery and worker-slot release are verified by integration tests, not by inspection.
 - Every success status in the UI links to the underlying session events, messages, git changes, check results or memory records.
+- Pinned skills are materialized under `<OFFICE_WORKER_HOME>/runs/<runId>/.office` (passed to the SDK as an additional directory) and removed after the run.
+- UI-authored skills are `approved` on creation; imported skills are `pending_review` until the owner approves them.
+- `AgentSkill` and `AgentSubagent` rows belong to an `AgentVersion` and are immutable with it.
+- `ProjectAgent` is deferred to Phase 4 (the Chief's planning needs it; nothing in Phase 2 does).
+- Skill frontmatter parsing supports single-line `key: value` only.
 
 ## Commands
 
