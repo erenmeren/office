@@ -1,0 +1,159 @@
+import pino, { type Logger } from 'pino';
+import WebSocket from 'ws';
+import type { RuntimeAdapter } from '@office/runtime';
+import { ApiToWorkerSchema, type ApiToWorker, type WorkerToApi } from '@office/shared';
+import type { WorkerConfig } from './config.js';
+import { loadCredential, saveCredential } from './credentials.js';
+import { RunExecutor } from './executor.js';
+
+const MIN_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30_000;
+const START_TIMEOUT_MS = 10_000;
+// auth failed / revoked / replaced by another connection: retrying cannot help
+const FATAL_CLOSE_CODES = new Set([4401, 4403, 4409]);
+
+export interface ConnectionOptions {
+  adapter: RuntimeAdapter;
+  heartbeatMs?: number;
+  logger?: Logger;
+}
+
+export class WorkerConnection {
+  private executor: RunExecutor;
+  private log: Logger;
+  private heartbeatMs: number;
+  private socket?: WebSocket;
+  private credential: string | null = null;
+  private backoffMs = MIN_BACKOFF_MS;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private reconnectTimer?: NodeJS.Timeout;
+  private stopped = false;
+  private started?: { resolve: () => void; reject: (err: Error) => void };
+
+  constructor(
+    private config: WorkerConfig,
+    opts: ConnectionOptions,
+  ) {
+    this.log = opts.logger ?? pino({ level: process.env.LOG_LEVEL ?? 'info' });
+    this.heartbeatMs = opts.heartbeatMs ?? 10_000;
+    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots);
+  }
+
+  /** Connects and resolves once the API welcomes this worker. */
+  async start(): Promise<void> {
+    this.credential = await loadCredential(this.config.home);
+    if (!this.credential && !this.config.enrollToken) {
+      throw new Error('No saved credential and no enroll token (OFFICE_ENROLL_TOKEN)');
+    }
+    const welcomed = new Promise<void>((resolve, reject) => (this.started = { resolve, reject }));
+    const timer = setTimeout(() => this.failStart(new Error('no welcome from the API within 10 s')), START_TIMEOUT_MS);
+    this.connect();
+    try {
+      await welcomed;
+    } catch (err) {
+      await this.stop();
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Stops reconnecting, closes the socket, then aborts local runs; their leases expire and the API retries them. */
+  async stop(): Promise<void> {
+    this.stopped = true;
+    clearInterval(this.heartbeatTimer);
+    clearTimeout(this.reconnectTimer);
+    const socket = this.socket;
+    // close first so the aborted runs' results are not sent as user cancellations
+    const closed = socket && socket.readyState !== WebSocket.CLOSED && new Promise((r) => socket.once('close', r));
+    socket?.close();
+    for (const runId of this.executor.activeRunIds()) this.executor.cancel(runId);
+    if (closed) await closed;
+  }
+
+  private connect() {
+    const socket = new WebSocket(`${this.config.apiUrl}/ws/worker`);
+    this.socket = socket;
+    socket.on('open', () => {
+      this.send({
+        type: 'hello',
+        ...(this.credential ? { credential: this.credential } : { enrollToken: this.config.enrollToken }),
+        name: this.config.name,
+        capacity: this.config.capacity,
+        allowedRoots: this.config.workspaceRoots,
+        // reattach: the API renews leases of runs still executing here
+        activeRunIds: this.executor.activeRunIds(),
+      });
+    });
+    socket.on('message', (data) => {
+      void this.onMessage(String(data)).catch((err) => this.log.error({ err }, 'worker message failed'));
+    });
+    socket.on('error', (err) => this.log.warn({ err: err.message }, 'worker socket error'));
+    socket.on('close', (code) => {
+      clearInterval(this.heartbeatTimer);
+      if (this.stopped) return;
+      if (FATAL_CLOSE_CODES.has(code)) {
+        this.log.error({ code }, 'API closed the connection; not reconnecting');
+        this.stopped = true;
+        this.failStart(new Error(`API closed the connection (code ${code})`));
+        return;
+      }
+      this.log.warn({ code, retryInMs: this.backoffMs }, 'disconnected from API; reconnecting');
+      this.reconnectTimer = setTimeout(() => this.connect(), this.backoffMs);
+      this.backoffMs = Math.min(this.backoffMs * 2, MAX_BACKOFF_MS);
+    });
+  }
+
+  private async onMessage(raw: string) {
+    let json: unknown;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      json = undefined;
+    }
+    const parsed = ApiToWorkerSchema.safeParse(json);
+    if (!parsed.success) {
+      this.log.warn({ raw }, 'ignoring invalid message from API');
+      return;
+    }
+    const msg: ApiToWorker = parsed.data;
+    switch (msg.type) {
+      case 'welcome':
+        if (msg.credential) {
+          await saveCredential(this.config.home, msg.credential);
+          this.credential = msg.credential;
+        }
+        this.backoffMs = MIN_BACKOFF_MS;
+        clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = setInterval(
+          () => this.send({ type: 'heartbeat', capacity: this.config.capacity, activeRunIds: this.executor.activeRunIds() }),
+          this.heartbeatMs,
+        );
+        this.log.info({ workerId: msg.workerId }, 'connected to API');
+        this.started?.resolve();
+        this.started = undefined;
+        return;
+      case 'run.assign':
+        this.log.info({ runId: msg.spec.runId }, 'run assigned');
+        this.executor.accept(msg.spec);
+        return;
+      case 'run.cancel':
+        this.log.info({ runId: msg.runId }, 'run cancelled by API');
+        this.executor.cancel(msg.runId);
+        return;
+      case 'error':
+        this.log.warn({ message: msg.message }, 'API reported an error');
+        return;
+    }
+  }
+
+  private failStart(err: Error) {
+    this.started?.reject(err);
+    this.started = undefined;
+  }
+
+  // shortcut: messages sent while disconnected are dropped (no buffer); results lost this way end in lease expiry and a retry
+  private send(msg: WorkerToApi) {
+    if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify(msg));
+  }
+}

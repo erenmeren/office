@@ -64,6 +64,34 @@ importers:
         specifier: ^8.22.0
         version: 8.22.0
 
+  apps/worker:
+    dependencies:
+      '@office/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@office/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      pino:
+        specifier: ^10.4.0
+        version: 10.4.0
+      ws:
+        specifier: ^8.22.0
+        version: 8.22.0
+    devDependencies:
+      '@office/api':
+        specifier: workspace:*
+        version: link:../api
+      '@office/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
+
   packages/db:
     dependencies:
       '@prisma/adapter-pg':

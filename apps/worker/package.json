@@ -1,0 +1,26 @@
+{
+  "name": "@office/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "pnpm --filter @office/api build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@office/runtime": "workspace:*",
+    "@office/shared": "workspace:*",
+    "pino": "^10.4.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@office/api": "workspace:*",
+    "@office/db": "workspace:*",
+    "@types/ws": "^8.18.2",
+    "dotenv": "^17.4.2"
+  }
+}
