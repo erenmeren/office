@@ -26,4 +26,11 @@ describe('redactSecrets', () => {
     expect(redactSecrets('API_KEY: "abcdefgh12"')).toBe('API_KEY: "[REDACTED]"');
     expect(redactSecrets({ n: 1, ok: 'hello world', b: true })).toEqual({ n: 1, ok: 'hello world', b: true });
   });
+
+  it('redacts prefixed/suffixed key names (underscore-joined)', () => {
+    expect(redactSecrets('GITHUB_TOKEN=ghx_abcdefgh1234')).toBe('GITHUB_TOKEN=[REDACTED]');
+    expect(redactSecrets('AWS_SECRET_ACCESS_KEY: "abcdefghijklmnop"')).toBe('AWS_SECRET_ACCESS_KEY: "[REDACTED]"');
+    expect(redactSecrets('client_secret=abcdefgh12345678')).toBe('client_secret=[REDACTED]');
+    expect(redactSecrets('the password is strong enough')).toBe('the password is strong enough');
+  });
 });
