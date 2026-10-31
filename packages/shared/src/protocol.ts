@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RunStatus, TaskStatus } from './enums.js';
 import { OfficeEventSchema } from './events.js';
 import { RunResultSchema, RunSpecSchema } from './run-spec.js';
 
@@ -36,3 +37,26 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type ApiToWorker = z.infer<typeof ApiToWorkerSchema>;
+
+export const UiClientMessageSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('subscribe'),
+    topic: z.string().regex(/^(global|run:.+|task:.+)$/),
+    afterSeq: z.number().int().nonnegative().optional(),
+  }),
+  z.object({ type: z.literal('unsubscribe'), topic: z.string() }),
+]);
+export type UiClientMessage = z.infer<typeof UiClientMessageSchema>;
+
+export const UiServerMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('event'), topic: z.string(), event: OfficeEventSchema }),
+  z.object({
+    type: z.literal('task.status.changed'),
+    topic: z.string(),
+    task: z.object({ id: z.string(), status: TaskStatus, updatedAt: z.iso.datetime() }),
+  }),
+  z.object({ type: z.literal('run.status.changed'), topic: z.string(), runId: z.string(), status: RunStatus }),
+  z.object({ type: z.literal('replay.done'), topic: z.string(), lastSeq: z.number().int().nonnegative() }),
+  z.object({ type: z.literal('error'), message: z.string() }),
+]);
+export type UiServerMessage = z.infer<typeof UiServerMessageSchema>;

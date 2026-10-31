@@ -19,6 +19,7 @@ import { workerRoutes } from './routes/workers.js';
 import { EventHub } from './services/event-hub.js';
 import { Scheduler } from './services/scheduler.js';
 import { WorkerGateway } from './ws/worker-gateway.js';
+import { UiGateway } from './ws/ui-gateway.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -70,6 +71,7 @@ export async function buildApp(
   app.decorate('gateway', gateway);
   app.decorate('scheduler', scheduler);
   gateway.register(app);
+  new UiGateway(app.prisma, hub, app.log).register(app);
   await app.register(taskRoutes);
   await app.register(runRoutes);
   await app.register(workerRoutes);
