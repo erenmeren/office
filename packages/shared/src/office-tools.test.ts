@@ -12,7 +12,12 @@ describe('office tools', () => {
   });
   it('names mcp tools', () => {
     expect(mcpToolName('read_inbox')).toBe('mcp__office__read_inbox');
-    expect(OFFICE_TOOL_NAMES).toHaveLength(14);
+    expect(OFFICE_TOOL_NAMES).toHaveLength(16);
+  });
+  it('parses review tools', () => {
+    expect(parseToolArgs('review_task', { taskId: 't', decision: 'done' }).note).toBe('');
+    expect(() => parseToolArgs('review_task', { taskId: 't', decision: 'maybe' })).toThrow();
+    expect(parseToolArgs('get_task_evidence', { taskId: 't' })).toEqual({ taskId: 't' });
   });
   it('accepts an error result', () => {
     expect(ToolCallResultSchema.safeParse({ ok: false, error: 'x', code: 'limit_exceeded' }).success).toBe(true);

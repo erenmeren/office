@@ -10,3 +10,7 @@ export * from './subagent.js';
 export * from './messaging.js';
 export * from './memory.js';
 export * from './office-tools.js';
+export * from './plan.js';
+export * from './approval.js';
+export * from './policy.js';
+export * from './project-settings.js';

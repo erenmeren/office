@@ -32,7 +32,9 @@ class ToolError extends Error {
   }
 }
 
-const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter((n) => n !== 'submit_summary');
+const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter(
+  (n) => n !== 'submit_summary' && n !== 'get_task_evidence' && n !== 'review_task', // review tools: wired in Phase 4 Task 5
+);
 
 export function toolsForKind(kind: RunKind): OfficeToolName[] {
   return kind === 'summary' ? ['submit_summary'] : [...MESSAGING_AND_MEMORY];
@@ -234,6 +236,9 @@ async function run(
       return { result: { entries: await taskHistory(prisma, { projectId, taskId: args.taskId ?? taskId, limit: args.limit }) } };
     case 'get_project_decisions':
       return { result: { entries: await projectDecisions(prisma, { projectId, limit: args.limit }) } };
+    case 'get_task_evidence':
+    case 'review_task':
+      throw new ToolError('not_allowed', `${name} is only available to review runs`);
     case 'submit_summary': {
       if (!run.summaryOfRunId) throw new ToolError('invalid_state', 'run has no summarized run');
       const target = await prisma.taskRun.findFirst({

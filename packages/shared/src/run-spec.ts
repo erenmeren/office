@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { RunKindSchema } from './enums.js';
+import { CheckStatusSchema, IntegrationStatusSchema, RunKindSchema, TaskKindSchema } from './enums.js';
+import { ApprovalPolicySchema } from './policy.js';
 import { RunSkillSchema } from './skill.js';
 import { SubagentDefinitionSchema } from './subagent.js';
 
@@ -27,6 +28,28 @@ export const RunSpecSchema = z.object({
   subagents: z.array(SubagentDefinitionSchema).default([]),
   // worker-filled: directory passed to additionalDirectories; never set by the API
   skillsDir: z.string().optional(),
+  // present for code and review task runs of a mission; the worker creates the worktree and sets cwd itself
+  git: z
+    .object({
+      repoPath: z.string(),
+      defaultBranch: z.string(),
+      missionBranch: z.string(),
+      taskSlug: z.string(),
+      committerName: z.string(),
+      committerEmail: z.string(),
+      agentName: z.string(),
+    })
+    .optional(),
+  // plan, review and analysis runs: worktree created, no commit expected
+  readOnlyCheckout: z.boolean().default(false),
+  setupCommand: z.string().optional(),
+  checkCommand: z.string().optional(),
+  checkTimeoutSeconds: z.number().int().positive().default(900),
+  env: z.object({ file: z.string(), vars: z.array(z.object({ name: z.string(), value: z.string() })) }).optional(),
+  approvalPolicy: ApprovalPolicySchema.optional(),
+  approvalTimeoutMinutes: z.number().int().positive().default(30),
+  outputFormat: z.object({ type: z.literal('json_schema'), schema: z.record(z.string(), z.unknown()) }).optional(),
+  taskKind: TaskKindSchema.optional(),
 });
 export type RunSpec = z.infer<typeof RunSpecSchema>;
 
@@ -43,6 +66,27 @@ export const RunResultSchema = z
     numTurns: z.number(),
     durationMs: z.number(),
   }),
+  structuredOutput: z.unknown().optional(),
+  git: z
+    .object({
+      branch: z.string(),
+      baseCommit: z.string(),
+      headCommit: z.string(),
+      commits: z.array(z.object({ sha: z.string(), subject: z.string() })),
+      diffStat: z.string(),
+      filesChanged: z.number().int(),
+      integration: IntegrationStatusSchema,
+    })
+    .optional(),
+  check: z
+    .object({
+      command: z.string(),
+      status: CheckStatusSchema,
+      exitCode: z.number().int().nullable(),
+      durationMs: z.number().int(),
+      output: z.string(), // capped at 200 000 chars by the worker
+    })
+    .optional(),
   })
   .superRefine((r, ctx) => {
     if (r.status === 'suspended' && !r.sdkSessionId) {

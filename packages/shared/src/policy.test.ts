@@ -1,0 +1,61 @@
+import { describe, expect, it } from 'vitest';
+import { ApprovalPolicySchema, DEFAULT_DESTRUCTIVE_PATTERNS, DEFAULT_SENSITIVE_PATHS, evaluateToolCall } from './policy.js';
+import { ProjectSettingsSchema } from './project-settings.js';
+
+const policy = ApprovalPolicySchema.parse({});
+
+describe('ApprovalPolicySchema', () => {
+  it('defaults every mode to ask and fills pattern lists', () => {
+    const p = ApprovalPolicySchema.prefault({}).parse(undefined);
+    for (const k of ['plan', 'git_push', 'merge', 'deploy', 'destructive_command', 'sensitive_path', 'budget_exceeded'] as const) {
+      expect(p[k]).toBe('ask');
+    }
+    expect(ProjectSettingsSchema.parse({}).approvalPolicy).toEqual(p);
+    expect(p.destructivePatterns).toEqual(DEFAULT_DESTRUCTIVE_PATTERNS);
+    expect(p.sensitivePaths).toEqual(DEFAULT_SENSITIVE_PATHS);
+  });
+});
+
+describe('evaluateToolCall', () => {
+  it('asks for rm -rf', () => {
+    expect(evaluateToolCall(policy, 'Bash', { command: 'rm -rf node_modules' })).toMatchObject({
+      verdict: 'ask',
+      type: 'destructive_command',
+    });
+  });
+  it('classifies git push before destructive patterns', () => {
+    expect(evaluateToolCall(policy, 'Bash', { command: 'git push origin x' })).toMatchObject({
+      verdict: 'ask',
+      type: 'git_push',
+    });
+    expect(evaluateToolCall(policy, 'Bash', { command: 'git push --force' })).toMatchObject({ type: 'git_push' });
+  });
+  it('matches destructive patterns case-insensitively', () => {
+    expect(evaluateToolCall(policy, 'Bash', { command: 'psql -c "drop table x"' })).toMatchObject({
+      type: 'destructive_command',
+    });
+  });
+  it('asks for sensitive paths by basename', () => {
+    expect(evaluateToolCall(policy, 'Write', { file_path: '/w/app/.env.local' })).toMatchObject({
+      verdict: 'ask',
+      type: 'sensitive_path',
+    });
+    expect(evaluateToolCall(policy, 'Read', { file_path: '/w/certs/server.pem' })).toMatchObject({ type: 'sensitive_path' });
+    expect(evaluateToolCall(policy, 'NotebookEdit', { notebook_path: '/w/id_rsa' })).toMatchObject({ type: 'sensitive_path' });
+  });
+  it('allows ordinary calls', () => {
+    expect(evaluateToolCall(policy, 'Read', { file_path: '/w/README.md' })).toEqual({ verdict: 'allow' });
+    expect(evaluateToolCall(policy, 'Bash', { command: 'ls' })).toEqual({ verdict: 'allow' });
+    expect(evaluateToolCall(policy, 'Bash', {})).toEqual({ verdict: 'allow' });
+    expect(evaluateToolCall(policy, 'Grep', { path: '/w/src' })).toEqual({ verdict: 'allow' });
+  });
+  it('honours auto and block modes', () => {
+    const auto = ApprovalPolicySchema.parse({ destructive_command: 'auto' });
+    expect(evaluateToolCall(auto, 'Bash', { command: 'rm -rf x' })).toEqual({ verdict: 'allow' });
+    const block = ApprovalPolicySchema.parse({ destructive_command: 'block' });
+    expect(evaluateToolCall(block, 'Bash', { command: 'rm -rf x' })).toMatchObject({
+      verdict: 'block',
+      type: 'destructive_command',
+    });
+  });
+});
