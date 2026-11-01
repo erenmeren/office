@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ApprovalPolicySchema } from './policy.js';
+import { WorkerTagSchema } from './protocol.js';
 
 export const ProjectSettingsSchema = z.object({
   packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).optional(),
@@ -19,5 +20,6 @@ export const ProjectSettingsSchema = z.object({
   defaultTaskBudgetUsd: z.number().positive().default(5),
   maxConcurrentRuns: z.number().int().positive().default(2),
   defaultMaxAttempts: z.number().int().positive().default(2),
+  requiredWorkerTags: z.array(WorkerTagSchema).default([]),
 });
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;

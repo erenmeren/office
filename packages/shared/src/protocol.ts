@@ -7,6 +7,8 @@ import { ToolCallResultSchema } from './office-tools.js';
 import { OfficeEventSchema } from './events.js';
 import { RunResultSchema, RunSpecSchema } from './run-spec.js';
 
+export const WorkerTagSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
+
 export const WorkerToApiSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('hello'),
@@ -16,6 +18,8 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
     capacity: z.number(),
     allowedRoots: z.array(z.string()),
     activeRunIds: z.array(z.string()),
+    tags: z.array(WorkerTagSchema).default([]),
+    canClone: z.boolean().default(false),
   }),
   z.object({
     type: z.literal('heartbeat'),

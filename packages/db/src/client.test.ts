@@ -16,6 +16,11 @@ describe('db schema', () => {
     ).rejects.toThrow();
   });
 
+  it('a created worker defaults to no tags and canClone false', async () => {
+    const w = await prisma.worker.create({ data: { name: `w-${uid}`, allowedRoots: [] } });
+    expect(w).toMatchObject({ tags: [], canClone: false });
+  });
+
   it('rejects duplicate (sessionId, seq) on SessionEvent', async () => {
     const project = await prisma.project.create({ data: { name: 'P', slug: `p-${uid}`, repoPath: '/tmp/p' } });
     const agent = await prisma.agent.create({

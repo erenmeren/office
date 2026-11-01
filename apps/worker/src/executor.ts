@@ -164,7 +164,7 @@ export class RunExecutor {
     if (this.active.has(spec.runId)) return;
     // symlinks are resolved so a link inside a root cannot point the run outside it
     const cwd = realCwd(spec.cwd);
-    const repo = spec.git ? realCwd(spec.git.repoPath) : cwd;
+    const repo = spec.git ? realCwd(spec.git.repoPath!) : cwd;
     const allowed = (p: string | null) => !!p && this.workspaceRoots.some((r) => isUnderRoot(p, r));
     if (!allowed(cwd) || !allowed(repo)) {
       this.send({ type: 'run.rejected', runId: spec.runId, reason: 'cwd outside allowed roots' });
@@ -256,7 +256,7 @@ export class RunExecutor {
       }
     } finally {
       if (worktree && !keepWorktree) {
-        await removeWorktree(spec.git!.repoPath, worktree.path, { run: worktree.branch, mission: spec.git!.missionBranch });
+        await removeWorktree(spec.git!.repoPath!, worktree.path, { run: worktree.branch, mission: spec.git!.missionBranch });
       }
     }
     this.send({ type: 'run.result', runId: spec.runId, sessionId: spec.sessionId, result });
@@ -267,8 +267,8 @@ export class RunExecutor {
    * A resumed run continues in the worktree it was suspended in.
    */
   private async createRunWorktree(spec: RunSpec, g: MissionGit): Promise<Worktree> {
-    await sweepWorktrees(g.repoPath, this.worktreesDir, this.activeRunIds()).catch(() => {});
-    await ensureMissionBranch(g.repoPath, g.missionBranch, g.defaultBranch);
+    await sweepWorktrees(g.repoPath!, this.worktreesDir, this.activeRunIds()).catch(() => {});
+    await ensureMissionBranch(g.repoPath!, g.missionBranch, g.defaultBranch);
     const existing = join(this.worktreesDir, spec.runId);
     if (existsSync(existing)) {
       return {
@@ -280,7 +280,7 @@ export class RunExecutor {
     }
     // `<mission>/<task>` would clash with the mission branch ref itself, so runs live under `<mission>-runs/`
     const branch = `${g.missionBranch}-runs/${g.taskSlug}-${spec.runId.slice(0, 8)}`;
-    const wt = await createWorktree(g.repoPath, this.worktreesDir, spec.runId, g.missionBranch, branch);
+    const wt = await createWorktree(g.repoPath!, this.worktreesDir, spec.runId, g.missionBranch, branch);
     return { ...wt, branch };
   }
 
@@ -306,7 +306,7 @@ export class RunExecutor {
           }
         : { command: '', status: 'skipped', exitCode: null, durationMs: 0, output: '' };
       if (collected.commits.length > 0 && check.status !== 'failed' && check.status !== 'timeout') {
-        integration = await fastForward(g.repoPath, g.missionBranch, collected.headCommit);
+        integration = await fastForward(g.repoPath!, g.missionBranch, collected.headCommit);
       }
     }
     // a suspended run resumes here; unintegrated commits stay on disk for inspection until swept

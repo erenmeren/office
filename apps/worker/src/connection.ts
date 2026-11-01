@@ -98,6 +98,8 @@ export class WorkerConnection {
         allowedRoots: this.config.workspaceRoots,
         // reattach: the API renews leases of runs still executing here
         activeRunIds: this.activeRunIds(),
+        tags: [], // worker config for tags and cloning arrives in Phase 5 task 4
+        canClone: false,
       });
     });
     socket.on('message', (data) => {
