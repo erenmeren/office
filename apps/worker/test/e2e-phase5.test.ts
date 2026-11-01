@@ -291,6 +291,8 @@ describe('phase 5 two workers end to end with the fake runtime', () => {
     await stopWorker('remote');
     const outboxFile = join(homes.remote, 'outbox', `${lostRun.id}.json`);
     await until(() => existsSync(outboxFile), 'result in the outbox');
+    // stopped inside the SLOW window: a run that had already finished would have succeeded
+    expect(JSON.parse(readFileSync(outboxFile, 'utf8')).result.status).toBe('cancelled');
     expect((await prisma.taskRun.findUniqueOrThrow({ where: { id: lostRun.id } })).status).toBe('running');
 
     await startWorker('local');
@@ -372,5 +374,48 @@ describe('phase 5 two workers end to end with the fake runtime', () => {
     expect(resumedSpecs).toHaveLength(2);
     expect(resumedSpecs[1]!.resumeSdkSessionId).toBe(`fake-${resumedSpecs[0]!.sessionId}`);
     expect(adapters.local.specs.some((s) => s.runId === run.id)).toBe(false);
+  }, 60_000);
+
+  it('a remote run starts from the moved mission head and fast-forwards it over HTTP', async () => {
+    const missionId = await plannedMission('Chain', {
+      summary: 'local then remote',
+      tasks: [
+        codeTask('a', `COMMIT:one.test.js:${PASSING_TEST}`),
+        { ...codeTask('b', `COMMIT:two.test.js:${PASSING_TEST}`, 'designer'), dependsOn: ['a'] },
+      ],
+      risks: [],
+    });
+    await approvePlan(missionId);
+    const mission = await getMission(missionId);
+    const a = taskByKey(mission, 'a');
+    const b = taskByKey(mission, 'b');
+    await app.scheduler.tick();
+    const aDone = await until(async () => {
+      const t = await getTask(a.id);
+      return t.status === 'review' && t;
+    }, 'a review');
+    expect((await runOf(a.id)).workerId).toBe(ids.local);
+    expect(aDone.git.integration).toBe('fast_forwarded');
+    const branch: string = (await getMission(missionId)).branch;
+    expect(git('rev-parse', branch)).toBe(aDone.git.headCommit);
+
+    // b becomes ready with only the remote worker online
+    await stopWorker('local');
+    expect((await req('POST', `/tasks/${a.id}/done`, {})).statusCode).toBe(200);
+    await app.scheduler.tick();
+    const bDone = await until(async () => {
+      const t = await getTask(b.id);
+      return t.status === 'review' && t;
+    }, 'b review');
+    const bRun = await runOf(b.id);
+    expect(bRun.workerId).toBe(ids.remote);
+    expect(bRun.integration).toBe('fast_forwarded');
+    // ensureClone fetched the head a moved the mission branch to
+    expect(bDone.git.baseCommit).toBe(aDone.git.headCommit);
+    expect(git('rev-parse', branch)).toBe(bDone.git.headCommit);
+    const ws = await prisma.gitWorkspace.findFirstOrThrow({ where: { runId: bRun.id } });
+    expect(ws.baseCommit).toBe(aDone.git.headCommit);
+    expect(git('rev-parse', '--verify', `refs/heads/${ws.branch}`)).toBe(bDone.git.headCommit);
+    expect(git('ls-tree', '--name-only', branch).split('\n')).toEqual(expect.arrayContaining(['one.test.js', 'two.test.js']));
   }, 60_000);
 });
