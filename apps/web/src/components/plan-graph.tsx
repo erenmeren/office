@@ -11,23 +11,28 @@ export interface PlanGraphNode {
   assignee?: string;
   status: string;
   dependsOn: string[];
+  /** Caption under the node, e.g. `Approval gate: deploy`. */
+  gate?: string;
 }
 
 const GAP_X = 48;
 const GAP_Y = 16;
+const CAPTION_H = 20;
 
 /** Dependency graph of a plan: columns are depth, arrows run from a dependency to its dependent. */
 export function PlanGraph({ nodes, selectedId, onSelect }: { nodes: PlanGraphNode[]; selectedId?: string; onSelect: (id: string) => void }) {
   if (nodes.length === 0) return <p className="text-sm text-muted-foreground">No tasks yet. Send a request to Chief.</p>;
   const cells = layoutPlan(nodes);
+  // rows leave room for gate captions only when a plan has any
+  const gapY = nodes.some((n) => n.gate) ? GAP_Y + CAPTION_H : GAP_Y;
   const pos = (id: string) => {
     const c = cells.get(id)!;
-    return { x: c.col * (TASK_NODE.w + GAP_X), y: c.row * (TASK_NODE.h + GAP_Y) };
+    return { x: c.col * (TASK_NODE.w + GAP_X), y: c.row * (TASK_NODE.h + gapY) };
   };
   const cols = Math.max(...[...cells.values()].map((c) => c.col)) + 1;
   const rows = Math.max(...[...cells.values()].map((c) => c.row)) + 1;
   const width = cols * (TASK_NODE.w + GAP_X) - GAP_X;
-  const height = rows * (TASK_NODE.h + GAP_Y) - GAP_Y;
+  const height = rows * (TASK_NODE.h + gapY) - GAP_Y;
   const edges = nodes.flatMap((n) =>
     n.dependsOn
       .filter((d) => cells.has(d))
@@ -57,7 +62,7 @@ export function PlanGraph({ nodes, selectedId, onSelect }: { nodes: PlanGraphNod
         </svg>
         {nodes.map((n) => {
           const p = pos(n.id);
-          return (
+          return [
             <TaskNode
               key={n.id}
               code={n.code}
@@ -68,8 +73,17 @@ export function PlanGraph({ nodes, selectedId, onSelect }: { nodes: PlanGraphNod
               onClick={() => onSelect(n.id)}
               className="absolute"
               style={{ left: p.x, top: p.y }}
-            />
-          );
+            />,
+            n.gate && (
+              <span
+                key={`${n.id}-gate`}
+                className="absolute truncate text-[11.5px] font-medium text-amber"
+                style={{ left: p.x, top: p.y + TASK_NODE.h + 3, width: TASK_NODE.w }}
+              >
+                {n.gate}
+              </span>
+            ),
+          ];
         })}
       </div>
     </div>

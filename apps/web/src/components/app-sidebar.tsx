@@ -6,8 +6,7 @@ import { Bot, Database, FolderGit2, LayoutDashboard, MessagesSquare, Server, Spa
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { StatusDot } from '@/components/ui/status-pill';
-import { useAgents, useConversations, useMemoryCounts, useProjects, useSkills, useTasks, useWorkers } from '@/lib/queries';
-import { statusTone } from '@/lib/status';
+import { useAgents, useApprovals, useConversations, useMemoryCounts, useProjects, useSkills, useTasks, useWorkers } from '@/lib/queries';
 
 export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -45,16 +44,16 @@ function Count({ n, tone }: { n: number; tone: 'live' | 'decision' | 'message' }
   return <span className={cn('ml-auto grid h-5 min-w-5 place-items-center rounded-full px-1.5 font-mono text-xs font-semibold', color)}>{n}</span>;
 }
 
-/** Badges per nav item, from live data: decisions waiting, skills to review, workers online. */
+/** Badges per nav item, from live data: approvals waiting, skills to review, workers online. */
 export function useNavCounts() {
-  const tasks = useTasks();
   const skills = useSkills();
   const workers = useWorkers();
   const projects = useProjects();
   const conversations = useConversations(projects.data?.[0]?.id);
   const memory = useMemoryCounts(projects.data?.[0]?.id);
+  const approvals = useApprovals(projects.data?.[0]?.id, 'pending');
   return {
-    '/mission-control': { n: tasks.data?.filter((t) => statusTone(t.status) === 'decision').length ?? 0, tone: 'decision' as const },
+    '/mission-control': { n: approvals.data?.length ?? 0, tone: 'decision' as const },
     '/conversations': { n: conversations.data?.reduce((n, c) => n + c.unreadForOwner, 0) ?? 0, tone: 'message' as const },
     '/skills': { n: skills.data?.filter((s) => s.status === 'pending_review').length ?? 0, tone: 'decision' as const },
     '/memory': { n: memory.data?.proposed ?? 0, tone: 'decision' as const },

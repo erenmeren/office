@@ -45,13 +45,28 @@ authed.describe('every page renders without console noise', () => {
     await page.getByLabel('Request to Chief').fill('Hello');
     await expect(send).toBeEnabled();
 
-    const tasks = (await (await request.get(`${API}/tasks`)).json()) as { id: string; title: string }[];
+    // task picking applies to the `Tasks without a mission` graph
+    const all = (await (await request.get(`${API}/tasks`)).json()) as { id: string; title: string; missionId: string | null }[];
+    const tasks = all.filter((t) => !t.missionId);
     if (tasks.length >= 2) {
       const node = page.getByRole('button', { name: new RegExp(tasks[0].id.slice(0, 8)) });
       await node.click();
       await expect(node).toHaveAttribute('aria-pressed', 'true');
       await expect(page.getByText(tasks[0].id.slice(0, 8), { exact: true }).first()).toBeVisible();
     }
+    expectQuiet(noise);
+  });
+
+  authed('mission control: submit a request creates a mission', async ({ page, noise }) => {
+    await page.goto('/mission-control');
+    await page.waitForLoadState('networkidle');
+    const request = `E2E mission ${Date.now()}`;
+    await page.getByLabel('Request to Chief').fill(request);
+    await page.getByRole('button', { name: 'Send to Chief' }).click();
+    // no worker runs during e2e, so the mission stays in planning
+    await expect(page.getByLabel('Mission', { exact: true }).locator('option:checked')).toContainText(request);
+    await expect(page.getByText(`Plan v0 · ${request}`)).toBeVisible();
+    await expect(page.getByText('Chief is writing the plan…')).toBeVisible();
     expectQuiet(noise);
   });
 

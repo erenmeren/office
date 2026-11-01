@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import type { MessageView, RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
+import type { ApprovalStatus, ApprovalView, MessageView, MissionStatus, Plan, ProjectSettings, RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
 import { api } from './api';
 
 export type Me = { setupRequired: true } | { setupRequired: false; anonymous: true } | { id: string; email: string; setupRequired: false };
@@ -77,6 +77,8 @@ export interface Task {
   status: TaskStatus;
   attempts: number;
   maxAttempts: number;
+  missionId?: string | null;
+  key?: string | null;
 }
 export interface ContextPack {
   entryIds: string[];
@@ -94,6 +96,7 @@ export interface TaskRun {
   resultText: string | null;
   error: string | null;
   costUsd: number;
+  kind?: string;
   session: { id: string; skillsSnapshot: SkillSnapshotEntry[] | null; contextPack?: ContextPack | null } | null;
 }
 export interface Worker {
@@ -114,10 +117,34 @@ export const useAgent = (id: string) =>
 export const useTasks = (refetchInterval?: number) =>
   useQuery({ queryKey: ['tasks'], queryFn: () => api<Task[]>('/tasks'), refetchInterval });
 export const useWorkers = () => useQuery({ queryKey: ['workers'], queryFn: () => api<Worker[]>('/workers') });
+export interface CheckResult {
+  status: 'passed' | 'failed' | 'timeout' | 'skipped';
+  exitCode: number | null;
+  command: string;
+  artifactId: string | null;
+}
+/** Mission-era fields of a task; plain Phase 1–3 tasks carry empty values. */
+export interface TaskPlanFields {
+  key: string | null;
+  kind: string;
+  requirements: string[];
+  acceptanceCriteria: string[];
+  reviewNote: string | null;
+  budgetUsd: number | null;
+  checkResult: CheckResult | null;
+  dependencies: string[];
+  dependents: string[];
+}
+export type TaskDetailView = Task &
+  TaskPlanFields & {
+    runs: TaskRun[];
+    mission: { id: string; title: string; status: MissionStatus; branch: string | null } | null;
+    git: { runId: string; branch: string | null; baseCommit: string | null; headCommit: string; integration: 'none' | 'fast_forwarded' | 'needs_integration' } | null;
+  };
 export const useTask = (id: string) =>
   useQuery({
     queryKey: ['task', id],
-    queryFn: () => api<Task & { runs: TaskRun[] }>(`/tasks/${id}`),
+    queryFn: () => api<TaskDetailView>(`/tasks/${id}`),
     refetchInterval: (q) => (q.state.data && TERMINAL.includes(q.state.data.status) ? false : 3000),
   });
 
@@ -234,3 +261,46 @@ export const useMemoryCounts = (projectId: string | undefined) =>
     queryFn: () => api<{ proposed: number }>(`/memory/counts?projectId=${projectId}`),
     enabled: !!projectId,
   });
+
+export type { ApprovalView, MissionStatus, Plan };
+export interface MissionSummary {
+  id: string;
+  createdAt: string;
+  title: string;
+  status: MissionStatus;
+  taskCounts: Record<string, number>;
+}
+export interface Mission extends Omit<MissionSummary, 'taskCounts'> {
+  updatedAt: string;
+  request: string;
+  branch: string | null;
+  plan: Plan | null;
+  planVersion: number;
+  planErrors: string[];
+  summary: string | null;
+  budgetUsd: number | null;
+  tasks: (Task & TaskPlanFields)[];
+  approvals: ApprovalView[];
+  planRun: { id: string; status: RunStatus; costUsd: number; error: string | null } | null;
+}
+export const useMissions = (projectId: string | undefined) =>
+  useQuery({ queryKey: ['missions', projectId], queryFn: () => api<MissionSummary[]>(`/missions?projectId=${projectId}`), enabled: !!projectId });
+export const useMission = (id: string | undefined) =>
+  useQuery({ queryKey: ['missions', 'detail', id], queryFn: () => api<Mission>(`/missions/${id}`), enabled: !!id, refetchInterval: 5000 });
+export const useApprovals = (projectId: string | undefined, status?: ApprovalStatus) =>
+  useQuery({
+    queryKey: ['approvals', projectId, status ?? 'all'],
+    queryFn: () => api<ApprovalView[]>(`/approvals?projectId=${projectId}${status ? `&status=${status}` : ''}`),
+    enabled: !!projectId,
+  });
+export const useBudget = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['budget', projectId],
+    queryFn: () => api<{ spentTodayUsd: number; dailyBudgetUsd: number }>(`/projects/${projectId}/budget`),
+    enabled: !!projectId,
+    refetchInterval: 30_000,
+  });
+export const useProjectSettings = (projectId: string | undefined) =>
+  useQuery({ queryKey: ['settings', projectId], queryFn: () => api<ProjectSettings>(`/projects/${projectId}/settings`), enabled: !!projectId });
+export const useArtifact = (id: string | undefined) =>
+  useQuery({ queryKey: ['artifact', id], queryFn: () => api<{ id: string; name: string; content: string }>(`/artifacts/${id}`), enabled: !!id });

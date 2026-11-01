@@ -2,13 +2,13 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { FolderGit2, Send, Wallet } from 'lucide-react';
+import { FolderGit2, Send, ShieldCheck, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { post } from '@/lib/api';
-import type { Agent, Project, Task } from '@/lib/queries';
+import { useProjectSettings, type Agent, type MissionSummary, type Project } from '@/lib/queries';
 
 function Chip({ icon: Icon, children }: { icon: typeof FolderGit2; children: React.ReactNode }) {
   return (
@@ -19,13 +19,13 @@ function Chip({ icon: Icon, children }: { icon: typeof FolderGit2; children: Rea
   );
 }
 
-/** "Request to Chief": the first line becomes the task title, the whole text its description. */
-export function ChiefComposer({ project, chief, onCreated }: { project?: Project; chief?: Agent; onCreated: (task: Task) => void }) {
+/** "Request to Chief": starts a mission; the first line becomes its title, the whole text its request. */
+export function ChiefComposer({ project, chief, onCreated }: { project?: Project; chief?: Agent; onCreated: (mission: MissionSummary) => void }) {
   const qc = useQueryClient();
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const budget = chief?.currentVersion?.config.maxBudgetUsd;
+  const settings = useProjectSettings(project?.id).data;
 
   const send = async () => {
     if (!project || !chief) return;
@@ -33,10 +33,10 @@ export function ChiefComposer({ project, chief, onCreated }: { project?: Project
     setError('');
     try {
       const title = text.trim().split('\n')[0].slice(0, 120);
-      const task = await post<Task>('/tasks', { projectId: project.id, agentId: chief.id, title, description: text.trim() });
+      const mission = await post<MissionSummary>('/missions', { projectId: project.id, title, request: text.trim() });
       setText('');
-      await qc.invalidateQueries({ queryKey: ['tasks'] });
-      onCreated(task);
+      await qc.invalidateQueries({ queryKey: ['missions'] });
+      onCreated(mission);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -61,7 +61,12 @@ export function ChiefComposer({ project, chief, onCreated }: { project?: Project
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Chip icon={FolderGit2}>{project?.name ?? 'No project'}</Chip>
-            {budget !== undefined && <Chip icon={Wallet}>Budget cap ${budget.toFixed(2)}</Chip>}
+            {settings && (
+              <>
+                <Chip icon={ShieldCheck}>Plan approval: {settings.approvalPolicy.plan === 'auto' ? 'auto' : 'required'}</Chip>
+                <Chip icon={Wallet}>Budget cap ${settings.defaultTaskBudgetUsd.toFixed(2)}</Chip>
+              </>
+            )}
           </div>
           <Button size="lg" onClick={send} disabled={busy || !text.trim() || !project || !chief}>
             <Send data-icon="inline-start" aria-hidden />
