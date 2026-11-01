@@ -1,5 +1,6 @@
 import { createSdkMcpServer, query, tool, type AgentDefinition, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
+import { gateToolCall } from '../gate.js';
 import { redactSecrets } from '../redact.js';
 import type { EventSink, RuntimeAdapter, ToolBridge } from '../types.js';
 import { buildChildEnv } from './env.js';
@@ -35,7 +36,12 @@ export function effectiveAllowedTools(spec: RunSpec): string[] {
 }
 
 /** Everything passed to the SDK except abortController. The office MCP server exists only when tools are served. */
-export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, onSuspend: (info: { messageId?: string; to: string }) => void): Options {
+export function buildQueryOptions(
+  spec: RunSpec,
+  tools: ToolBridge | undefined,
+  onSuspend: (info: { messageId?: string; to: string }) => void,
+  sink: EventSink = { emit: () => {} },
+): Options {
   const served = tools ? (spec.tools as OfficeToolName[]) : [];
   const allowedTools = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
   const agents = spec.subagents.length
@@ -93,10 +99,13 @@ export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, 
     env: buildChildEnv(process.env, spec),
     // allowedTools auto-approves listed tools; disallowedTools blocks ungranted built-ins
     // ahead of project allow rules; this is the deny path for anything else that asks.
-    canUseTool: async (toolName) =>
-      allowedTools.includes(toolName)
-        ? { behavior: 'allow' }
-        : { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' },
+    // then read-only and approval-policy gating, which may wait for the owner
+    canUseTool: async (toolName, input) => {
+      if (!allowedTools.includes(toolName)) return { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' };
+      const g = await gateToolCall(spec, sink, tools, toolName, input);
+      return g.allow ? { behavior: 'allow' } : { behavior: 'deny', message: g.message };
+    },
+    ...(spec.outputFormat && { outputFormat: spec.outputFormat }),
   };
 }
 
@@ -127,7 +136,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
             sink.emit({ type: 'agent.waiting_reply', payload: info });
             // after the tool result has been returned to the CLI
             setTimeout(() => void q?.interrupt().catch(() => {}), 0);
-          }),
+          }, sink),
           abortController,
         },
       });
@@ -146,7 +155,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
         result = suspended
           ? { status: 'suspended', sdkSessionId: msg.session_id, usage }
           : msg.subtype === 'success'
-            ? { status: 'succeeded', resultText: redactSecrets(msg.result), sdkSessionId: msg.session_id, usage }
+            ? {
+                status: 'succeeded',
+                resultText: redactSecrets(msg.result),
+                sdkSessionId: msg.session_id,
+                usage,
+                ...(msg.structured_output !== undefined && { structuredOutput: msg.structured_output }),
+              }
             : {
                 status: 'failed',
                 error: redactSecrets(msg.errors.join('; ') || msg.subtype),

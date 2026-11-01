@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EventBody, RunSpec } from '@office/shared';
+import { ApprovalPolicySchema, type EventBody, type RunSpec } from '@office/shared';
 
 const h = vi.hoisted(() => ({ messages: [] as unknown[], throwAtEnd: undefined as Error | undefined, calls: [] as unknown[], interrupt: vi.fn(async () => {}), beforeEnd: undefined as (() => Promise<void>) | undefined }));
 
@@ -206,5 +206,58 @@ describe('office tools', () => {
     const o = buildQueryOptions({ ...spec, tools: ['read_inbox'] }, failing, () => {});
     const server = o.mcpServers!.office as unknown as { tools: { handler: (a: unknown) => Promise<unknown> }[] };
     expect(await server.tools[0]!.handler({})).toEqual({ content: [{ type: 'text', text: 'Error x: boom' }], isError: true });
+  });
+});
+
+describe('policy gate and structured output', () => {
+  const schema = { type: 'object', properties: { summary: { type: 'string' } } };
+
+  it('passes outputFormat to query and returns structured_output', async () => {
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok', structured_output: { summary: 's' } }];
+    const res = await new ClaudeAdapter().run(
+      { ...spec, outputFormat: { type: 'json_schema', schema } },
+      { emit: () => {} },
+      new AbortController().signal,
+    );
+    const { options } = h.calls[0] as { options: Record<string, unknown> };
+    expect(options.outputFormat).toEqual({ type: 'json_schema', schema });
+    expect(res.structuredOutput).toEqual({ summary: 's' });
+  });
+
+  it('omits outputFormat when unset', async () => {
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+    const { res } = await run();
+    const { options } = h.calls[0] as { options: Record<string, unknown> };
+    expect(options.outputFormat).toBeUndefined();
+    expect(res.structuredOutput).toBeUndefined();
+  });
+
+  type CanUse = (t: string, i: Record<string, unknown>, o: { signal: AbortSignal }) => Promise<unknown>;
+  const opts = { signal: new AbortController().signal };
+
+  it('canUseTool denies unlisted tools before the gate', async () => {
+    const asks: unknown[] = [];
+    const b = { call: async () => ({ ok: true as const, result: null }), askApproval: async (r: { requestId: string }) => (asks.push(r), { requestId: r.requestId, decision: 'allow' as const }) };
+    const o = buildQueryOptions({ ...spec, approvalPolicy: ApprovalPolicySchema.parse({}) }, b, () => {});
+    expect(await (o.canUseTool as CanUse)('Bash', { command: 'rm -rf x' }, opts)).toEqual({
+      behavior: 'deny',
+      message: 'Tool not permitted by Agent Office policy',
+    });
+    expect(asks).toEqual([]);
+  });
+
+  it('canUseTool runs the gate: read-only write denied, ask routed to the bridge', async () => {
+    const events: EventBody[] = [];
+    const b = { call: async () => ({ ok: true as const, result: null }), askApproval: async (r: { requestId: string }) => ({ requestId: r.requestId, decision: 'deny' as const, message: 'no' }) };
+    const s = { ...spec, allowedTools: ['Bash', 'Write'], approvalPolicy: ApprovalPolicySchema.parse({}) };
+    const ro = buildQueryOptions({ ...s, readOnlyCheckout: true }, b, () => {}, { emit: (e) => void events.push(e) });
+    expect(await (ro.canUseTool as CanUse)('Write', { file_path: '/tmp/a' }, opts)).toEqual({
+      behavior: 'deny',
+      message: 'Read-only run: writes are not permitted',
+    });
+    const o = buildQueryOptions(s, b, () => {}, { emit: (e) => void events.push(e) });
+    expect(await (o.canUseTool as CanUse)('Bash', { command: 'rm -rf x' }, opts)).toEqual({ behavior: 'deny', message: 'no' });
+    expect(await (o.canUseTool as CanUse)('Bash', { command: 'ls' }, opts)).toEqual({ behavior: 'allow' });
+    expect(events.map((e) => e.type)).toEqual(['agent.waiting_approval', 'agent.approval.resolved']);
   });
 });
