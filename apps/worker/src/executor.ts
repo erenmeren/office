@@ -14,6 +14,7 @@ import {
   removeWorktree,
   sweepWorktrees,
 } from './git.js';
+import { ensureClone } from './repos.js';
 import { removeRunRoot, materializeSkills } from './skills.js';
 import { buildChildEnv, redactSecrets, type RuntimeAdapter, type ToolBridge } from '@office/runtime';
 import type {
@@ -56,6 +57,8 @@ function derivedEvent(name: OfficeToolName, args: Record<string, unknown>, resul
 
 type MissionGit = NonNullable<RunSpec['git']>;
 interface Worktree {
+  // the repository the worktree belongs to: the local repoPath or the worker's clone
+  repo: string;
   path: string;
   baseCommit: string;
   branch: string;
@@ -63,6 +66,13 @@ interface Worktree {
 
 interface WarnLog {
   warn(obj: object, msg: string): void;
+}
+
+/** What a worker needs to clone from the API's git endpoint; `credential` is read when a run needs it. */
+export interface CloneConfig {
+  apiUrl: string;
+  canClone: boolean;
+  credential: () => string | null;
 }
 
 /** Writes the owner's dummy env template into the worktree, mode 0600, never over a tracked file or through a symlink. */
@@ -107,6 +117,7 @@ export class RunExecutor {
   // the API's approval timeout answers first; the worker's own timer is a backstop for a lost answer
   private pendingApprovals = new Map<string, { runId: string; resolve: (d: ApprovalDecision) => void; timer: NodeJS.Timeout }>();
   private worktreesDir: string;
+  private reposDir: string;
 
   constructor(
     private adapter: RuntimeAdapter,
@@ -115,9 +126,17 @@ export class RunExecutor {
     private runsDir: string,
     private toolTimeoutMs = TOOL_TIMEOUT_MS,
     private log: WarnLog = { warn: () => {} },
+    private clone?: CloneConfig,
   ) {
-    // <home>/runs -> <home>/worktrees
+    // <home>/runs -> <home>/worktrees, <home>/repos
     this.worktreesDir = join(dirname(runsDir), 'worktrees');
+    this.reposDir = join(dirname(runsDir), 'repos');
+  }
+
+  private credential(): string {
+    const credential = this.clone?.credential();
+    if (!credential) throw new Error('no worker credential for the API git endpoint');
+    return credential;
   }
 
   /** Settles a pending office tool call with the API's answer; unknown or late call ids are ignored. */
@@ -162,13 +181,21 @@ export class RunExecutor {
 
   accept(spec: RunSpec): void {
     if (this.active.has(spec.runId)) return;
-    // symlinks are resolved so a link inside a root cannot point the run outside it
-    const cwd = realCwd(spec.cwd);
-    const repo = spec.git ? realCwd(spec.git.repoPath!) : cwd;
-    const allowed = (p: string | null) => !!p && this.workspaceRoots.some((r) => isUnderRoot(p, r));
-    if (!allowed(cwd) || !allowed(repo)) {
-      this.send({ type: 'run.rejected', runId: spec.runId, reason: 'cwd outside allowed roots' });
-      return;
+    if (spec.git?.remote) {
+      // the run happens in a worktree of the worker's own clone; spec.cwd is not a path
+      if (!this.clone?.canClone) {
+        this.send({ type: 'run.rejected', runId: spec.runId, reason: 'worker cannot clone' });
+        return;
+      }
+    } else {
+      // symlinks are resolved so a link inside a root cannot point the run outside it
+      const cwd = realCwd(spec.cwd);
+      const repo = spec.git ? realCwd(spec.git.repoPath!) : cwd;
+      const allowed = (p: string | null) => !!p && this.workspaceRoots.some((r) => isUnderRoot(p, r));
+      if (!allowed(cwd) || !allowed(repo)) {
+        this.send({ type: 'run.rejected', runId: spec.runId, reason: 'cwd outside allowed roots' });
+        return;
+      }
     }
     const controller = new AbortController();
     this.active.set(spec.runId, controller);
@@ -256,7 +283,7 @@ export class RunExecutor {
       }
     } finally {
       if (worktree && !keepWorktree) {
-        await removeWorktree(spec.git!.repoPath!, worktree.path, { run: worktree.branch, mission: spec.git!.missionBranch });
+        await removeWorktree(worktree.repo, worktree.path, { run: worktree.branch, mission: spec.git!.missionBranch });
       }
     }
     this.send({ type: 'run.result', runId: spec.runId, sessionId: spec.sessionId, result });
@@ -267,11 +294,24 @@ export class RunExecutor {
    * A resumed run continues in the worktree it was suspended in.
    */
   private async createRunWorktree(spec: RunSpec, g: MissionGit): Promise<Worktree> {
-    await sweepWorktrees(g.repoPath!, this.worktreesDir, this.activeRunIds()).catch(() => {});
-    await ensureMissionBranch(g.repoPath!, g.missionBranch, g.defaultBranch);
+    // a clone is fetched and its mission branch ensured by ensureClone
+    const repo = g.remote
+      ? await ensureClone({
+          apiUrl: this.clone!.apiUrl,
+          credential: this.credential(),
+          remotePath: g.remote.path,
+          reposDir: this.reposDir,
+          projectId: spec.projectId,
+          defaultBranch: g.defaultBranch,
+          missionBranch: g.missionBranch,
+        })
+      : g.repoPath!;
+    await sweepWorktrees(repo, this.worktreesDir, this.activeRunIds()).catch(() => {});
+    if (!g.remote) await ensureMissionBranch(repo, g.missionBranch, g.defaultBranch);
     const existing = join(this.worktreesDir, spec.runId);
     if (existsSync(existing)) {
       return {
+        repo,
         path: existing,
         branch: await git(existing, 'rev-parse', '--abbrev-ref', 'HEAD'),
         // the run's commits are not on the mission branch, so their fork point is the original base
@@ -280,8 +320,8 @@ export class RunExecutor {
     }
     // `<mission>/<task>` would clash with the mission branch ref itself, so runs live under `<mission>-runs/`
     const branch = `${g.missionBranch}-runs/${g.taskSlug}-${spec.runId.slice(0, 8)}`;
-    const wt = await createWorktree(g.repoPath!, this.worktreesDir, spec.runId, g.missionBranch, branch);
-    return { ...wt, branch };
+    const wt = await createWorktree(repo, this.worktreesDir, spec.runId, g.missionBranch, branch);
+    return { ...wt, repo, branch };
   }
 
   private async prepareWorktree(spec: RunSpec, g: MissionGit, path: string) {
@@ -306,7 +346,8 @@ export class RunExecutor {
           }
         : { command: '', status: 'skipped', exitCode: null, durationMs: 0, output: '' };
       if (collected.commits.length > 0 && check.status !== 'failed' && check.status !== 'timeout') {
-        integration = await fastForward(g.repoPath!, g.missionBranch, collected.headCommit);
+        const remote = g.remote ? { credential: this.credential(), baseCommit: wt.baseCommit, runBranch: wt.branch } : undefined;
+        integration = await fastForward(wt.repo, g.missionBranch, collected.headCommit, remote);
       }
     }
     // a suspended run resumes here; unintegrated commits stay on disk for inspection until swept

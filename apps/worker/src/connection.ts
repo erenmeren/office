@@ -53,7 +53,11 @@ export class WorkerConnection {
     this.heartbeatMs = opts.heartbeatMs ?? 10_000;
     this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
     this.backoffMs = this.reconnectBaseMs;
-    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log);
+    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log, {
+      apiUrl: config.apiUrl,
+      canClone: config.canClone,
+      credential: () => this.credential,
+    });
   }
 
   /** Connects and resolves once the API welcomes this worker. */
