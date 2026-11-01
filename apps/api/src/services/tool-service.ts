@@ -18,6 +18,7 @@ import {
   taskHistory,
 } from './memory-service.js';
 import type { Db } from './task-service.js';
+import { closeTask, consultationsSatisfied, evidenceFor, evidenceRule } from './review-service.js';
 import { MessageError, readInbox, sendMessage, toMessageView, type SendInput } from './message-service.js';
 
 type RunKind = TaskRun['kind'];
@@ -32,14 +33,14 @@ class ToolError extends Error {
   }
 }
 
-const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter(
-  (n) => n !== 'submit_summary' && n !== 'get_task_evidence' && n !== 'review_task', // review tools: wired in Phase 4 Task 5
-);
+const REVIEW_ONLY: OfficeToolName[] = ['get_task_evidence', 'review_task'];
+const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter((n) => n !== 'submit_summary' && !REVIEW_ONLY.includes(n));
 
 const PLAN_TOOLS: OfficeToolName[] = ['search_memory', 'read_memory', 'get_task_history', 'get_project_decisions', 'list_agents'];
 
 export function toolsForKind(kind: RunKind): OfficeToolName[] {
   if (kind === 'plan') return [...PLAN_TOOLS];
+  if (kind === 'review') return [...PLAN_TOOLS, ...REVIEW_ONLY];
   return kind === 'summary' ? ['submit_summary'] : [...MESSAGING_AND_MEMORY];
 }
 
@@ -62,7 +63,7 @@ export async function executeTool(
   } catch (err) {
     if (err instanceof ZodError) return fail('invalid_args', err.message);
     if (err instanceof ToolError || err instanceof MessageError) return fail(err.code, err.message);
-    if (err instanceof HttpError) return fail(err.status === 404 ? 'not_found' : err.code, err.message);
+    if (err instanceof HttpError) return fail(err.status === 404 ? 'not_found' : err.code, err.detail ?? err.message);
     throw err;
   }
 }
@@ -240,8 +241,18 @@ async function run(
     case 'get_project_decisions':
       return { result: { entries: await projectDecisions(prisma, { projectId, limit: args.limit }) } };
     case 'get_task_evidence':
-    case 'review_task':
-      throw new ToolError('not_allowed', `${name} is only available to review runs`);
+    case 'review_task': {
+      // only tasks of the mission under review
+      const task = await prisma.task.findFirst({ where: { id: args.taskId, projectId } });
+      if (run.kind !== 'review' || !run.reviewOfMissionId) throw new ToolError('not_allowed', `${name} is only available to review runs`);
+      if (!task || task.missionId !== run.reviewOfMissionId) throw new ToolError('not_found', 'task not found in the mission under review');
+      if (name === 'get_task_evidence') {
+        const e = await evidenceFor(prisma, task.id);
+        return { result: { ...e, rule: evidenceRule(e), consultations: await consultationsSatisfied(prisma, task) } };
+      }
+      const closed = await closeTask(prisma, hub, task.id, args.decision, args.note, { chief: true });
+      return { result: { taskId: closed.id, status: closed.status } };
+    }
     case 'submit_summary': {
       if (!run.summaryOfRunId) throw new ToolError('invalid_state', 'run has no summarized run');
       const target = await prisma.taskRun.findFirst({

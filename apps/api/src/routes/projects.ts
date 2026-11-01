@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ProjectSettingsSchema, type ProjectSettings } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
+import { spentToday } from '../services/budget-service.js';
 import { getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
 
 const CreateProject = z.object({
@@ -40,6 +41,12 @@ export async function projectRoutes(app: FastifyInstance) {
     const settings = await updateSettings(app.prisma, id, patch as Partial<ProjectSettings>);
     await audit(app.prisma, { userId: req.user!.id, action: 'settings.updated', targetType: 'project', targetId: id, detail: { keys: Object.keys(patch) } });
     return settings;
+  });
+
+  app.get('/projects/:id/budget', async (req) => {
+    const { id } = req.params as { id: string };
+    const { dailyBudgetUsd } = await getSettings(app.prisma, id);
+    return { spentTodayUsd: await spentToday(app.prisma, { projectId: id }), dailyBudgetUsd };
   });
 
   app.get('/projects/:id/agents', async (req) => {

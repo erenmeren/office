@@ -45,7 +45,11 @@ export async function missionRoutes(app: FastifyInstance) {
       include: {
         tasks: {
           orderBy: { createdAt: 'asc' },
-          include: { dependencies: { select: { dependsOnId: true } }, dependents: { select: { taskId: true } } },
+          include: {
+            dependencies: { select: { dependsOnId: true } },
+            dependents: { select: { taskId: true } },
+            checkResults: { orderBy: { createdAt: 'desc' }, take: 1 },
+          },
         },
         approvals: { orderBy: { createdAt: 'asc' } },
       },
@@ -59,8 +63,9 @@ export async function missionRoutes(app: FastifyInstance) {
       : null;
     return {
       ...mission,
-      tasks: mission.tasks.map(({ dependencies, dependents, ...t }) => ({
+      tasks: mission.tasks.map(({ dependencies, dependents, checkResults, ...t }) => ({
         ...t,
+        checkResult: checkResults[0] ?? null,
         dependencies: dependencies.map((d) => d.dependsOnId),
         dependents: dependents.map((d) => d.taskId),
       })),

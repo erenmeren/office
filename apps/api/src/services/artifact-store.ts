@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Artifact, PrismaClient } from '@office/db';
+import type { Artifact, Prisma, PrismaClient } from '@office/db';
 import { redactSecrets } from '@office/runtime';
 import { HttpError } from '../lib/errors.js';
 import type { Config } from '../config.js';
@@ -9,7 +9,7 @@ import type { Config } from '../config.js';
 const MAX_READ = 1_000_000;
 
 export async function storeArtifact(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   config: Config,
   a: { projectId: string; runId?: string; taskId?: string; kind: string; name: string; content: string; contentType?: string },
 ): Promise<Artifact> {

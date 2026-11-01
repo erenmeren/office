@@ -3,6 +3,8 @@ import { transitionTask, type TaskStatus } from '@office/shared';
 import type { EventHub, Outbox } from './event-hub.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 import { HttpError } from '../lib/errors.js';
+import { audit } from './audit-service.js';
+import { onTaskStatusChanged } from './mission-service.js';
 
 export type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -31,6 +33,7 @@ export async function setTaskStatus(db: Db, outbox: Outbox, taskId: string, to: 
     task: { id: task.id, status: task.status, updatedAt: task.updatedAt.toISOString() },
   };
   outbox.push({ topic: `task:${task.id}`, message }, { topic: 'global', message });
+  if (task.missionId) await onTaskStatusChanged(db, outbox, task);
   return task;
 }
 
@@ -76,5 +79,20 @@ export async function cancelTask(prisma: PrismaClient, hub: EventHub, gateway: W
   });
   hub.publishAll(outbox);
   notifyCancelled(gateway, cancelled);
+  return task;
+}
+
+/** Owner retry: failed -> ready. */
+export async function retryTask(prisma: PrismaClient, hub: EventHub, taskId: string, userId: string) {
+  const outbox: Outbox = [];
+  const task = await prisma.$transaction(async (tx) => {
+    const current = await tx.task.findUnique({ where: { id: taskId } });
+    if (!current) throw new HttpError(404, 'not_found');
+    if (current.status !== 'failed') throw new HttpError(409, 'invalid_transition');
+    const task = await setTaskStatus(tx, outbox, taskId, 'ready');
+    await audit(tx, { userId, action: 'task.retry', targetType: 'task', targetId: taskId });
+    return task;
+  });
+  hub.publishAll(outbox);
   return task;
 }

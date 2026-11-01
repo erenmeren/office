@@ -1,4 +1,4 @@
-import type { AgentSession, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
+import type { AgentSession, CheckResult, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
 import { RunSpecSchema, skillPromptSection, type OfficeEvent, type RunResult, type RunSpec } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
@@ -8,7 +8,17 @@ import { appendEvent } from './event-store.js';
 import { setTaskStatus } from './task-service.js';
 import { buildContextPack } from './context-pack.js';
 import { toolsForKind } from './tool-service.js';
-import { onPlanRunFinished, onPlanRunLost, planRunFailed } from './mission-service.js';
+import {
+  missionBranch,
+  onPlanRunFinished,
+  onPlanRunLost,
+  onReviewRunFinished,
+  planRunFailed,
+  reviewRunFailed,
+} from './mission-service.js';
+import { getSettings } from './project-service.js';
+import { storeArtifact } from './artifact-store.js';
+import { queueMessageCreated, sendMessage, toMessageView } from './message-service.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 
 export class LeaseError extends Error {
@@ -43,6 +53,8 @@ const MESSAGING_SECTION: Partial<Record<RunKind, string>> = {
   inbox:
     'You were woken to answer your inbox. Call read_inbox, reply to each question with reply_message, then stop. Do not start new work.',
   summary: 'Call submit_summary exactly once.',
+  review:
+    'You are reviewing a mission. Inspect the mission branch read-only, read each task\'s evidence with get_task_evidence, decide each task in review with review_task, then answer only with the review JSON that matches the schema.',
   plan: 'You are planning a mission. Inspect the repository read-only (Read, Glob, Grep, Bash for git log and listing only; writes are blocked). Answer only with the plan JSON that matches the schema.',
 };
 const DEFAULT_MESSAGING_SECTION =
@@ -120,6 +132,11 @@ export interface CreateRunInput {
   readOnlyCheckout?: boolean;
   allowedToolsOverride?: string[];
   taskKind?: RunSpec['taskKind'];
+  reviewOfMissionId?: string;
+  /** caps the agent version's maxBudgetUsd */
+  taskBudgetUsd?: number;
+  /** mission run fields: git, setup/check commands, env, approval policy */
+  spec?: Partial<Pick<RunSpec, 'git' | 'setupCommand' | 'checkCommand' | 'checkTimeoutSeconds' | 'env' | 'approvalPolicy' | 'approvalTimeoutMinutes'>>;
 }
 
 export async function createRun(prisma: PrismaClient, hub: EventHub, config: Config, input: CreateRunInput) {
@@ -141,6 +158,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
         conversationId: input.conversationId,
         summaryOfRunId: input.summaryOfRunId,
         missionId: input.missionId,
+        reviewOfMissionId: input.reviewOfMissionId,
         agentVersionId: base.version.id,
         workerId: input.worker.workerId,
         status: 'queued',
@@ -174,6 +192,8 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
     }
     const spec = RunSpecSchema.parse({
       ...base.spec,
+      ...input.spec,
+      ...(input.taskBudgetUsd !== undefined && { maxBudgetUsd: Math.min(base.spec.maxBudgetUsd, input.taskBudgetUsd) }),
       ...(input.allowedToolsOverride && { allowedTools: input.allowedToolsOverride }),
       outputFormat: input.outputFormat,
       readOnlyCheckout: input.readOnlyCheckout,
@@ -190,21 +210,71 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
   return created;
 }
 
-export function createRunForTask(
+export async function createRunForTask(
   prisma: PrismaClient,
   hub: EventHub,
   task: Task,
   worker: { workerId: string },
   config: Config,
 ) {
-  return createRun(prisma, hub, config, {
+  const input: CreateRunInput = {
     kind: 'task',
     agentId: task.agentId,
     projectId: task.projectId,
     taskId: task.id,
     prompt: `${task.title}\n\n${task.description}`,
     worker,
+  };
+  if (!task.missionId) return createRun(prisma, hub, config, input);
+  const fields = await missionRunFields(prisma, task as Task & { missionId: string });
+  // the first run of the mission fixes its branch name
+  await prisma.mission.updateMany({ where: { id: task.missionId, branch: null }, data: { branch: fields.spec.git.missionBranch } });
+  return createRun(prisma, hub, config, {
+    ...input,
+    prompt: [
+      input.prompt,
+      task.requirements.length ? `Requirements:\n${task.requirements.map((r) => `- ${r}`).join('\n')}` : '',
+      task.acceptanceCriteria.length ? `Acceptance criteria:\n${task.acceptanceCriteria.map((r) => `- ${r}`).join('\n')}` : '',
+      task.reviewNote ? `Review note:\n${task.reviewNote}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    missionId: task.missionId,
+    ...fields,
   });
+}
+
+/** The run spec fields of a mission task: worktree (git), commands, env, approvals, kind and budget. */
+async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: string }) {
+  const [mission, project, agent, settings] = await Promise.all([
+    prisma.mission.findUniqueOrThrow({ where: { id: task.missionId } }),
+    prisma.project.findUniqueOrThrow({ where: { id: task.projectId } }),
+    prisma.agent.findUniqueOrThrow({ where: { id: task.agentId } }),
+    getSettings(prisma, task.projectId),
+  ]);
+  const code = task.kind === 'code';
+  return {
+    taskKind: task.kind,
+    readOnlyCheckout: !code,
+    taskBudgetUsd: task.budgetUsd ?? settings.defaultTaskBudgetUsd,
+    spec: {
+      git: {
+        repoPath: project.repoPath,
+        defaultBranch: project.defaultBranch,
+        missionBranch: missionBranch(mission),
+        taskSlug: task.key ?? task.id.slice(0, 8),
+        committerName: settings.committerName,
+        committerEmail: settings.committerEmail,
+        agentName: agent.name,
+      },
+      setupCommand: settings.setupCommand,
+      checkCommand: code ? settings.checkCommand : undefined,
+      checkTimeoutSeconds: settings.checkTimeoutSeconds,
+      env: { file: settings.envFile, vars: settings.envTemplate },
+      approvalPolicy: settings.approvalPolicy,
+      approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
+    },
+  };
 }
 
 export type ResumeReason =
@@ -253,7 +323,16 @@ export async function resumeRun(
         waitingForMessageId: null,
       },
     });
-    if (res.count) await tx.agentSession.update({ where: { id: session.id }, data: { status: 'queued' } });
+    if (res.count) {
+      await tx.agentSession.update({ where: { id: session.id }, data: { status: 'queued' } });
+      // the reply reaches the agent as its resume prompt
+      if (opts.reason === 'reply') {
+        await tx.messageDelivery.updateMany({
+          where: { messageId: opts.reply.id, recipientAgentId: run.agentId },
+          data: { status: 'acknowledged', acknowledgedAt: now },
+        });
+      }
+    }
     return res;
   });
   if (count === 0) return false;
@@ -271,9 +350,17 @@ export async function resumeRun(
   if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${runId}`, event);
   hub.publish(`run:${runId}`, { type: 'run.status.changed', runId, status: 'queued' });
 
+  // a mission task keeps its worktree, commands and budget across the resume
+  const mission = run.kind === 'task' && run.task?.missionId ? await missionRunFields(prisma, run.task as Task & { missionId: string }) : null;
   // the worker numbers its next event startSeq + 1, after agent.resumed
   const spec = RunSpecSchema.parse({
     ...base.spec,
+    ...(mission && {
+      ...mission.spec,
+      taskKind: mission.taskKind,
+      readOnlyCheckout: mission.readOnlyCheckout,
+      maxBudgetUsd: Math.min(base.spec.maxBudgetUsd, mission.taskBudgetUsd),
+    }),
     runId,
     sessionId: session.id,
     prompt,
@@ -337,6 +424,10 @@ export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: str
     // let the scheduler summarize that run again
     if (run.summaryOfRunId) await tx.taskRun.update({ where: { id: run.summaryOfRunId }, data: { summarizedAt: null } });
     if (run.kind === 'plan') await onPlanRunLost(tx, outbox, run);
+    // an undelivered review run is simply started again
+    if (run.kind === 'review' && run.reviewOfMissionId) {
+      await tx.mission.updateMany({ where: { id: run.reviewOfMissionId, reviewRunId: runId }, data: { reviewRunId: null } });
+    }
     queueRunStatus(outbox, runId, 'lost');
   });
   hub.publishAll(outbox);
@@ -357,10 +448,14 @@ export async function renewLeases(prisma: PrismaClient, workerId: string, runIds
   });
 }
 
+type Log = { error: (obj: object, msg: string) => void };
+
 export async function completeRun(
   prisma: PrismaClient,
   hub: EventHub,
+  config: Config,
   { runId, workerId, result }: { runId: string; workerId: string; result: RunResult },
+  log?: Log,
 ) {
   const run = await findLeasedRun(prisma, runId, workerId);
   if (!run || !run.session) throw new LeaseError(runId);
@@ -369,7 +464,7 @@ export async function completeRun(
   const status = r.status === 'suspended' ? 'waiting_reply' : r.status;
   const now = new Date();
   const outbox: Outbox = [];
-  await prisma.$transaction(async (tx) => {
+  const check = await prisma.$transaction(async (tx) => {
     // run.accepted never reached us (e.g. socket dropped): accept implicitly so the result is not lost
     if (run.status === 'queued') await acceptRunInTx(tx, outbox, runId, workerId, now);
     // guarded again here so a lease expiring between the check and the write still loses
@@ -407,9 +502,22 @@ export async function completeRun(
     if (run.kind === 'chat' && run.conversationId && r.sdkSessionId) {
       await tx.conversation.update({ where: { id: run.conversationId }, data: { sdkSessionId: r.sdkSessionId } });
     }
-    if (run.kind === 'task' && run.taskId) {
+    let check: CheckResult | null = null;
+    if (run.kind === 'task' && run.taskId && run.missionId) {
+      // a suspended run reports git and check only when it finishes
+      if (!suspended) check = await recordMissionRun(tx, config, run as TaskRun & { taskId: string }, r);
+      const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
       if (status === 'succeeded') {
-        // Phase 1 auto-closes review; the Chief takes it over in Phase 4.
+        // the Chief's review (or the owner) decides done
+        await setTaskStatus(tx, outbox, task.id, 'review');
+      } else if (status === 'failed') {
+        await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
+      } else {
+        await setTaskStatus(tx, outbox, task.id, status);
+      }
+    } else if (run.kind === 'task' && run.taskId) {
+      if (status === 'succeeded') {
+        // tasks outside a mission have no reviewer: they close on success
         await setTaskStatus(tx, outbox, run.taskId, 'review');
         await setTaskStatus(tx, outbox, run.taskId, 'done');
       } else {
@@ -419,12 +527,104 @@ export async function completeRun(
     if (run.kind === 'plan' && (status === 'failed' || status === 'cancelled')) {
       await planRunFailed(tx, outbox, run, [r.error ?? `plan run ${status}`]);
     }
+    if (run.kind === 'review' && (status === 'failed' || status === 'cancelled')) {
+      await reviewRunFailed(tx, outbox, { ...run, status, error: r.error ?? null });
+    }
     queueRunStatus(outbox, runId, status);
+    return check;
   });
   hub.publishAll(outbox);
-  if (run.kind === 'plan' && status === 'succeeded') {
-    await onPlanRunFinished(prisma, hub, { ...run, structuredOutput: (r.structuredOutput ?? null) as TaskRun['structuredOutput'] });
+  const finished = { ...run, status: status as TaskRun['status'], structuredOutput: (r.structuredOutput ?? null) as TaskRun['structuredOutput'] };
+  if (run.kind === 'plan' && status === 'succeeded') await onPlanRunFinished(prisma, hub, finished);
+  if (run.kind === 'review' && status === 'succeeded') await onReviewRunFinished(prisma, hub, config, finished, log);
+  if (run.kind === 'task' && run.missionId && (status === 'succeeded' || status === 'failed')) {
+    // the run's result already committed; a failed notification must not fail the worker message
+    try {
+      if (check) await emitCheckEvent(prisma, hub, run.session, check);
+      await notifyChief(prisma, hub, config, run as TaskRun & { taskId: string; missionId: string }, status, check, r);
+    } catch (err) {
+      log?.error({ err, runId }, 'mission run notification failed');
+    }
   }
+}
+
+/** Stores the git summary (run + GitWorkspace), the check (CheckResult + artifact) and an analysis/review result artifact. */
+async function recordMissionRun(tx: Prisma.TransactionClient, config: Config, run: TaskRun & { taskId: string }, r: RunResult) {
+  const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId }, include: { project: true } });
+  if (r.git) {
+    const { branch, baseCommit, headCommit, integration, worktreePath } = r.git;
+    await tx.taskRun.update({ where: { id: run.id }, data: { branch, baseCommit, headCommit, integration, worktreePath } });
+    await tx.gitWorkspace.create({
+      data: { runId: run.id, repoPath: task.project.repoPath, worktreePath: worktreePath ?? '', branch, baseCommit, headCommit },
+    });
+    if (integration === 'needs_integration') await tx.task.update({ where: { id: task.id }, data: { reviewNote: 'needs integration' } });
+  }
+  if (r.status === 'succeeded' && r.resultText && task.kind !== 'code') {
+    await storeArtifact(tx, config, {
+      projectId: task.projectId, runId: run.id, taskId: task.id, kind: task.kind, name: `${task.kind}.md`, content: r.resultText,
+    });
+  }
+  if (!r.check) return null;
+  const artifact = await storeArtifact(tx, config, {
+    projectId: task.projectId, runId: run.id, taskId: task.id, kind: 'check_output', name: 'check.txt', content: r.check.output,
+  });
+  const { command, status, exitCode, durationMs } = r.check;
+  return tx.checkResult.create({
+    data: { runId: run.id, taskId: task.id, command, status, exitCode, durationMs, artifactId: artifact.id },
+  });
+}
+
+/** The server-side agent.check.completed event, numbered after the session's last event. */
+async function emitCheckEvent(prisma: PrismaClient, hub: EventHub, session: AgentSession, check: CheckResult) {
+  const max = await prisma.sessionEvent.aggregate({ where: { sessionId: session.id }, _max: { seq: true } });
+  const event: OfficeEvent = {
+    type: 'agent.check.completed',
+    seq: (max._max.seq ?? 0) + 1,
+    ts: new Date().toISOString(),
+    sessionId: session.id,
+    runId: check.runId,
+    agentId: session.agentId,
+    projectId: session.projectId,
+    payload: {
+      checkResultId: check.id,
+      command: check.command,
+      status: check.status,
+      exitCode: check.exitCode,
+      durationMs: check.durationMs,
+      artifactId: check.artifactId,
+    },
+  };
+  if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${check.runId}`, event);
+}
+
+/** A plain `message` (never wakes) to the Chief in the mission conversation. */
+async function notifyChief(
+  prisma: PrismaClient,
+  hub: EventHub,
+  config: Config,
+  run: TaskRun & { taskId: string; missionId: string },
+  status: string,
+  check: CheckResult | null,
+  r: RunResult,
+) {
+  const [task, mission, chief] = await Promise.all([
+    prisma.task.findUniqueOrThrow({ where: { id: run.taskId } }),
+    prisma.mission.findUniqueOrThrow({ where: { id: run.missionId } }),
+    prisma.agent.findFirst({ where: { slug: 'chief', isActive: true } }),
+  ]);
+  if (!mission.conversationId) return;
+  const { message, deliveries } = await sendMessage(prisma, config.messageLimits, {
+    projectId: task.projectId,
+    conversationId: mission.conversationId,
+    type: 'message',
+    body: `Task ${task.key ?? task.id.slice(0, 8)} finished: ${status}. Check: ${check?.status ?? 'none'}. Integration: ${r.git?.integration ?? 'none'}.`,
+    senderAgentId: task.agentId,
+    taskId: task.id,
+    recipientAgentIds: chief && chief.id !== task.agentId ? [chief.id] : [],
+  });
+  const outbox: Outbox = [];
+  queueMessageCreated(outbox, toMessageView({ ...message, deliveries }));
+  hub.publishAll(outbox);
 }
 
 /** Marks every expired leased run `lost` and requeues or fails its task. Returns the lost runs. */
@@ -453,6 +653,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
       }
       if (run.kind === 'plan') await onPlanRunLost(tx, outbox, run);
+      if (run.kind === 'review') await reviewRunFailed(tx, outbox, { ...run, status: 'lost' });
       queueRunStatus(outbox, run.id, 'lost');
       return true;
     });

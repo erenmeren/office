@@ -1,0 +1,385 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { REVIEW_JSON_SCHEMA, SAMPLE_PLAN, type Plan, type RunSpec } from '@office/shared';
+import { makeApp } from './helpers.js';
+import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
+import { sendMessage } from '../src/services/message-service.js';
+import { approveBudget } from '../src/services/budget-service.js';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const usage = { inputTokens: 10, outputTokens: 20, costUsd: 0.5, numTurns: 1, durationMs: 5 };
+
+/** a -> b (code, developer), c -> d (analysis architect -> review qa), derived from SAMPLE_PLAN. */
+function testPlan(): Plan {
+  const [analysis, mapping, verify, typo] = (JSON.parse(JSON.stringify(SAMPLE_PLAN)) as Plan).tasks;
+  return {
+    summary: 'test plan',
+    risks: [],
+    tasks: [
+      { ...typo!, key: 'a', dependsOn: [] },
+      { ...mapping!, key: 'b', dependsOn: ['a'], requiredConsultations: [] },
+      { ...analysis!, key: 'c', dependsOn: [] },
+      { ...verify!, key: 'd', dependsOn: ['c'] },
+    ],
+  };
+}
+
+const git = (filesChanged: number) => ({
+  branch: 'office/run-branch',
+  baseCommit: 'base000',
+  headCommit: filesChanged ? 'head111' : 'base000',
+  commits: filesChanged ? [{ sha: 'head111', subject: 'change' }] : [],
+  diffStat: `${filesChanged} files changed`,
+  filesChanged,
+  integration: 'fast_forwarded',
+  worktreePath: '/tmp/office-worker/runs/x/repo',
+});
+const check = (status: 'passed' | 'failed') => ({
+  command: 'pnpm test',
+  status,
+  exitCode: status === 'passed' ? 0 : 1,
+  durationMs: 1200,
+  output: `tests ${status}`,
+});
+
+async function setup() {
+  const t = await makeApp();
+  const cookie = await t.login();
+  await t.app.listen({ port: 0, host: '127.0.0.1' });
+  const req = (method: 'GET' | 'POST' | 'PUT', url: string, payload?: object) =>
+    t.app.inject({ method, url, headers: { cookie }, payload });
+  const projectId = (await req('POST', '/projects', { name: 'Maratus', slug: 'm1', repoPath: '/tmp/office-ws/m1' })).json()
+    .id as string;
+  await req('PUT', `/projects/${projectId}/settings`, { approvalPolicy: { plan: 'auto' }, checkCommand: 'pnpm test' });
+  const ids: Record<string, string> = {};
+  for (const slug of ['chief', 'architect', 'developer', 'qa-engineer']) {
+    ids[slug] = (
+      await req('POST', '/agents', {
+        name: slug, slug, role: slug, description: `the ${slug}`,
+        config: { systemPrompt: 'be nice', model: 'sonnet', allowedTools: ['Read', 'Edit', 'Write', 'Bash'] },
+      })
+    ).json().id as string;
+  }
+  const workers: FakeWorker[] = [];
+  const worker = async (capacity = 1) => {
+    const { enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w', capacity, allowedRoots: ['/tmp/office-ws'] });
+    workers.push(w);
+    return w;
+  };
+  const flush = async (w: FakeWorker) => {
+    w.send({ type: 'bogus' });
+    await w.waitFor('error');
+  };
+  const assign = async (w: FakeWorker) => {
+    await t.app.scheduler.tick();
+    return (await w.waitFor('run.assign')).spec;
+  };
+  const finish = async (w: FakeWorker, spec: RunSpec, r: Record<string, unknown>) => {
+    w.send({ type: 'run.result', runId: spec.runId, sessionId: spec.sessionId, result: { usage, ...r } });
+    await flush(w);
+  };
+  let calls = 0;
+  const tool = async (w: FakeWorker, spec: RunSpec, name: string, args: object) => {
+    const callId = `c${++calls}`;
+    w.send({ type: 'tool.call', runId: spec.runId, sessionId: spec.sessionId, callId, name, args });
+    for (;;) {
+      const m = await w.waitFor('tool.result');
+      if (m.callId === callId) return m.result;
+    }
+  };
+  const mission = (id: string) => t.prisma.mission.findUniqueOrThrow({ where: { id } });
+  const task = (id: string) => t.prisma.task.findUniqueOrThrow({ where: { id } });
+  /** An auto-approved mission with testPlan(); the plan run used the returned worker. */
+  const approved = async (capacity = 1, plan = testPlan()) => {
+    const w = await worker(capacity);
+    const res = await req('POST', '/missions', { projectId, request: 'Implement the mapping and fix the typo' });
+    const planSpec = await assign(w);
+    await finish(w, planSpec, { status: 'succeeded', structuredOutput: plan });
+    const m = await until(async () => {
+      const x = await mission(res.json().id);
+      return x.status === 'approved' && x;
+    }, 'mission approved');
+    const ts = await t.prisma.task.findMany({ where: { missionId: m.id } });
+    const k = Object.fromEntries(ts.map((x) => [x.key!, x.id])) as Record<'a' | 'b' | 'c' | 'd', string>;
+    return { w, m, k, planSpec };
+  };
+  const statuses = async (missionId: string) =>
+    Object.fromEntries(
+      (await t.prisma.task.findMany({ where: { missionId } })).map((x) => [x.key, x.status]),
+    );
+  /** Runs task a (check passed or failed) and c (analysis) to review; the mission then waits for review. */
+  const toReview = async (w: FakeWorker, k: Record<string, string>, aCheck: 'passed' | 'failed') => {
+    const a = await assign(w);
+    expect(a.taskKind).toBe('code');
+    await finish(w, a, { status: 'succeeded', git: git(2), check: check(aCheck) });
+    const c = await assign(w);
+    expect(c.taskKind).toBe('analysis');
+    await finish(w, c, { status: 'succeeded', resultText: 'The rules live in src/mapping.ts.', git: { ...git(0), integration: 'none' } });
+    expect((await task(k.a!)).status).toBe('review');
+    expect((await task(k.c!)).status).toBe('review');
+  };
+  const close = async () => {
+    for (const w of workers) await w.close();
+    await t.close();
+  };
+  return { t, req, projectId, ids, worker, flush, assign, finish, tool, mission, task, approved, statuses, toReview, close };
+}
+
+describe('orchestration', () => {
+  let s: Awaited<ReturnType<typeof setup>>;
+  afterEach(async () => s.close());
+
+  it('only roots are ready; a succeeded code run -> review with check, git, event and a Chief message; owner done readies the dependent', async () => {
+    s = await setup();
+    const { w, m, k } = await s.approved();
+    expect(await s.statuses(m.id)).toEqual({ a: 'ready', b: 'planned', c: 'ready', d: 'planned' });
+
+    const spec = await s.assign(w);
+    expect(spec.taskKind).toBe('code');
+    expect(spec.git).toMatchObject({ taskSlug: 'a', defaultBranch: 'main', repoPath: '/tmp/office-ws/m1', agentName: 'developer' });
+    expect(spec.git!.missionBranch).toMatch(/^office\/implement-the-mapping-and-fix-the-typo-[0-9a-f-]{6}$/);
+    expect(spec.readOnlyCheckout).toBe(false);
+    expect(spec.checkCommand).toBe('pnpm test');
+    expect(spec.env).toEqual({ file: '.env.local', vars: [] });
+    expect(spec.maxBudgetUsd).toBe(2);
+    expect(spec.cwd).toBe('/tmp/office-ws/m1');
+    expect((await s.mission(m.id))).toMatchObject({ status: 'running', branch: spec.git!.missionBranch });
+
+    const events: unknown[] = [];
+    s.t.app.hub.subscribe(`run:${spec.runId}`, (e) => events.push(e));
+    await s.finish(w, spec, { status: 'succeeded', resultText: 'done', git: git(2), check: check('passed') });
+
+    expect(await s.statuses(m.id)).toEqual({ a: 'review', b: 'planned', c: 'ready', d: 'planned' });
+    const run = await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
+    expect(run).toMatchObject({ branch: 'office/run-branch', baseCommit: 'base000', headCommit: 'head111', integration: 'fast_forwarded' });
+    expect(await s.t.prisma.gitWorkspace.findUniqueOrThrow({ where: { runId: spec.runId } })).toMatchObject({
+      repoPath: '/tmp/office-ws/m1', worktreePath: '/tmp/office-worker/runs/x/repo', branch: 'office/run-branch',
+    });
+    const cr = await s.t.prisma.checkResult.findUniqueOrThrow({ where: { runId: spec.runId } });
+    expect(cr).toMatchObject({ taskId: k.a, command: 'pnpm test', status: 'passed', exitCode: 0, durationMs: 1200 });
+    expect(cr.artifactId).toBeTruthy();
+    expect(await s.t.prisma.artifact.findUniqueOrThrow({ where: { id: cr.artifactId! } })).toMatchObject({ kind: 'check_output', name: 'check.txt' });
+    const ev = await s.t.prisma.sessionEvent.findFirstOrThrow({ where: { sessionId: spec.sessionId, type: 'agent.check.completed' } });
+    expect(ev.payload).toMatchObject({ status: 'passed', exitCode: 0 });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'agent.check.completed' }));
+
+    const note = await s.t.prisma.message.findFirstOrThrow({ where: { conversationId: m.conversationId!, type: 'message' }, include: { deliveries: true } });
+    expect(note).toMatchObject({ senderAgentId: s.ids.developer, taskId: k.a, body: 'Task a finished: succeeded. Check: passed. Integration: fast_forwarded.' });
+    expect(note.deliveries.map((d) => d.recipientAgentId)).toEqual([s.ids.chief]);
+
+    const task = (await s.req('GET', `/tasks/${k.a}`)).json();
+    expect(task.checkResult).toMatchObject({ status: 'passed' });
+    expect(task.git).toMatchObject({ branch: 'office/run-branch', headCommit: 'head111', integration: 'fast_forwarded' });
+    const detail = (await s.req('GET', `/missions/${m.id}`)).json();
+    expect(detail.tasks.find((x: { key: string }) => x.key === 'a').checkResult).toMatchObject({ status: 'passed' });
+
+    const res = await s.req('POST', `/tasks/${k.a}/done`, { note: 'looks good' });
+    expect(res.statusCode).toBe(200);
+    expect(await s.statuses(m.id)).toMatchObject({ a: 'done', b: 'ready' });
+    expect(await s.t.prisma.auditLog.count({ where: { action: 'task.override', targetId: k.a } })).toBe(1);
+  });
+
+  it('needs_integration -> review with a note', async () => {
+    s = await setup();
+    const { w, k } = await s.approved();
+    const spec = await s.assign(w);
+    await s.finish(w, spec, { status: 'succeeded', git: { ...git(1), integration: 'needs_integration' }, check: check('passed') });
+    expect(await s.task(k.a)).toMatchObject({ status: 'review', reviewNote: 'needs integration' });
+  });
+
+  it('a failed twice -> a failed, b blocked; owner retry -> ready', async () => {
+    s = await setup();
+    const { w, m, k } = await s.approved();
+    const first = await s.assign(w);
+    expect(first.git?.taskSlug).toBe('a');
+    await s.finish(w, first, { status: 'failed', error: 'boom' });
+    expect((await s.task(k.a)).status).toBe('ready');
+    const second = await s.assign(w);
+    expect(second.git?.taskSlug).toBe('a');
+    await s.finish(w, second, { status: 'failed', error: 'boom' });
+    expect(await s.statuses(m.id)).toMatchObject({ a: 'failed', b: 'blocked' });
+    const res = await s.req('POST', `/tasks/${k.a}/retry`);
+    expect(res.statusCode).toBe(200);
+    expect((await s.task(k.a)).status).toBe('ready');
+    expect(await s.t.prisma.auditLog.count({ where: { action: 'task.retry', targetId: k.a } })).toBe(1);
+  });
+
+  it('project maxConcurrentRuns 1 -> one assignment per tick', async () => {
+    s = await setup();
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { maxConcurrentRuns: 1 });
+    const { w } = await s.approved(2);
+    await s.t.app.scheduler.tick();
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect(w.received.filter((x) => x.type === 'run.assign')).toHaveLength(2); // plan + one task
+    expect(await s.t.prisma.taskRun.count({ where: { kind: 'task' } })).toBe(1);
+  });
+
+  it('agent daily budget spent -> its task is not assigned, one log line', async () => {
+    s = await setup();
+    const { w, k, planSpec } = await s.approved(2);
+    await s.t.prisma.agent.update({ where: { id: s.ids.developer }, data: { dailyBudgetUsd: 0.01 } });
+    await s.t.prisma.usageRecord.create({
+      data: { runId: planSpec.runId, projectId: s.projectId, agentId: s.ids.developer, model: 'sonnet', inputTokens: 1, outputTokens: 1, costUsd: 0.02 },
+    });
+    const info = vi.spyOn((s.t.app.scheduler as unknown as { log: { info: (...a: unknown[]) => void } }).log, 'info');
+    await s.t.app.scheduler.tick();
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    const tasks = w.received.filter((x) => x.type === 'run.assign').slice(1);
+    expect(tasks.map((x) => (x as { spec: RunSpec }).spec.git?.taskSlug)).toEqual(['c']);
+    expect((await s.task(k.a)).status).toBe('ready');
+    const lines = info.mock.calls.filter(([o]) => (o as { taskId?: string }).taskId === k.a);
+    expect(lines).toHaveLength(1);
+    expect((lines[0]![0] as { reason: string }).reason).toContain('agent daily budget');
+  });
+
+  it('project daily budget spent -> one budget_exceeded approval; approving raises the budget', async () => {
+    s = await setup();
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 1 });
+    const { w, m, planSpec } = await s.approved(2);
+    await s.t.prisma.usageRecord.create({
+      data: { runId: planSpec.runId, projectId: s.projectId, agentId: s.ids.chief, model: 'sonnet', inputTokens: 1, outputTokens: 1, costUsd: 1 },
+    });
+    await s.t.app.scheduler.tick();
+    await s.t.app.scheduler.tick();
+    expect(await s.t.prisma.taskRun.count({ where: { kind: 'task' } })).toBe(0);
+    const approvals = await s.t.prisma.approval.findMany({ where: { missionId: m.id, type: 'budget_exceeded' } });
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]!.status).toBe('pending');
+    expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 1 });
+
+    const user = await s.t.prisma.user.findFirstOrThrow();
+    await approveBudget(s.t.prisma, s.t.app.hub, approvals[0]!.id, user.id);
+    expect((await s.mission(m.id)).budgetUsd).toBe(1);
+    await s.assign(w);
+    expect(await s.t.prisma.taskRun.count({ where: { kind: 'task' } })).toBeGreaterThan(0);
+  });
+
+  it('a stalled mission goes to review; the Chief review run gets the review tools; a failed check is evidence_missing; structured reopen -> ready', async () => {
+    s = await setup();
+    const { w, m, k } = await s.approved();
+    await s.toReview(w, k, 'failed');
+    expect((await s.mission(m.id)).status).toBe('review');
+
+    const review = await s.assign(w);
+    expect(review).toMatchObject({ kind: 'review', agentId: s.ids.chief, readOnlyCheckout: true });
+    expect(review.outputFormat).toEqual({ type: 'json_schema', schema: REVIEW_JSON_SCHEMA });
+    expect(review.tools).toEqual(expect.arrayContaining(['review_task', 'get_task_evidence', 'search_memory']));
+    expect(review.tools).not.toContain('send_message');
+    expect(review.git?.missionBranch).toBe((await s.mission(m.id)).branch);
+    expect(review.prompt).toContain(k.a);
+    expect((await s.mission(m.id)).reviewRunId).toBe(review.runId);
+
+    const evidence = await s.tool(w, review, 'get_task_evidence', { taskId: k.a });
+    expect(evidence).toMatchObject({ ok: true });
+    const bad = await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done', note: 'ok' });
+    expect(bad).toMatchObject({ ok: false, code: 'evidence_missing' });
+    expect((await s.task(k.a)).status).toBe('review');
+
+    // the analysis stored its result as an artifact, so it may close; its dependent becomes ready
+    expect(await s.tool(w, review, 'review_task', { taskId: k.c, decision: 'done', note: 'good' })).toMatchObject({ ok: true });
+    expect(await s.statuses(m.id)).toMatchObject({ c: 'done', d: 'ready' });
+    expect(await s.mission(m.id)).toMatchObject({ status: 'running', reviewRunId: null });
+
+    await s.finish(w, review, {
+      status: 'succeeded',
+      structuredOutput: { summary: 'a needs a green check', tasks: [{ taskId: k.a, decision: 'reopen', note: 'fix the tests' }] },
+    });
+    expect(await s.task(k.a)).toMatchObject({ status: 'ready', reviewNote: 'fix the tests' });
+    expect(await s.mission(m.id)).toMatchObject({ status: 'running', summary: 'a needs a green check' });
+    expect(await s.t.prisma.artifact.count({ where: { runId: review.runId, kind: 'review' } })).toBe(1);
+  });
+
+  it('a structured done that fails the evidence rule becomes reopen; all done -> mission done', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a' || x.key === 'c');
+    const { w, m, k } = await s.approved(1, plan);
+    await s.toReview(w, k, 'failed');
+    let review = await s.assign(w);
+    await s.finish(w, review, {
+      status: 'succeeded',
+      structuredOutput: { summary: 'r1', tasks: [{ taskId: k.a, decision: 'done' }, { taskId: k.c, decision: 'done' }] },
+    });
+    expect((await s.task(k.a)).status).toBe('ready');
+    expect((await s.task(k.a)).reviewNote).toContain('check');
+    expect((await s.task(k.c)).status).toBe('done');
+    expect((await s.mission(m.id)).status).toBe('running');
+
+    const again = await s.assign(w);
+    await s.finish(w, again, { status: 'succeeded', git: git(1), check: check('passed') });
+    expect((await s.mission(m.id)).status).toBe('review');
+    review = await s.assign(w);
+    expect(review.kind).toBe('review');
+    await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'all good', tasks: [{ taskId: k.a, decision: 'done' }] } });
+    expect(await s.mission(m.id)).toMatchObject({ status: 'done', summary: 'all good' });
+  });
+
+  it('required consultation: done needs a question to the consultant and a reply in the task conversation', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks[0]!.requiredConsultations = [{ agent: 'architect', topic: 'where the rules live' }];
+    const { w, m, k } = await s.approved(1, plan);
+    await s.toReview(w, k, 'passed');
+    const review = await s.assign(w);
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({
+      ok: false, code: 'consultation_missing',
+    });
+    const limits = s.t.config.messageLimits;
+    const { message: q } = await sendMessage(s.t.prisma, limits, {
+      projectId: s.projectId, type: 'question', body: 'Where do the rules live?', senderAgentId: s.ids.developer,
+      taskId: k.a, recipientAgentIds: [s.ids.architect],
+    });
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: false, code: 'consultation_missing' });
+    await sendMessage(s.t.prisma, limits, {
+      projectId: s.projectId, type: 'reply', body: 'src/mapping.ts', senderAgentId: s.ids.architect, inReplyToId: q.id, recipientAgentIds: [],
+    });
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: true });
+    expect(await s.statuses(m.id)).toMatchObject({ a: 'done', b: 'ready' });
+  });
+
+  it('resume runs before ready tasks: a waiting run with a reply wins the only slot; the reply is acknowledged', async () => {
+    s = await setup();
+    const w = await s.worker();
+    const mk = (agentId: string, title: string) =>
+      s.req('POST', '/tasks', { projectId: s.projectId, agentId, title, description: 'd' }).then((r) => r.json().id as string);
+    const devTask = await mk(s.ids.developer, 'dev work');
+    const spec = await s.assign(w);
+    const { message: q } = await sendMessage(s.t.prisma, s.t.config.messageLimits, {
+      projectId: s.projectId, type: 'question', body: 'Which db?', senderAgentId: s.ids.developer, senderSessionId: spec.sessionId,
+      taskId: devTask, recipientAgentIds: [s.ids.architect], awaitReply: true,
+    });
+    await s.t.prisma.messageDelivery.updateMany({ where: { messageId: q.id }, data: { status: 'acknowledged' } });
+    await s.t.prisma.taskRun.update({ where: { id: spec.runId }, data: { waitingForMessageId: q.id } });
+    await s.finish(w, spec, { status: 'suspended', sdkSessionId: 'sdk-1' });
+    const qaTask = await mk(s.ids['qa-engineer'], 'qa work');
+    const { message: reply } = await sendMessage(s.t.prisma, s.t.config.messageLimits, {
+      projectId: s.projectId, type: 'reply', body: 'Postgres', senderAgentId: s.ids.architect, inReplyToId: q.id, recipientAgentIds: [],
+    });
+    const next = await s.assign(w);
+    expect(next.runId).toBe(spec.runId);
+    expect((await s.task(qaTask)).status).toBe('ready');
+    const d = await s.t.prisma.messageDelivery.findFirstOrThrow({ where: { messageId: reply.id, recipientAgentId: s.ids.developer } });
+    expect(d.status).toBe('acknowledged');
+  });
+
+  it('a resumed mission task run keeps its git spec and kind', async () => {
+    s = await setup();
+    const { w, k } = await s.approved();
+    const spec = await s.assign(w);
+    const { message: q } = await sendMessage(s.t.prisma, s.t.config.messageLimits, {
+      projectId: s.projectId, type: 'question', body: 'Where?', senderAgentId: s.ids.developer, senderSessionId: spec.sessionId,
+      taskId: k.a, recipientAgentIds: [s.ids.architect], awaitReply: true,
+    });
+    await s.t.prisma.messageDelivery.updateMany({ where: { messageId: q.id }, data: { status: 'acknowledged' } });
+    await s.t.prisma.taskRun.update({ where: { id: spec.runId }, data: { waitingForMessageId: q.id } });
+    await s.finish(w, spec, { status: 'suspended', sdkSessionId: 'sdk-1' });
+    await sendMessage(s.t.prisma, s.t.config.messageLimits, {
+      projectId: s.projectId, type: 'reply', body: 'here', senderAgentId: s.ids.architect, inReplyToId: q.id, recipientAgentIds: [],
+    });
+    const resumed = await s.assign(w);
+    expect(resumed.runId).toBe(spec.runId);
+    expect(resumed).toMatchObject({ taskKind: 'code', readOnlyCheckout: false, checkCommand: 'pnpm test', git: spec.git, maxBudgetUsd: 2 });
+  });
+});

@@ -1,8 +1,11 @@
-import type { Agent, Approval, Mission, Prisma, PrismaClient, Project, TaskRun } from '@office/db';
+import type { Agent, Approval, Mission, Prisma, PrismaClient, Project, Task, TaskRun } from '@office/db';
 import {
   PLAN_JSON_SCHEMA,
   PlanSchema,
+  REVIEW_JSON_SCHEMA,
+  ReviewDecisionSchema,
   validatePlan,
+  type TaskStatus,
   type MissionStatus,
   type Plan,
   type ProjectSettings,
@@ -10,6 +13,8 @@ import {
 import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
 import { audit } from './audit-service.js';
+import { storeArtifact } from './artifact-store.js';
+import { closeTask, evidenceFor, evidenceRule } from './review-service.js';
 import type { EventHub, Outbox } from './event-hub.js';
 import { findOrCreateConversation } from './message-service.js';
 import { agentAllowed, getSettings } from './project-service.js';
@@ -28,7 +33,7 @@ export function queueMissionStatus(outbox: Outbox, mission: Mission) {
   outbox.push({ topic: `mission:${mission.id}`, message }, { topic: 'global', message });
 }
 
-function queueApproval(outbox: Outbox, a: Approval) {
+export function queueApproval(outbox: Outbox, a: Approval) {
   const message = {
     type: 'approval.changed' as const,
     approval: {
@@ -53,7 +58,7 @@ function queueApproval(outbox: Outbox, a: Approval) {
 }
 
 /** Guarded mission status move: null when the mission was not in one of `from`. */
-async function moveMission(
+export async function moveMission(
   db: Db,
   outbox: Outbox,
   id: string,
@@ -419,7 +424,7 @@ export async function cancelMission(
     for (const a of pending) {
       queueApproval(outbox, await tx.approval.update({ where: { id: a.id }, data: { status: 'expired', decidedAt: new Date() } }));
     }
-    const planRuns = await cancelLiveRuns(tx, outbox, { missionId, kind: 'plan' });
+    const planRuns = await cancelLiveRuns(tx, outbox, { missionId, kind: { in: ['plan', 'review'] } });
     const idle = await tx.task.findMany({ where: { missionId, status: { in: [...IDLE_TASK] } } });
     for (const t of idle) await setTaskStatus(tx, outbox, t.id, 'cancelled');
     return { mission, planRuns };
@@ -435,4 +440,198 @@ export async function cancelMission(
     }
   }
   return mission;
+}
+
+// ---- mission flow: dependencies, mission status, Chief review ----
+
+// tasks that can still make progress without a review decision
+const RUNNABLE_TASK: TaskStatus[] = ['ready', 'queued', 'running', 'waiting_reply', 'waiting_approval'];
+const DEPENDENT_BLOCKERS: TaskStatus[] = ['failed', 'cancelled', 'blocked'];
+
+export function missionBranch(mission: Pick<Mission, 'id' | 'title' | 'branch'>) {
+  if (mission.branch) return mission.branch;
+  const slug = mission.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+  return `office/${slug || 'mission'}-${mission.id.slice(0, 6)}`;
+}
+
+/**
+ * Called by setTaskStatus for every mission task: readies or blocks dependents, then moves the mission.
+ * A mission with nothing runnable goes to `review` (the scheduler starts the Chief's review run);
+ * a task becoming runnable again moves it back to `running`.
+ */
+export async function onTaskStatusChanged(db: Db, outbox: Outbox, task: Task) {
+  if (!task.missionId) return;
+  if (task.status === 'done' || DEPENDENT_BLOCKERS.includes(task.status)) {
+    const dependents = await db.task.findMany({
+      where: { dependencies: { some: { dependsOnId: task.id } }, status: { in: ['planned', 'blocked'] } },
+      include: { dependencies: { include: { dependsOn: { select: { status: true } } } } },
+    });
+    for (const d of dependents) {
+      if (task.status === 'done') {
+        if (d.dependencies.every((x) => x.dependsOn.status === 'done')) await setTaskStatus(db, outbox, d.id, 'ready');
+      } else if (d.status === 'planned') {
+        await setTaskStatus(db, outbox, d.id, 'blocked');
+      }
+    }
+  }
+  const mission = await db.mission.findUnique({ where: { id: task.missionId } });
+  if (!mission) return;
+  const tasks = await db.task.findMany({ where: { missionId: mission.id }, select: { status: true } });
+  const runnable = tasks.some((t) => RUNNABLE_TASK.includes(t.status));
+  if (runnable) {
+    const started = tasks.some((t) => t.status !== 'planned' && t.status !== 'ready');
+    if (mission.status === 'approved' && started) await moveMission(db, outbox, mission.id, ['approved'], { status: 'running' });
+    // reopened, unblocked or retried: a later review runs again
+    if (mission.status === 'review' || mission.status === 'failed') {
+      await moveMission(db, outbox, mission.id, ['review', 'failed'], { status: 'running', reviewRunId: null });
+    }
+    return;
+  }
+  if (mission.status === 'approved' || mission.status === 'running') {
+    await moveMission(db, outbox, mission.id, ['approved', 'running'], { status: 'review', reviewRunId: null });
+  } else if (mission.status === 'failed' && tasks.every((t) => t.status === 'done')) {
+    await moveMission(db, outbox, mission.id, ['failed'], { status: 'done' });
+  }
+}
+
+export async function reviewPrompt(db: Db, mission: Mission) {
+  const tasks = await db.task.findMany({ where: { missionId: mission.id }, orderBy: { createdAt: 'asc' } });
+  const lines = await Promise.all(
+    tasks.map(async (t) => {
+      const ev = await evidenceFor(db, t.id);
+      const rule = evidenceRule(ev);
+      const last = ev.runs.at(-1);
+      return [
+        `- ${t.key ?? t.id.slice(0, 8)} (taskId ${t.id}) · ${t.kind} · status ${t.status}`,
+        `  title: ${t.title}`,
+        `  acceptance: ${t.acceptanceCriteria.join('; ') || 'none'}`,
+        `  runs: ${ev.runs.length}; latest: ${last ? `${last.status}, check ${last.check?.status ?? 'none'}, integration ${last.git?.integration ?? 'none'}` : 'none'}`,
+        `  evidence rule: ${rule.ok ? 'met' : `not met (${rule.reason})`}`,
+        t.reviewNote ? `  note: ${t.reviewNote}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+    }),
+  );
+  return [
+    `Review the mission "${mission.title}".`,
+    `Request:\n${mission.request}`,
+    `Tasks:\n${lines.join('\n')}`,
+    [
+      'For every task in status review: read its evidence with get_task_evidence, inspect the mission branch read-only,',
+      'then call review_task with done (only when the evidence shows the acceptance criteria are met) or reopen with a note saying what is missing.',
+      'Finish with the review JSON: a mission summary and your decision for each task you reviewed.',
+    ].join(' '),
+  ].join('\n\n');
+}
+
+/** Creates the Chief's review run for a `review` mission without one; the scheduler assigns the returned spec. */
+export async function startReviewRun(
+  prisma: PrismaClient,
+  hub: EventHub,
+  config: Config,
+  mission: Mission & { project: Project },
+  worker: { workerId: string },
+) {
+  const chief = await prisma.agent.findFirst({ where: { slug: CHIEF_SLUG, isActive: true } });
+  if (!chief) throw new Error('no active chief agent');
+  const settings = await getSettings(prisma, mission.projectId);
+  const created = await createRun(prisma, hub, config, {
+    kind: 'review',
+    agentId: chief.id,
+    projectId: mission.projectId,
+    missionId: mission.id,
+    reviewOfMissionId: mission.id,
+    prompt: await reviewPrompt(prisma, mission),
+    readOnlyCheckout: true,
+    outputFormat: { type: 'json_schema', schema: REVIEW_JSON_SCHEMA },
+    allowedToolsOverride: PLAN_TOOLS,
+    spec: {
+      git: {
+        repoPath: mission.project.repoPath,
+        defaultBranch: mission.project.defaultBranch,
+        missionBranch: missionBranch(mission),
+        taskSlug: 'review',
+        committerName: settings.committerName,
+        committerEmail: settings.committerEmail,
+        agentName: chief.name,
+      },
+    },
+    worker,
+  });
+  await prisma.mission.updateMany({ where: { id: mission.id, reviewRunId: null }, data: { reviewRunId: created.run.id } });
+  return created;
+}
+
+/** A review run that failed or was lost: retried once (reviewRunId cleared), then the mission fails. */
+export async function reviewRunFailed(db: Db, outbox: Outbox, run: TaskRun) {
+  if (!run.reviewOfMissionId) return;
+  const mission = await db.mission.findUnique({ where: { id: run.reviewOfMissionId } });
+  if (mission?.status !== 'review' || mission.reviewRunId !== run.id) return;
+  const failed = await db.taskRun.count({
+    where: { reviewOfMissionId: mission.id, kind: 'review', status: { in: ['failed', 'lost', 'cancelled'] } },
+  });
+  if (failed >= 2) {
+    await moveMission(db, outbox, mission.id, ['review'], { status: 'failed', summary: `review run ${run.status}: ${run.error ?? 'no result'}` });
+  } else {
+    await db.mission.update({ where: { id: mission.id }, data: { reviewRunId: null } });
+  }
+}
+
+/**
+ * Applies the review run's structured decisions (a `done` failing the evidence rule becomes `reopen`),
+ * stores the summary and a `review` artifact, then settles the mission: still runnable -> running,
+ * every task done -> done, otherwise failed.
+ */
+export async function onReviewRunFinished(
+  prisma: PrismaClient,
+  hub: EventHub,
+  config: Config,
+  run: TaskRun,
+  log?: { error: (obj: object, msg: string) => void },
+) {
+  if (!run.reviewOfMissionId) return;
+  const mission = await prisma.mission.findUnique({ where: { id: run.reviewOfMissionId } });
+  // cancelled, or a newer review run took over
+  if (!mission || mission.status === 'cancelled' || (mission.reviewRunId && mission.reviewRunId !== run.id)) return;
+  const parsed = ReviewDecisionSchema.safeParse(run.structuredOutput);
+  const decisions = parsed.success ? parsed.data.tasks : [];
+  const applied: string[] = [];
+  for (const d of decisions) {
+    const task = await prisma.task.findFirst({ where: { id: d.taskId, missionId: mission.id } });
+    if (task?.status !== 'review') continue;
+    try {
+      try {
+        await closeTask(prisma, hub, task.id, d.decision, d.note, { chief: true });
+        applied.push(`${task.key ?? task.id}: ${d.decision}${d.note ? ` (${d.note})` : ''}`);
+      } catch (err) {
+        if (d.decision !== 'done' || !(err instanceof HttpError) || err.status !== 409 || !err.detail) throw err;
+        const note = [d.note, err.detail].filter(Boolean).join(' ');
+        await closeTask(prisma, hub, task.id, 'reopen', note, { chief: true });
+        applied.push(`${task.key ?? task.id}: reopen (${note})`);
+      }
+    } catch (err) {
+      log?.error({ err, taskId: task.id, runId: run.id }, 'applying review decision failed');
+    }
+  }
+  const summary = parsed.success ? parsed.data.summary : 'review run returned no valid decision';
+  await storeArtifact(prisma, config, {
+    projectId: mission.projectId,
+    runId: run.id,
+    kind: 'review',
+    name: 'mission-review.md',
+    content: [summary, ...applied.map((a) => `- ${a}`)].join('\n'),
+  });
+  const outbox: Outbox = [];
+  await prisma.$transaction(async (tx) => {
+    await tx.mission.update({ where: { id: mission.id }, data: { summary } });
+    const tasks = await tx.task.findMany({ where: { missionId: mission.id }, select: { status: true } });
+    if (tasks.some((t) => RUNNABLE_TASK.includes(t.status))) {
+      await moveMission(tx, outbox, mission.id, ['review', 'running'], { status: 'running', reviewRunId: null });
+    } else {
+      const done = tasks.every((t) => t.status === 'done');
+      await moveMission(tx, outbox, mission.id, ['review', 'running'], { status: done ? 'done' : 'failed' });
+    }
+  });
+  hub.publishAll(outbox);
 }

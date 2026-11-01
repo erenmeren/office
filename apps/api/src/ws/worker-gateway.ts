@@ -21,7 +21,13 @@ interface Connection {
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 
 // emitted by the API itself; a worker must not forge them
-const SERVER_ONLY_EVENTS = new Set(['run.lease.lost', 'run.status.changed', 'task.status.changed', 'agent.resumed']);
+const SERVER_ONLY_EVENTS = new Set([
+  'run.lease.lost',
+  'run.status.changed',
+  'task.status.changed',
+  'agent.resumed',
+  'agent.check.completed',
+]);
 
 export class WorkerGateway {
   private conns = new Map<string, Connection>();
@@ -226,7 +232,7 @@ export class WorkerGateway {
         }
       }
       case 'run.result':
-        await completeRun(this.prisma, this.hub, { runId: msg.runId, workerId, result: msg.result });
+        await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
         this.releaseRun(workerId, msg.runId);
         return;
     }

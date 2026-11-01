@@ -76,6 +76,7 @@ export const RunResultSchema = z
       diffStat: z.string(),
       filesChanged: z.number().int(),
       integration: IntegrationStatusSchema,
+      worktreePath: z.string().optional(),
     })
     .optional(),
   check: z
