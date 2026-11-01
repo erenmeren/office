@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/mission-control', '/conversations', '/agents', '/skills', '/memory', '/workers', '/tasks/new'];
+const STATIC = ['/', '/mission-control', '/conversations', '/agents', '/skills', '/memory', '/workers', '/settings', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {
@@ -122,5 +122,17 @@ test('login page is quiet when logged out', async ({ page, noise }) => {
   await page.goto('/login');
   await page.waitForLoadState('networkidle');
   await expect(page.getByRole('button', { name: /log in|create the owner account/i })).toBeVisible();
+  expectQuiet(noise);
+});
+
+authed('owner changes the check command and sees it saved', async ({ page, noise }) => {
+  await page.goto('/settings');
+  const input = page.getByLabel('Check command');
+  const value = `node --test # e2e ${Date.now()}`;
+  await input.fill(value);
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByText('Saved.')).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel('Check command')).toHaveValue(value);
   expectQuiet(noise);
 });

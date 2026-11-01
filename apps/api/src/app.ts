@@ -77,7 +77,7 @@ export async function buildApp(
 
   await app.register(healthRoutes);
   await app.register(authRoutes, { cookieSecure: config.cookieSecure });
-  await app.register(projectRoutes);
+  await app.register(projectRoutes, { config });
   await app.register(agentRoutes);
   await app.register(skillRoutes, { config });
 

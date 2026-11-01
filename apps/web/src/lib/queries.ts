@@ -304,3 +304,8 @@ export const useProjectSettings = (projectId: string | undefined) =>
   useQuery({ queryKey: ['settings', projectId], queryFn: () => api<ProjectSettings>(`/projects/${projectId}/settings`), enabled: !!projectId });
 export const useArtifact = (id: string | undefined) =>
   useQuery({ queryKey: ['artifact', id], queryFn: () => api<{ id: string; name: string; content: string }>(`/artifacts/${id}`), enabled: !!id });
+
+export const useProjectAgents = (projectId: string | undefined) =>
+  useQuery({ queryKey: ['project-agents', projectId], queryFn: () => api<Agent[]>(`/projects/${projectId}/agents`), enabled: !!projectId });
+export const useRuntimeSettings = () =>
+  useQuery({ queryKey: ['settings', 'runtime'], queryFn: () => api<{ leaseSeconds: number; heartbeatSeconds: number }>('/settings/runtime') });

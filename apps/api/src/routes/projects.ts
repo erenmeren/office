@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ProjectSettingsSchema, type ProjectSettings } from '@office/shared';
+import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { dailyLimit, spentToday } from '../services/budget-service.js';
@@ -13,7 +14,9 @@ const CreateProject = z.object({
   defaultBranch: z.string().min(1).optional(),
 });
 
-export async function projectRoutes(app: FastifyInstance) {
+export async function projectRoutes(app: FastifyInstance, opts: { config: Config }) {
+  app.get('/settings/runtime', async () => ({ leaseSeconds: opts.config.leaseSeconds, heartbeatSeconds: opts.config.heartbeatSeconds }));
+
   app.get('/projects', async () => app.prisma.project.findMany({ orderBy: { createdAt: 'asc' } }));
 
   app.post('/projects', async (req, reply) => {

@@ -3,6 +3,7 @@ import { transitionTask, type TaskStatus } from '@office/shared';
 import type { EventHub, Outbox } from './event-hub.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 import { HttpError } from '../lib/errors.js';
+import { getSettings } from './project-service.js';
 import { audit } from './audit-service.js';
 import { onTaskStatusChanged } from './mission-service.js';
 import { expireRunApprovals } from './approval-service.js';
@@ -17,7 +18,8 @@ export async function createTask(
   // system agents (office-summarizer) and inactive agents never take owner tasks
   if (!agent || agent.isSystem || !agent.isActive) throw new HttpError(400, 'invalid_agent');
   // Phase 1 has no dependencies, so every new task is immediately ready.
-  return prisma.task.create({ data: { ...data, status: 'ready' } });
+  const { defaultMaxAttempts } = await getSettings(prisma, data.projectId);
+  return prisma.task.create({ data: { ...data, status: 'ready', maxAttempts: defaultMaxAttempts } });
 }
 
 /**

@@ -11,6 +11,7 @@ describe('ApprovalPolicySchema', () => {
       expect(p[k]).toBe('ask');
     }
     expect(ProjectSettingsSchema.parse({}).approvalPolicy).toEqual(p);
+    expect(ProjectSettingsSchema.parse({}).defaultMaxAttempts).toBe(2);
     expect(p.destructivePatterns).toEqual(DEFAULT_DESTRUCTIVE_PATTERNS);
     expect(p.sensitivePaths).toEqual(DEFAULT_SENSITIVE_PATHS);
   });

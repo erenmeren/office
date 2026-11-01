@@ -223,6 +223,7 @@ async function createPlanTasks(db: Db, mission: Mission, plan: Plan, settings: P
         parallelGroup: t.parallelGroup,
         requiredConsultations: t.requiredConsultations,
         budgetUsd: t.budgetUsd ?? settings.defaultTaskBudgetUsd,
+        maxAttempts: settings.defaultMaxAttempts,
       },
     });
     ids.set(t.key, task.id);

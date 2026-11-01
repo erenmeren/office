@@ -18,5 +18,6 @@ export const ProjectSettingsSchema = z.object({
   dailyBudgetUsd: z.number().positive().default(50),
   defaultTaskBudgetUsd: z.number().positive().default(5),
   maxConcurrentRuns: z.number().int().positive().default(2),
+  defaultMaxAttempts: z.number().int().positive().default(2),
 });
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;

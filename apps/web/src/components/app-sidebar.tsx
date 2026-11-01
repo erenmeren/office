@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, Database, FolderGit2, LayoutDashboard, MessagesSquare, Server, Sparkles, Target, type LucideIcon } from 'lucide-react';
+import { Bot, Database, FolderGit2, LayoutDashboard, MessagesSquare, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { StatusDot } from '@/components/ui/status-pill';
@@ -16,6 +16,7 @@ export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/skills', label: 'Skill Library', icon: Sparkles },
   { href: '/memory', label: 'Project Memory', icon: Database },
   { href: '/workers', label: 'Workers', icon: Server },
+  { href: '/settings', label: 'Settings', icon: Settings2 },
 ];
 
 export const isActive = (pathname: string, href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
