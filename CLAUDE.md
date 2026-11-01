@@ -33,13 +33,22 @@ A control plane that turns Claude Code sessions into a persistent AI software te
 - `AgentSkill` and `AgentSubagent` rows belong to an `AgentVersion` and are immutable with it.
 - `ProjectAgent` is deferred to Phase 4 (the Chief's planning needs it; nothing in Phase 2 does).
 - Skill frontmatter parsing supports single-line `key: value` only.
+- Phase 3: delivery into a live session happens at session boundaries only (no streaming input yet); agents read new mail with `read_inbox` or at the next run.
+- Phase 3: `question`, `help_request`, `handoff` and `escalation` wake idle agents through inbox runs with `maxTurns <= 8` and `maxBudgetUsd <= 0.25`.
+- Phase 3: `awaitReply` suspends the run (`waiting_reply`, lease released); the reply resumes it with the SDK session id. `replyTimeoutMinutes` defaults to 60 (`OFFICE_REPLY_TIMEOUT_MINUTES`).
+- Phase 3: `handoff_task` reassigns the task to the recipient.
+- Phase 3: the office tools are an in-process SDK MCP server (`office`) fed by `tool.call`/`tool.result` over the worker socket; `strictMcpConfig: true` replaces the `mcp__*` disallow wildcard.
+- Phase 3: `office-summarizer` is a hidden system agent (`isSystem`) on `haiku` that writes task summaries.
+- Phase 3: memory has Postgres full-text search; the pgvector column is unused.
+- Phase 3: deleting memory is a hard delete (no 30-day purge yet).
+- Phase 3: inbox and chat runs have no task (`TaskRun.taskId` nullable; `agentId`/`projectId` on the run).
 - The web UI follows the Foundations artboard: tokens in `apps/web/src/app/globals.css`, every visual piece a component in `apps/web/src/components/ui` (shadcn pattern, Tailwind inside the component). Pages compose components and carry no styling of their own.
 
 ## Commands
 
 - `pnpm infra:up` - start Postgres (5433) and Redis (6380)
 - `pnpm db:migrate` - apply Prisma migrations
-- `pnpm seed` - seed the `office-sandbox` project, the 12 shipped skills and the default team (idempotent)
+- `pnpm seed` - seed the `office-sandbox` project, the 12 shipped skills, the default team and the hidden `office-summarizer` agent (idempotent)
 - `scripts/dev-all.sh` - export `.env`, start infra, migrate, run `pnpm dev`
 - `pnpm dev` - run all packages in watch mode
 - `pnpm test` - run all tests

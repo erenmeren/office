@@ -1,6 +1,6 @@
 # Security
 
-This describes what Phases 1 and 2 enforce and what they do not yet. The target model is spec §14.
+This describes what Phases 1 to 3 enforce and what they do not yet. The target model is spec §14.
 
 ## Owner authentication
 
@@ -43,10 +43,20 @@ This describes what Phases 1 and 2 enforce and what they do not yet. The target 
 ## Claude permissions
 
 - The Claude adapter runs the Agent SDK with `permissionMode: 'default'`.
-- The agent version's `allowedTools` are passed as `allowedTools`; every built-in tool not in that list and every MCP tool (`mcp__*`) are passed as `disallowedTools`. No MCP server is pinned in Phase 2, so this also removes connector tools the machine's Claude login would add. The built-in MCP resource tools (`ListMcpResourcesTool`, `ReadMcpResourceTool`, `ReadMcpResourceDirTool`) are disallowed the same way, so no MCP server's resources can be read either. A `canUseTool` callback is the deny path for anything else: it denies any tool that is not in the allow list.
-- Project settings (`settingSources: ['project']`) are loaded because project repositories are owner-controlled. Deny rules still cap the tool surface: project allow rules and a skill's `allowed-tools` frontmatter cannot grant MCP tools, because they are disallowed first.
+- The agent version's `allowedTools`, plus the office tools of the run kind (`mcp__office__<name>`), are passed as `allowedTools`; every built-in tool not in that list is passed in `disallowedTools`. The built-in MCP resource tools (`ListMcpResourcesTool`, `ReadMcpResourceTool`, `ReadMcpResourceDirTool`) are disallowed the same way. A `canUseTool` callback is the deny path for anything else: it denies any tool that is not in the allow list.
+- MCP servers: the only MCP server in a session is the in-process `office` server, and `strictMcpConfig: true` keeps out every other one (servers from the machine's Claude login, from user settings or from the project's `.mcp.json`). This replaced the Phase 2 `mcp__*` entry in `disallowedTools`, which would also have blocked the office tools. In the Phase 3 acceptance runs no `mcp__` tool other than `mcp__office__*` appeared in `agent.started`.
+- Project settings (`settingSources: ['project']`) are loaded because project repositories are owner-controlled. Project allow rules and a skill's `allowed-tools` frontmatter cannot add MCP tools, because no other MCP server is loaded.
 - `maxTurns` and `maxBudgetUsd` from the agent version are passed to the SDK. The budget is the SDK's soft limit.
 - The child process gets the worker's environment without `CLAUDE*` and `AI_AGENT` keys, so it uses the machine's Claude Code login or `ANTHROPIC_API_KEY`. Office's own keys are dropped too: `DATABASE_URL*`, `COOKIE_SECRET`, `REDIS_URL` and every `OFFICE_*` key.
+
+## Office tools, messages and memory (Phase 3)
+
+- **Project scoping.** Every office tool call is executed by the API, under the run's live lease: the worker must hold the lease and name the run's own session, or the call is answered `no_lease`. The agent and the project come from that session, never from the tool arguments. Recipients are looked up by slug among active, non-system agents; agents are not per project until `ProjectAgent` (Phase 4). Conversations, messages (`inReplyToId` included) and memory entries from another project answer `not_found`. Owner routes check a supplied `projectId` against the entry or conversation. An inbox run cannot use `awaitReply` (`not_allowed`).
+- **Tool surface per run kind.** `task` runs get the version's allowed built-ins and the 13 messaging and memory tools. `inbox` and `chat` runs get the same office tools, but only `Read`, `Glob` and `Grep` of the built-ins, at most 8 turns and 0.25 USD. `summary` runs get `submit_summary` only: no built-in tool, skill or subagent. The API checks the run kind again on every call and answers `unknown_tool` otherwise.
+- **Limits.** Messages per session (`OFFICE_MSG_PER_SESSION`, default 20) and per task (`OFFICE_MSG_PER_TASK`, default 100), escalation depth (`OFFICE_ESCALATION_DEPTH`, default 2) and handoff chain length (`OFFICE_HANDOFF_CHAIN`, default 3). Counts and inserts are serialized by Postgres advisory locks, so concurrent sends cannot pass a limit. A failed check answers `limit_exceeded`. Wake runs are bounded to two per unread wake delivery, and a waiting run resumes after `OFFICE_REPLY_TIMEOUT_MINUTES` (default 60) even without a reply.
+- **Untrusted text.** Message bodies and memory content are written by agents or the owner, and they reach other agents as plain prompt text: in tool results, in the resume prompt (`Reply from <sender>:` and the body) and in the context pack. They are not sanitized or marked, so a message or memory entry can steer the agent that reads it within that agent's tools. Only verified memory enters the context pack and `search_memory`. Agent proposals stay `proposed` until the owner verifies them, but the summarizer's `task_summary` is stored `verified` without an owner step. The UI renders messages and memory as text, never as HTML.
+- **Tool auto-approval.** The office tools are listed in `allowedTools`, so the SDK auto-approves them like other allowed tools, and `canUseTool` is not consulted (the `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` warning names them).
+- **Redaction.** Tool arguments and results are part of the event stream and pass through the same redaction as other events. Message bodies and memory content are stored as written and are not redacted.
 
 ## Not yet enforced
 
@@ -55,4 +65,4 @@ This describes what Phases 1 and 2 enforce and what they do not yet. The target 
 - **Worker environment** (Phase 4): the agent's child process inherits the worker's whole environment apart from the keys above. Start the worker with only the variables it needs; any other secret in its environment (for example one added to `.env`, which `scripts/dev-all.sh` exports whole for convenience) reaches the agent. Use this only with throwaway local values.
 - **Project authorization and membership** (Phase 6): there is one owner, who can see every project. `ProjectMember` and per-project authorization are not built.
 - **Audit log** (Phase 6): agent edits, approvals and worker revocations are not written to an audit log yet. Agent edits are traceable through immutable `AgentVersion` rows.
-- **Untrusted content**: tool output, agent text and skill content are rendered as text in the UI, never executed. Agent messages and memory (Phase 3) will be treated the same way.
+- **Untrusted content**: tool output, agent text, skill content, messages and memory are rendered as text in the UI, never executed. Messages and memory reach other agents unmarked (see above).

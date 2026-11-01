@@ -15,7 +15,8 @@ Messages on one socket are handled strictly in order.
 - `run.accepted { runId }`: the worker has started the assigned run; the run moves `queued → running` and the task moves to `running`.
 - `run.rejected { runId, reason }`: the worker refuses the run (for example `cwd outside allowed roots`); the API logs it, and the run keeps its lease until it expires and the task is retried.
 - `run.event { event }`: one normalized `OfficeEvent` (`type`, `seq`, `ts`, `sessionId`, `runId`, `agentId`, `projectId`, `payload`), redacted by the worker; the API redacts it again, persists it as a `SessionEvent` and publishes it to `run:<runId>` subscribers.
-- `run.result { runId, sessionId, result }`: the final `RunResult` (`status` succeeded, failed or cancelled, `resultText`, `error`, `sdkSessionId`, `usage` with tokens, `costUsd`, turns and duration); the API finishes the run, the session and the task, and writes a `UsageRecord`.
+- `run.result { runId, sessionId, result }`: the final `RunResult` (`status` succeeded, failed, cancelled or suspended, `resultText`, `error`, `sdkSessionId`, `usage` with tokens, `costUsd`, turns and duration); the API finishes the run, the session and the task, and writes a `UsageRecord`. `suspended` (Phase 3) means the agent called an office tool with `awaitReply` and the adapter interrupted the session; `sdkSessionId` is required with it. The API then moves the run, session and task to `waiting_reply` and releases the lease instead of finishing the run.
+- `tool.call { runId, sessionId, callId, name, args }` (Phase 3): the agent called office tool `name` through the in-process MCP server. The API checks that this worker holds a live lease on the run and that `sessionId` is the run's session, executes the tool with the agent and project of that session, and answers with `tool.result` carrying the same `callId`. A tool outside the run kind's set (`submit_summary` only for `summary` runs, every other tool for `task`, `inbox` and `chat` runs) is answered `unknown_tool`.
 
 ### API to worker (`ApiToWorkerSchema`)
 
@@ -24,8 +25,25 @@ Messages on one socket are handled strictly in order.
   - `skills`: the agent version's pinned skills, each with `name`, `version`, `checksum`, `mode` (`eager` or `on_demand`) and `files` (relative path to content). The worker validates them and writes them to `<OFFICE_WORKER_HOME>/runs/<runId>/.office/.claude/skills/<name>/`, then removes the run root after the run.
   - `subagents`: the version's native subagents (`name`, `description`, `prompt`, optional `tools`, `model`, `maxTurns`, and the pinned `skills` each may use), passed to the SDK as `agents`.
   - `skillsDir`: filled in by the worker, never by the API: the `<runRoot>/.office` directory it materialized, passed to the SDK as `additionalDirectories`.
+  - `kind` (Phase 3): `task`, `inbox`, `chat` or `summary` (default `task`).
+  - `tools` (Phase 3): the office tool names the adapter serves for this run (from `toolsForKind`).
+  - `startSeq` (Phase 3): the last `seq` already stored for the session; a resumed run numbers its events from `startSeq + 1`. It is 0 for a new run.
+  - `resumeSdkSessionId`: set when a `waiting_reply` run resumes, and for a `chat` run that continues its conversation's session.
 - `run.cancel { runId }`: stop the run; the worker interrupts the SDK session and reports a `cancelled` result.
+- `tool.result { callId, result }` (Phase 3): the answer to a `tool.call`. `result` is `{ ok: true, result, suspend? }` or `{ ok: false, code, error }`. Codes include `unknown_tool`, `invalid_args`, `not_found`, `limit_exceeded`, `no_lease` and `internal_error`. `suspend: true` tells the adapter to end the session after this result (the call had `awaitReply`).
 - `error { message }`: the previous message was invalid or rejected (for example a `run.result` without a live lease).
+
+### Office tool calls (Phase 3)
+
+The worker's `ToolBridge` gives every office tool call a `callId` and sends `tool.call`. It waits at most 30 s for the `tool.result`; after that the call fails with code `timeout`. A call made while the socket is down fails at once, and calls still pending when the socket closes fail with code `disconnected`. Tool calls are not buffered across a reconnect.
+
+After a successful call the worker records a derived event in the run's event stream:
+
+- `send_message`, `request_help`, `handoff_task`, `escalate_to_chief` and `reply_message`: `agent.message.sent { messageId, conversationId, to?, type }`.
+- `read_inbox`: `agent.message.received { count }`.
+- `propose_memory`: `memory.proposed { entryId }`.
+
+The adapter emits `agent.waiting_reply { messageId, to }` when a call with `awaitReply` suspends the run. (The fake adapter does; the Claude adapter does not yet, see `docs/progress.md`.) The API records `agent.resumed { reason, messageId? }` itself when it resumes the run. The worker skips skill materialization for `summary` runs.
 
 ### Enrollment
 
@@ -48,7 +66,7 @@ A `run.result` for a run still `queued` (its `run.accepted` was lost) is accepte
 
 ## UI connection: `/ws/ui`
 
-Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. Topics are `global`, `task:<taskId>` and `run:<runId>`.
+Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. Topics are `global`, `task:<taskId>`, `run:<runId>` and `conversation:<conversationId>` (Phase 3).
 
 ### UI to API (`UiClientMessageSchema`)
 
@@ -60,6 +78,8 @@ Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. T
 - `event { topic, event }`: one `OfficeEvent` of a run, replayed or live.
 - `task.status.changed { topic, task: { id, status, updatedAt } }`: a task changed status; published to `task:<id>` and `global`.
 - `run.status.changed { topic, runId, status }`: a run changed status; published to `run:<id>`.
+- `message.created { topic, message }` (Phase 3): a message was stored; published to `conversation:<id>` and `global`. `message` is the same view `GET /conversations/:id` returns.
+- `memory.changed { topic: global, entryId, status }` (Phase 3): a memory entry was created, verified, rejected, edited or deleted.
 - `replay.done { topic, lastSeq }`: replay of a `run:` topic is complete up to `lastSeq`; everything after this is live.
 - `error { message }`: invalid message, unknown run (`run not found`) or a failed replay.
 

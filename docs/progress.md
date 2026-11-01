@@ -4,7 +4,7 @@
 |-------|--------|
 | 1 | done |
 | 2 | done |
-| 3 | not started |
+| 3 | in progress (real-Claude acceptance: the Claude adapter emits no `agent.waiting_reply` event; see "Phase 3 evidence") |
 | 4 | not started |
 | 5 | not started |
 | 6 | not started |
@@ -23,18 +23,148 @@ Phase 2:
 - Approvals (Phase 4): pinning skills or subagents adds `Skill` (skills) or `Agent` and `Task` (subagents) to the allowed tools, which the SDK auto-approves before `canUseTool` (see `docs/security.md`).
 - Skill frontmatter parsing supports single-line `key: value` only; multi-line (folded or block) values are not supported.
 - The adapter's `RunResult.usage` keeps only the last SDK result. That is the full run cost: the SDK's `SDKResultMessage.total_cost_usd` is cumulative (each result carries the running total so far), so a run with two completions, as in the subagent smoke, is not under-reported.
-- In the subagent smoke, a second `agent.started` in the same run listed 106 `mcp__claude_ai_*` connector tools (Gmail, Notion, Claude Docs) from the machine's claude.ai login. `canUseTool` denied them, but a project allow rule or a skill's `allowed-tools` frontmatter could have auto-allowed them first. Fixed: the adapter now always passes `mcp__*` in `disallowedTools` (no MCP server is pinned in Phase 2), and the third smoke attempt listed no `mcp__` tool (see "Runtime subagent smoke").
+- In the subagent smoke, a second `agent.started` in the same run listed 106 `mcp__claude_ai_*` connector tools (Gmail, Notion, Claude Docs) from the machine's claude.ai login. `canUseTool` denied them, but a project allow rule or a skill's `allowed-tools` frontmatter could have auto-allowed them first. Fixed in Phase 2 by passing `mcp__*` in `disallowedTools`. Phase 3 replaced that wildcard (it would also block the office tools): the adapter now passes `strictMcpConfig: true`, so the session gets only the in-process `office` MCP server and no MCP server from the machine's login or settings. The Phase 3 acceptance runs' `agent.started` tool lists held no `mcp__claude_ai_*` tool.
 - In the acceptance runs the designer session had no subagent tool: the adapter granted `Agent` but left `Task` in `disallowedTools`, and the SDK lists the subagent tool as `Task` in the session's tools, so it was removed. Fixed after the acceptance (both `Agent` and `Task` are granted when subagents are pinned) and checked by the runtime subagent smoke below (exit 0: the subagent was spawned and returned `SUBAGENT_OK`). A platform run with a subagent (a `SubagentRun` row from a real session) has not been done yet.
 
 Web UI (between Phase 2 and Phase 3, 2026-11-01): the web app follows the "Claude Agent Office — Web UI" design (Foundations and Mission Control artboards). Design tokens (colors, fonts, the `glass` and `aurora` utilities) live in `apps/web/src/app/globals.css`; every visual piece is a component under `apps/web/src/components/ui` in the shadcn pattern (`cva` variants, `cn`, `data-slot`), so a redesign changes tokens and components, not pages. New: `AppShell` (sidebar, header), `StatusPill`/`StatusDot`, `AgentAvatar`, `Progress`, `PageHeader`, `Kv`, `TaskNode`, `PlanGraph` (layered layout in `src/lib/plan-layout.ts`, tested), `ChiefComposer` (creates a task for the agent with slug `chief`), `TaskDetail`, and the `/mission-control` page. Not built, because their data arrives later: the approval card and the "send an instruction" box (Phase 3/4 messaging and approvals), plan versions and dependency edges (Phase 4 Chief planning; `PlanGraph` already draws `dependsOn` arrows), the budget-today bar in the header. Fonts (Bricolage Grotesque, Instrument Sans, JetBrains Mono; SIL OFL) are self-hosted variable woff2 files under `apps/web/src/app/fonts` via `next/font/local`; the UI makes no request outside localhost. A Playwright suite (`apps/web/e2e`) renders every page and fails on any console error or warning, any external request, or a broken Mission Control interaction; `/auth/me` answers 200 `{ setupRequired: false, anonymous: true }` when logged out so the login page produces no 401 in the console.
 
-Phase 3 (messaging and memory): message bus and inbox runs, agent MCP tools, human chat as a real session, task summaries, project memory, context pack, memory UI.
+Phase 3 (messaging and memory):
+- **Open acceptance defect.** `ClaudeAdapter` never emits `agent.waiting_reply` when a run suspends on `awaitReply`; only `FakeAdapter` does. The real developer run went from `agent.tool.completed` for `send_message` (seq 14) straight to `agent.resumed` (seq 15). The run did suspend and resume (the scheduler resumes only `waiting_reply` runs), but the event the spec and the UI expect is missing. Phase 3 stays `in progress` until the adapter emits it and the acceptance step is re-run.
+- **Open Playwright failure.** `e2e/pages.spec.ts` "owner messages an agent" fails (3 of 3 runs after the acceptance; 7 of 8 tests pass). The newest conversation (the real `Pick the database` task thread) is preselected; "Start conversation" then switches to the existing direct thread with the developer after the test has filled the composer, the composer is cleared, and the `Send` click waits on a disabled button until the 60 s timeout. Before the acceptance the direct thread was the newest one, so the switch did not happen and the suite passed 8 of 8.
+- Delivery into a live session (streaming input) is not built. Messages reach a live session only through `read_inbox` or at the next run boundary.
+- Memory purge: deleting a memory entry is a hard delete; there is no soft delete and no 30-day purge.
+- Semantic search: memory search is Postgres full-text search only; the `pgvector` column exists and is unused.
+- Settings UI for the message limits, the reply timeout and the context pack size: they are environment variables only (`OFFICE_MSG_PER_SESSION`, `OFFICE_MSG_PER_TASK`, `OFFICE_ESCALATION_DEPTH`, `OFFICE_HANDOFF_CHAIN`, `OFFICE_REPLY_TIMEOUT_MINUTES`, `OFFICE_CONTEXT_PACK_MAX_CHARS`).
+- No `MemoryRevision` table: a revision is a new `MemoryEntry` row that supersedes the previous one (`supersededById`).
+- `agent.message.received` is emitted only when an agent reads its inbox; messages read by the owner in the UI produce no event.
+- Wake retries: at most two wake runs per unread wake delivery, and a wake run that was never delivered to a worker (abandoned before `run.accepted`) also counts against the two.
+- The scheduler logs "no summarizer" once per process; the warning does not reset when a summarizer appears and disappears again.
+- The context pack of inbox and chat runs uses the fixed wake prompt as its full-text search text, so its "Relevant memory" section is not tailored to the mail.
+- UI searches (Conversations, Project Memory) have no debounce; every keystroke sends a request.
+- The "Read HH:MM" line in a thread shows the send time; the API does not expose `acknowledgedAt` yet.
+- A reply consumed by resuming a waiting run is not acknowledged, so it still counts as unread in the recipient's context pack (`inboxCount` 4 and then 5 for `developer` in the acceptance).
+- The pack header says entries are "facts verified by the owner", but task summaries from `office-summarizer` are stored `verified` without an owner action.
+- The sidebar's team list shows the hidden `office-summarizer` agent (`isSystem`).
+- Known wart: `apps/worker/test/e2e-phase3.test.ts` imports the seed from `packages/db/dist/seed.js` by relative path; `@office/db` should export it.
+- Shared dev database: the Playwright suite's memory test verifies the first `Needs review` entry it finds. In the acceptance it verified the agent-proposed entries `32f129b5` and `b244a807`, which no person had reviewed. Its `E2E decision` rows ("Use Postgres for everything.") also reached the developer's context pack and the summarizer's proposal.
 
 Phase 4 (Chief and orchestration): per-run git worktrees and the mission branch, dummy env template, platform-side `checkCommand`, approvals (`canUseTool` gates, `approvalTimeoutMinutes`), scheduler budgets, `waiting_reply` / `waiting_approval` lifecycle, Chief planning and evidence-based review (Phase 1 auto-moves `review` to `done`), required consultations, Mission Control.
 
 Phase 5 (hybrid workers): remote workers, remote clone, worker capabilities.
 
 Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, project membership, interactive PTY shell.
+
+## Phase 3 decisions
+
+- Delivery into a live session happens at session boundaries only (no streaming input yet). A live agent sees new mail when it calls `read_inbox` or at its next run.
+- `question`, `help_request`, `handoff` and `escalation` messages wake an idle recipient through an inbox run with `maxTurns` at most 8 and `maxBudgetUsd` at most 0.25 (the lower of these and the agent version's limits). An inbox run gets only `Read`, `Glob` and `Grep` of the version's built-in tools. The scheduler makes at most two wake runs per unread wake delivery.
+- `awaitReply` suspends the run: the run and its task move to `waiting_reply` and the lease is released, so the worker slot is free. The reply resumes the same run and session with the SDK session id (`resumeSdkSessionId`) and continues the event `seq` (`startSeq`). With no reply within `replyTimeoutMinutes` (`OFFICE_REPLY_TIMEOUT_MINUTES`, default 60) the run resumes with a timeout prompt.
+- `handoff_task` reassigns the task to the recipient (`Task.agentId`); Phase 4 owns full orchestration.
+- The office tools are an in-process SDK MCP server named `office`, fed by `tool.call` / `tool.result` over the worker socket. The API executes every call. `strictMcpConfig: true` replaces the Phase 2 `mcp__*` disallow wildcard and keeps every other MCP server out of the session.
+- `office-summarizer` is a hidden system agent (`Agent.isSystem`) on `haiku`. After a task run finishes, the scheduler starts a summary run for it, which writes one `verified` `task_summary` with sources through `submit_summary` and may propose more entries.
+- Memory search is Postgres full-text search (a generated `tsvector` column); the `pgvector` column exists and is unused.
+- Deleting a memory entry is a hard delete (no 30-day purge yet). Deleting a revision restores its predecessor.
+- Inbox and chat runs have no task: `TaskRun.taskId` is nullable, and `agentId`, `projectId` and `conversationId` sit on the run.
+- The context pack matches memory by OR-ing the task text's terms (ranked, capped at 10 entries and `OFFICE_CONTEXT_PACK_MAX_CHARS`, default 12000); the owner's memory search keeps AND.
+- A message's sender and project come from the session that calls the tool, never from tool arguments.
+- Wake deliveries are grouped per (agent, project): one inbox run drains the whole inbox.
+
+## Phase 3 evidence
+
+### Fake-adapter end-to-end
+
+`apps/worker/test/e2e-phase3.test.ts` runs the real API in-process with the fake adapter (markers `SEND:`, `ASK:`, `MEMO:`, `INBOX`). It covers a question with `awaitReply`, the inbox wake, the reply, the resume, the proposed memory, the task summary and the next task's context pack. It passes in `pnpm test`.
+
+### Phase 3 acceptance (real Claude)
+
+Date: 2026-11-01. Result: **failed on one expectation**. One attempt, no retry. Every other expectation held. The missing piece is the `agent.waiting_reply` event: the Claude adapter does not emit it (see Outstanding).
+
+Setup: infra up; dev database migrated and seeded (`office-summarizer` `adc4a45f-ee71-4d86-9fa7-cd3592144769`, `developer` `15e9d1b8-65b4-4350-96ca-067db9315e9d`, `architect` `49ef7eac-1fc7-4469-a2e3-5d904dd883ca`). The API (`pnpm --filter @office/api dev`, tsx watch, at the branch head) and the web app (`pnpm --filter @office/web dev`) were already running. The worker (`pnpm --filter @office/worker dev`, `OFFICE_RUNTIME=claude`, worker `e973b79e-8611-4552-b949-b291d5fd493e`, saved credential, capacity 2) was started with the root `.env` exported and logged `connected to API` at 07:18:33Z. It used the machine's Claude Code login. Project `office-sandbox` `e844090c-2a16-4a62-a199-a251103a8736`, repository `/home/meren/projects/office-workspaces/office-sandbox`. No production credential, live database, push, merge or deploy was involved.
+
+Driver: `POST /tasks` with the owner's cookie session, then `GET /tasks/:id`, `GET /runs/:id`, `GET /runs/:id/events`, `GET /conversations`, `GET /conversations/:id`, `GET /memory` and `GET /memory/:id`. The Conversations and Project Memory pages were screenshotted in headless Chromium with the owner's cookie.
+
+Task: agent `developer`, title `Pick the database`, description verbatim: `Before writing anything, ask the architect (use list_agents, then send_message with type question and awaitReply true) which database this project should use and why. Wait for the answer. Then write the decision into docs/db-decision.md and propose it as a decision memory with propose_memory.`
+
+| Run | Kind | Agent | Run id | Session | Created | Finished | Cost (USD) |
+|---|---|---|---|---|---|---|---|
+| developer | `task` | developer (sonnet) | `8c0fcf3e-fe20-40ca-ac09-7008aafa3050` | `9c7fa30f-3e0b-46e8-8c84-d3b499fcea40` (SDK `4cecf4ab-3fdc-4f68-8778-ceccefdd498f`) | 07:18:51.244Z | 07:19:25.871Z | 0.2513424 |
+| architect inbox | `inbox` | architect (sonnet) | `6dfdba03-456a-4445-b0db-511dcb998993` | `a9bed6fe-7b1b-4284-9659-926f9a1c2cf3` (SDK `62d2dead-055d-41b3-87ef-6e6665038229`) | 07:18:57.268Z | 07:19:16.371Z | 0.1170028 |
+| summary | `summary` | office-summarizer (haiku) | `1b14bf8b-e027-4288-82b1-05ac58b8258a` | | 07:19:27.349Z | 07:19:40.602Z | 0.00640329 |
+
+Task `e6ce39eb-5270-40fd-b708-ebc41fefd12c`: created 07:18:50.808Z, `done` at 07:19:25.878Z, attempts 1. The developer run's cost covers both of its segments (before and after the suspend). Conversation `27251a71-40b4-4d81-b13c-0aa1bb07e98a` (kind `task`, title `Pick the database`, participants developer and architect).
+
+Developer run events (`GET /runs/8c0fcf3e-.../events`):
+
+```
+seq 1  agent.started          07:18:52.008Z  model claude-sonnet-5-5; tools include the 13 mcp__office__* tools, no other mcp__ tool
+seq 2-7  Skill lazy-expert-developer, Skill test-driven-development (eager pins)
+seq 8  agent.tool.started     ToolSearch select:mcp__office__list_agents,mcp__office__send_message,mcp__office__propose_memory
+seq 10 agent.tool.started     07:18:55.272Z  mcp__office__list_agents
+seq 12 agent.tool.started     07:18:56.788Z  mcp__office__send_message {to: architect, type: question, awaitReply: true}
+seq 13 agent.message.sent     07:18:56.828Z  messageId b560ca38-e94e-4a3e-8ccd-cbe498a1ce88, conversation 27251a71-...
+seq 14 agent.tool.completed   07:18:56.832Z  "Your turn ends now; the reply arrives as your next user message."
+       (expected here: agent.waiting_reply; not emitted)
+seq 15 agent.resumed          07:19:13.319Z  {reason: reply, messageId: a241b9d2-18b6-4f9b-b6c0-514c0fbfe28a}
+seq 16 agent.started          07:19:13.640Z  (resumed SDK session)
+seq 18 agent.tool.started     07:19:17.958Z  Bash: mkdir -p docs && cat > docs/db-decision.md <<'EOF' ...
+seq 21 agent.tool.started     07:19:20.298Z  mcp__office__propose_memory {type: decision, ...}
+seq 22 memory.proposed        07:19:20.377Z  entryId 32f129b5-423d-4e95-96a9-d2cfbf861ac3
+seq 25 agent.completed        07:19:25.328Z  costUsd 0.1403071 (this segment), numTurns 3
+```
+
+The worker log shows `run assigned` for this run twice (07:18:51Z and 07:19:13Z), so the run left its worker slot while it waited. The run status passed through `waiting_reply`: `resumeRun` only moves a run from `waiting_reply` to `queued`, and `waitingSince` was cleared on resume. No status history is stored, so the state itself was not observed directly. The developer wrote the file with a `Bash` heredoc rather than `Write`.
+
+Architect inbox run events:
+
+```
+seq 1  agent.started          07:18:57.652Z  allowed built-ins Read, Glob, Grep only
+seq 2  Skill clean-architecture (eager pin)
+seq 7  agent.tool.started     07:19:01.735Z  mcp__office__read_inbox
+seq 8  agent.message.received 07:19:01.751Z  {count: 1}
+seq 11-14 Glob *, Grep postgres|sqlite|... (no database code in the repo)
+seq 15 agent.tool.started     07:19:12.222Z  mcp__office__reply_message
+seq 16 agent.message.sent     07:19:12.262Z  {type: reply, messageId: a241b9d2-18b6-4f9b-b6c0-514c0fbfe28a}
+seq 19 agent.completed        07:19:15.967Z  costUsd 0.1170028, numTurns 8
+```
+
+The architect answered "provisional SQLite, move to PostgreSQL on named triggers" (2019 characters). Its context pack: `{chars: 256, entryIds: [], inboxCount: 1, summaryIds: []}`.
+
+Summary run: `agent.started` listed `mcp__office__submit_summary` as its only `mcp__` tool. `submit_summary` (seq 6, 07:19:37.756Z) returned entry `666ea1bc-9764-4e76-859f-1e98e9818dde` and proposal `b244a807-2de8-4183-8348-0e5d8c29cf7d`. The task run's `summarizedAt` is 07:19:27.330Z.
+
+Memory after the task:
+
+| Entry | Type | Status | Author | Sources |
+|---|---|---|---|---|
+| `666ea1bc-9764-4e76-859f-1e98e9818dde` `Summary: Pick the database` | `task_summary` | `verified` (07:19:37.782Z) | system | run `8c0fcf3e`, task `e6ce39eb` |
+| `32f129b5-423d-4e95-96a9-d2cfbf861ac3` `Provisional database: SQLite, move to PostgreSQL on triggers` | `decision` | `proposed` | developer | file `docs/db-decision.md`, message `b560ca38`, run `8c0fcf3e` |
+| `b244a807-2de8-4183-8348-0e5d8c29cf7d` `Conflicting database memories: Postgres vs provisional SQLite` | `known_issue` | `proposed` | developer (proposed by the summarizer on the run's behalf) | message `a241b9d2`, run `8c0fcf3e` twice |
+
+The `known_issue` comes from the developer's context pack, which held two Playwright `E2E decision` entries ("Use Postgres for everything.", `f38bb30e`, `b2c4096d`). The file `docs/db-decision.md` in the sandbox is 1101 bytes, sha256 `740dc0b4296fdcab468966a76f8f3eadc5167e71dea4c5599e9bd6df97636b60`, uncommitted.
+
+UI: `/conversations?taskId=e6ce39eb-...` showed the `Pick the database` thread with the architect's reply, the linked task `Done` and both participants. `/memory` listed the three entries with their sources (`docs/db-decision.md`, `architect reply`, `Run 8c0fcf3e`, `Task e6ce39eb`) and "2 entries need review". Both screenshots were taken after the restart below.
+
+Expectations:
+
+| Expectation | Result |
+|---|---|
+| developer run reaches `waiting_reply` with an `agent.waiting_reply` event | **not met**: the run suspended and resumed, but no `agent.waiting_reply` event exists; `ClaudeAdapter` does not emit it (`FakeAdapter` does) |
+| inbox run for `architect`; `read_inbox` and `reply_message` visible as `agent.message.received` / `agent.message.sent` | met (seq 8, seq 16) |
+| developer run resumes (`agent.resumed`), writes the file, calls `propose_memory`, task `done` | met (seq 15, 18, 21-22; task `done`) |
+| summary run writes a verified `task_summary` with sources | met (`666ea1bc`, 2 sources) |
+| Conversations page shows the thread | met |
+| Project Memory lists the proposed decision with its sources | met (`32f129b5`, 3 sources) |
+| after restarting the API and the worker, `GET /conversations/:id` and `GET /memory/:id` return everything | met (below) |
+| a second task shows the summary id in its `contextPack` | met (below) |
+
+Restart: at 07:20:34Z the API (tsx watch and its child) and the worker were killed by pid; port 4000 was closed. Both were started again with `.env` exported, and the worker logged `connected to API` at 07:20:49Z. With the same owner cookie, `GET /conversations/27251a71-...` returned both messages (`b560ca38` question from developer, 07:18:56.813Z; `a241b9d2` reply from architect, `inReplyToId` `b560ca38`, 07:19:12.251Z). `GET /memory/666ea1bc-...` returned `verified` with 2 sources and `GET /memory/32f129b5-...` returned `proposed` with 3 sources. `GET /memory?projectId=...` listed both. All three sessions were `succeeded` (closed).
+
+Second task: `Say hello` (`developer`, description `Reply with one line: hello.`), task `c059d52a-4604-4600-8005-390d0a4c4dba`, created 07:21:31.853Z after the summary existed. Run `fa1a9cc2-244c-40cb-a01c-94c28f417882`, result `hello`, cost 0.0305653, task `done`. Its session `07d528d0-da52-4db6-909f-4d394fac93fd` has `contextPack` `{chars: 1358, entryIds: ["666ea1bc-..."], inboxCount: 5, summaryIds: ["666ea1bc-9764-4e76-859f-1e98e9818dde"]}`. Its own summary run `c0320bbe-fa0c-465b-a2db-af63a2f1f1d0` (cost 0.00181621) wrote `81c2059e-09d7-4fab-a08a-adee4aebdd86`.
+
+Cost: 0.37474849 USD for the acceptance task (developer, architect inbox, summary) and 0.40712 USD with the second task and its summary.
+
+After the acceptance, the Playwright suite's memory test verified `b244a807` (07:23:53Z) and `32f129b5` (07:25:25Z) through its "Review now" flow. No person reviewed them.
+
+Worker log note: the SDK printed `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` for the developer's built-ins and the `mcp__office__*` tools. For the summary run it named only `mcp__office__submit_summary`. The office tools are auto-approved like other allowed tools (see `docs/security.md`).
 
 ## Phase 2 decisions
 

@@ -1,6 +1,6 @@
 # Claude Agent Office
 
-A control plane that turns Claude Code sessions into a persistent AI software team. Phases 1 (foundation) and 2 (agents and skills) are built; see `docs/progress.md` for what is done and what is outstanding.
+A control plane that turns Claude Code sessions into a persistent AI software team. Phases 1 (foundation) and 2 (agents and skills) are done, and Phase 3 (messaging and memory) is built with one open acceptance item; see `docs/progress.md` for what is done and what is outstanding.
 
 ## 1. What it is
 
@@ -72,6 +72,8 @@ The seed creates the project `office-sandbox` with its repository at `<first OFF
 | `qa-engineer` | `sonnet` | test-driven-development | code-review, debugging | test-writer, security-reviewer |
 | `developer` | `sonnet` | lazy-expert-developer, test-driven-development | debugging, code-review, clean-architecture | debugger, test-writer |
 
+It also creates the hidden system agent `office-summarizer` (model `haiku`), which writes a summary of every finished task run into Project Memory. Agents cannot message it and it is never woken by mail; the sidebar's team list still shows it.
+
 The seed is idempotent by slug and name: a second run prints "exists" and changes nothing. An agent that already exists is left as it is; in particular a `developer` created by the Phase 1 seed stays at version 1 without skills or subagents until you give it a new version in Agent Studio.
 
 ## 7. Owner setup and login (UI)
@@ -129,9 +131,19 @@ pnpm --filter @office/worker dev
 
 The token is shown only once and only its hash is stored. Revoking a worker (`DELETE /workers/:id`; there is no button for it in Phase 1) closes its connection and invalidates its credential.
 
-## 12. Messaging and memory
+## 12. Conversations and Project Memory (UI)
 
-Phase 3. Agent-to-agent messages, the inbox, task summaries and project memory are not built yet. See `docs/progress.md`.
+Agents talk to each other and to you through office tools (`send_message`, `reply_message`, `read_inbox`, `request_help`, `handoff_task`, `escalate_to_chief`, `propose_memory`, `search_memory` and others). Every message is saved before it is delivered.
+
+**Conversations** (`/conversations`) lists direct, task, group and owner threads with the last message, filters by kind, and searches message text. A thread shows each message with its type and delivery state, the linked task and the participants. "Message an agent" and "New group" start a conversation, and the composer sends a `Note` or a `Question`. A question wakes an idle agent: the scheduler starts a short `chat` run that answers in the same conversation, resuming the conversation's Claude session. Mail reaches a running agent only at a session boundary (when it reads its inbox or at its next run).
+
+An agent can ask another agent a question and wait (`awaitReply`). Its run then shows `waiting_reply` and frees its worker slot. The recipient is woken by an `inbox` run if it is idle, and the reply resumes the waiting run in the same Claude session. Without a reply the run resumes after `OFFICE_REPLY_TIMEOUT_MINUTES` (default 60). A task page links to its task thread.
+
+**Project Memory** (`/memory`) lists the project's decisions, conventions, API contracts, known issues, lessons and task summaries, with search and type filters. Agents propose entries; they stay `Needs review` until you verify or reject them, and only verified entries are given to agents. "Add memory" creates a verified entry. Each entry shows where it came from (run, task, message, file) and its revisions; editing creates a new revision, and deleting removes the entry for good. After every finished task run `office-summarizer` adds a verified task summary.
+
+Before each run the agent gets a context pack: the project overview, relevant verified memory, recent task summaries, its unread inbox and its lessons. The task page shows which entries were included.
+
+Limits (messages per session and per task, escalation depth, handoff chain, reply timeout, context pack size) are environment variables; see `docs/development.md`.
 
 ## 13. Submit a task and watch events
 
@@ -151,7 +163,7 @@ The worker inherits the machine's Claude Code login (`claude login`) or `ANTHROP
 
 - `pnpm infra:up` / `pnpm infra:down`: start or stop Postgres and Redis.
 - `pnpm db:migrate`: apply Prisma migrations.
-- `pnpm seed`: seed the sandbox project, the shipped skills and the default team.
+- `pnpm seed`: seed the sandbox project, the shipped skills, the default team and the hidden `office-summarizer` agent.
 - `pnpm dev`: run all packages in watch mode (export `.env` first, or use `scripts/dev-all.sh`).
 - `pnpm typecheck`, `pnpm test`, `pnpm build`.
 
