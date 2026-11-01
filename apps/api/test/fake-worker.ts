@@ -1,6 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import WebSocket from 'ws';
+import { machineId } from '@office/runtime';
 import type { ApiToWorker, WorkerToApi } from '@office/shared';
 
 export interface FakeWorkerOptions {
@@ -12,6 +13,8 @@ export interface FakeWorkerOptions {
   activeRunIds?: string[];
   tags?: string[];
   canClone?: boolean;
+  /** Defaults to the API's own machine id (same host); `null` omits it like a pre-Phase 5 worker. */
+  machineId?: string | null;
 }
 
 /** Connects to the listening app, sends `hello`, resolves after the first reply (welcome or error). */
@@ -69,6 +72,7 @@ export async function connectFakeWorker(app: FastifyInstance, opts: FakeWorkerOp
     activeRunIds: opts.activeRunIds ?? [],
     tags: opts.tags ?? [],
     canClone: opts.canClone ?? false,
+    machineId: opts.machineId === null ? undefined : (opts.machineId ?? machineId(process.env.OFFICE_DATA_DIR!)),
   });
   const first = await new Promise<ApiToWorker>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('no reply to hello after 5s')), 5000);

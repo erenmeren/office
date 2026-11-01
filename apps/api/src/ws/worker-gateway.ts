@@ -22,6 +22,7 @@ interface Connection {
   allowedRoots: string[];
   tags: string[];
   canClone: boolean;
+  machineId?: string;
 }
 
 export type OnlineWorker = ReturnType<WorkerGateway['onlineWorkers']>[number];
@@ -68,8 +69,13 @@ export class WorkerGateway {
       allowedRoots: c.allowedRoots,
       tags: c.tags,
       canClone: c.canClone,
-      /** True when the worker's allowedRoots cover `repoPath`: it can use the repo checkout directly. */
-      local: (repoPath: string) => c.allowedRoots.some((r) => isUnderRoot(realOrResolved(repoPath), r)),
+      /**
+       * True when the worker runs on the API's machine and its allowedRoots cover `repoPath`: it can use the repo
+       * checkout directly. Matching paths alone are not enough; another host may share the layout.
+       */
+      local: (repoPath: string) =>
+        (c.machineId === undefined ? this.config.trustUnidentifiedWorkers : c.machineId === this.config.machineId) &&
+        c.allowedRoots.some((r) => isUnderRoot(realOrResolved(repoPath), r)),
     }));
   }
 
@@ -166,6 +172,7 @@ export class WorkerGateway {
         allowedRoots: msg.allowedRoots,
         tags: msg.tags,
         canClone: msg.canClone,
+        machineId: msg.machineId ?? null,
         status: 'online',
         lastHeartbeatAt: new Date(),
         ...(credential ? { credentialHash: hashToken(credential), enrollTokenHash: null } : {}),
@@ -176,7 +183,7 @@ export class WorkerGateway {
     const activeRuns = await this.leasedRuns(worker.id);
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');
     this.conns.set(worker.id, {
-      socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, tags: msg.tags, canClone: msg.canClone, activeRuns,
+      socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, tags: msg.tags, canClone: msg.canClone, machineId: msg.machineId, activeRuns,
     });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
     this.cancelUnleased(worker.id, msg.activeRunIds, activeRuns);

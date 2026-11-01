@@ -237,6 +237,7 @@ model Worker {
   allowedRoots    String[]
   tags            String[]     @default([])
   canClone        Boolean      @default(false)
+  machineId       String?
   lastHeartbeatAt DateTime?
   runs            TaskRun[]
 }

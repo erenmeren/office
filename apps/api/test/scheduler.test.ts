@@ -39,11 +39,13 @@ describe('scheduler', () => {
   const createTask = async (title = 'Fix the bug') =>
     (await req('POST', '/tasks', { projectId, agentId, title, description: 'details' })).json() as { id: string };
   const getTask = async (id: string) => (await req('GET', `/tasks/${id}`)).json();
-  const worker = async (opts: { allowedRoots?: string[]; capacity?: number; tags?: string[]; canClone?: boolean } = {}) => {
+  const worker = async (
+    opts: { allowedRoots?: string[]; capacity?: number; tags?: string[]; canClone?: boolean; machineId?: string | null } = {},
+  ) => {
     const { enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
     const w = await connectFakeWorker(t.app, {
       enrollToken, name: 'w', capacity: opts.capacity ?? 1, allowedRoots: opts.allowedRoots ?? ['/tmp/office-ws'],
-      tags: opts.tags, canClone: opts.canClone,
+      tags: opts.tags, canClone: opts.canClone, machineId: opts.machineId,
     });
     workers.push(w);
     return w;
@@ -419,8 +421,8 @@ describe('scheduler', () => {
     expect(assigns(remote)).toBe(0);
   });
 
-  it('skips workers missing a required tag', async () => {
-    const task = await createTask();
+  it('skips workers missing a required tag for mission runs', async () => {
+    const task = await missionTask();
     await t.prisma.project.update({ where: { id: projectId }, data: { settings: { requiredWorkerTags: ['gpu'] } } });
     const plain = await worker();
     await t.app.scheduler.tick();
@@ -428,7 +430,49 @@ describe('scheduler', () => {
     expect(assigns(plain)).toBe(0);
     expect((await getTask(task.id)).status).toBe('ready');
     const gpu = await worker({ tags: ['gpu', 'linux'] });
-    expect((await assign(gpu)).prompt).toContain('Fix the bug');
+    expect((await assign(gpu)).prompt).toContain('code it');
+  });
+
+  it('ignores required tags for local-only runs: a chat run goes to an untagged local worker, a mission code task does not', async () => {
+    const task = await missionTask();
+    await t.prisma.project.update({ where: { id: projectId }, data: { settings: { requiredWorkerTags: ['gpu'] } } });
+    const owner = await t.prisma.user.findFirstOrThrow();
+    await sendMessage(t.prisma, t.config.messageLimits, {
+      projectId, type: 'question', body: 'Status?', senderUserId: owner.id, recipientAgentIds: [agentId],
+    });
+    const plain = await worker({ capacity: 2 });
+    const spec = await assign(plain);
+    expect(['chat', 'inbox']).toContain(spec.kind);
+    await sleep(100);
+    expect(assigns(plain)).toBe(1);
+    expect((await getTask(task.id)).status).toBe('ready');
+  });
+
+  it('a worker whose roots cover the repo but on another machine is not local', async () => {
+    const owner = await t.prisma.user.findFirstOrThrow();
+    await sendMessage(t.prisma, t.config.messageLimits, {
+      projectId, type: 'question', body: 'Status?', senderUserId: owner.id, recipientAgentIds: [agentId],
+    });
+    const other = await worker({ canClone: true, capacity: 2, machineId: 'another-machine' });
+    // a chat run needs the repo checkout on this machine
+    await t.app.scheduler.tick();
+    await sleep(100);
+    expect(assigns(other)).toBe(0);
+    expect(await t.prisma.taskRun.count()).toBe(0);
+    await missionTask();
+    const spec = await assign(other);
+    expect(spec.kind).toBe('task');
+    expect(spec.git?.remote).toEqual({ path: `/git/${projectId}` });
+    expect(spec.git?.repoPath).toBeUndefined();
+    expect(JSON.stringify(spec)).not.toContain('/tmp/office-ws');
+  });
+
+  it('a worker that sends no machineId is not local', async () => {
+    await missionTask();
+    const old = await worker({ canClone: true, machineId: null });
+    const spec = await assign(old);
+    expect(spec.git?.remote).toEqual({ path: `/git/${projectId}` });
+    expect(spec.git?.repoPath).toBeUndefined();
   });
 
   it('respects worker capacity', async () => {

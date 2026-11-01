@@ -2,6 +2,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { resolve } from 'node:path';
 import { WorkerTagSchema } from '@office/shared';
+import { machineId } from '@office/runtime';
 
 export interface WorkerConfig {
   apiUrl: string;
@@ -13,11 +14,12 @@ export interface WorkerConfig {
   name: string;
   tags: string[];
   canClone: boolean;
+  machineId: string;
 }
 
 const expandHome = (p: string) => (p === '~' || p.startsWith('~/') ? homedir() + p.slice(1) : p);
 
-export function loadWorkerConfig(env: Record<string, string | undefined> = process.env): WorkerConfig {
+export function loadWorkerConfig(env: Record<string, string | undefined> = process.env, etcMachineId?: string): WorkerConfig {
   if (!env.OFFICE_API_URL) throw new Error('Missing environment variable: OFFICE_API_URL');
   const runtime = env.OFFICE_RUNTIME ?? 'claude';
   if (runtime !== 'claude' && runtime !== 'fake') throw new Error(`Invalid OFFICE_RUNTIME: ${runtime}`);
@@ -30,9 +32,10 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
   for (const t of tags) {
     if (!WorkerTagSchema.safeParse(t).success) throw new Error(`Invalid tag in OFFICE_WORKER_TAGS: ${t}`);
   }
+  const home = resolve(expandHome(env.OFFICE_WORKER_HOME ?? '~/.office-worker'));
   return {
     apiUrl: env.OFFICE_API_URL,
-    home: resolve(expandHome(env.OFFICE_WORKER_HOME ?? '~/.office-worker')),
+    home,
     enrollToken: env.OFFICE_ENROLL_TOKEN || undefined,
     workspaceRoots: roots.map((p) => {
       const abs = resolve(expandHome(p));
@@ -44,5 +47,6 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
     name: env.OFFICE_WORKER_NAME || hostname(),
     tags,
     canClone,
+    machineId: machineId(home, etcMachineId),
   };
 }

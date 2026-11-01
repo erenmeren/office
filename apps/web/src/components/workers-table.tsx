@@ -66,6 +66,7 @@ export function WorkersTable() {
             <TableHead>Name</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Mode</TableHead>
+            <TableHead>Machine</TableHead>
             <TableHead>Tags</TableHead>
             <TableHead>Runs</TableHead>
             <TableHead>Last heartbeat</TableHead>
@@ -85,6 +86,15 @@ export function WorkersTable() {
               </TableCell>
               <TableCell>
                 <Mode w={w} />
+              </TableCell>
+              <TableCell>
+                {w.machineId ? (
+                  <span className="font-mono text-xs" title={w.machineId}>
+                    {w.machineId.slice(0, 8)}
+                  </span>
+                ) : (
+                  "—"
+                )}
               </TableCell>
               <TableCell>
                 <TagList tags={w.tags} />

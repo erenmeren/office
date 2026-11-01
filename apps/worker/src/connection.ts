@@ -108,6 +108,7 @@ export class WorkerConnection {
         activeRunIds: this.activeRunIds(),
         tags: this.config.tags,
         canClone: this.config.canClone,
+        machineId: this.config.machineId,
       });
     });
     socket.on('message', (data) => {

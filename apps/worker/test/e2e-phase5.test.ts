@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import { buildApp, loadConfig } from '@office/api';
 import { createPrisma, seed } from '@office/db';
-import { FakeAdapter } from '@office/runtime';
+import { FakeAdapter, machineId } from '@office/runtime';
 import type { RunResult, RunSpec } from '@office/shared';
 import { WorkerConnection } from '../src/connection.js';
 
@@ -85,6 +85,8 @@ describe('phase 5 two workers end to end with the fake runtime', () => {
         apiUrl: `ws://127.0.0.1:${port}`, home: homes[kind], enrollToken: opts.enrollToken,
         workspaceRoots: local ? [join(base, 'ws'), repoRoot] : [], runtime: 'fake', capacity: local ? 1 : 2, name: kind,
         tags: local ? [] : ['remote'], canClone: !local,
+        // the local worker shares the API's host identity; the remote one is another machine
+        machineId: local ? machineId(join(base, 'data')) : 'remote-machine',
       },
       { adapter: adapters[kind], heartbeatMs: 200, reconnectBaseMs: 300, logger: opts.logger ?? pino({ level: 'silent' }) },
     );

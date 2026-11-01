@@ -107,6 +107,7 @@ export interface Worker {
   allowedRoots: string[];
   tags: string[];
   canClone: boolean;
+  machineId: string | null;
   lastHeartbeatAt: string | null;
   online: boolean;
   activeRuns: number;

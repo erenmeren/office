@@ -59,14 +59,17 @@ describe('worker gateway', () => {
   it('stores tags and canClone from hello and shows them on GET /workers with online and activeRuns', async () => {
     const { id, enrollToken } = await enroll();
     const pending = await enroll();
-    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', capacity: 2, tags: ['gpu', 'linux'], canClone: true });
+    const w = await connectFakeWorker(t.app, {
+      enrollToken, name: 'w1', capacity: 2, tags: ['gpu', 'linux'], canClone: true, machineId: 'remote-machine-0001',
+    });
     const row = await t.prisma.worker.findUniqueOrThrow({ where: { id } });
-    expect(row).toMatchObject({ tags: ['gpu', 'linux'], canClone: true });
+    expect(row).toMatchObject({ tags: ['gpu', 'linux'], canClone: true, machineId: 'remote-machine-0001' });
     expect(t.app.gateway.onlineWorkers()[0]).toMatchObject({ workerId: id, tags: ['gpu', 'linux'], canClone: true });
 
     const list = (await req('GET', '/workers')).json() as Array<Record<string, unknown>>;
     expect(list.find((x) => x.id === id)).toMatchObject({
       name: 'w1', status: 'online', capacity: 2, allowedRoots: [], tags: ['gpu', 'linux'], canClone: true, online: true, activeRuns: 0,
+      machineId: 'remote-machine-0001',
     });
     expect(list.find((x) => x.id === pending.id)).toMatchObject({ online: false, activeRuns: 0, tags: [], canClone: false });
 
@@ -74,6 +77,22 @@ describe('worker gateway', () => {
     await until(async () => !t.app.gateway.onlineWorkers().length, 'worker gone');
     const after = (await req('GET', '/workers')).json() as Array<Record<string, unknown>>;
     expect(after.find((x) => x.id === id)).toMatchObject({ online: false, activeRuns: 0 });
+  });
+
+  it('is local only on the API machine with roots covering the repo; an unidentified worker only when trusted', async () => {
+    const local = async (machineId: string | null) => {
+      const { id, enrollToken } = await enroll();
+      const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', allowedRoots: ['/tmp'], machineId });
+      const online = t.app.gateway.onlineWorkers().find((x) => x.workerId === id)!;
+      const result = [online.local('/tmp/repo'), online.local('/srv/repo')];
+      await w.close();
+      return result;
+    };
+    expect(await local(t.config.machineId)).toEqual([true, false]);
+    expect(await local('another-machine')).toEqual([false, false]);
+    expect(await local(null)).toEqual([false, false]);
+    t.config.trustUnidentifiedWorkers = true;
+    expect(await local(null)).toEqual([true, false]);
   });
 
   it('rejects a bad credential with an error, then closes', async () => {

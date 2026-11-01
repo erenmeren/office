@@ -30,7 +30,7 @@ it('buffers an approval.request made while disconnected and delivers it once aft
   });
   const port = (wss.address() as { port: number }).port;
   const conn = new WorkerConnection(
-    { apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken: 't', workspaceRoots: [home], runtime: 'fake', capacity: 1, name: 'w', tags: [], canClone: false },
+    { apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken: 't', workspaceRoots: [home], runtime: 'fake', capacity: 1, name: 'w', tags: [], canClone: false, machineId: 'm' },
     { adapter: new FakeAdapter(), heartbeatMs: 60_000, reconnectBaseMs: 300, logger: pino({ level: 'silent' }) },
   );
   cleanup.push(() => conn.stop());
@@ -82,7 +82,7 @@ function harness(reply?: (msg: WorkerToApi, ws: WebSocket) => void) {
   const port = (wss.address() as { port: number }).port;
   const make = () => {
     const conn = new WorkerConnection(
-      { apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken: 't', workspaceRoots: [home], runtime: 'fake', capacity: 1, name: 'w', tags: ['gpu'], canClone: true },
+      { apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken: 't', workspaceRoots: [home], runtime: 'fake', capacity: 1, name: 'w', tags: ['gpu'], canClone: true, machineId: 'm' },
       { adapter: new FakeAdapter(), heartbeatMs: 60_000, reconnectBaseMs: 300, logger: pino({ level: 'silent' }) },
     );
     cleanup.push(() => conn.stop());

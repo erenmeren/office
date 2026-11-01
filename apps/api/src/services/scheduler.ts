@@ -180,8 +180,9 @@ export class Scheduler {
   }
 
   /**
-   * A worker with a free slot, every required tag, and repo access: allowedRoots covering the repo (local), or
-   * for `needsRepoAccess: 'any'` (mission runs with git) one that clones. Local first, then fewest active runs.
+   * A worker with a free slot and repo access: allowedRoots covering the repo on the API's machine (local), or
+   * for `needsRepoAccess: 'any'` (mission runs with git) one that clones. Mission runs also need every required
+   * tag; local-only runs (chat, inbox, summary, non-mission tasks) ignore tags. Local first, then fewest active runs.
    */
   private pickWorker(project: { repoPath: string; settings: unknown }, opts: { needsRepoAccess: 'local' | 'any' }) {
     const { requiredWorkerTags } = ProjectSettingsSchema.parse(project.settings ?? {});
@@ -191,7 +192,7 @@ export class Scheduler {
       .filter(
         ({ w, local }) =>
           w.capacity - w.activeRuns > 0 &&
-          requiredWorkerTags.every((t) => w.tags.includes(t)) &&
+          (opts.needsRepoAccess === 'local' || requiredWorkerTags.every((t) => w.tags.includes(t))) &&
           (local || (opts.needsRepoAccess === 'any' && w.canClone)),
       )
       .sort((a, b) => Number(b.local) - Number(a.local) || a.w.activeRuns - b.w.activeRuns)[0]?.w;

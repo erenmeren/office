@@ -3,6 +3,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { MessageLimitsSchema, type MessageLimits } from '@office/shared';
+import { machineId } from '@office/runtime';
 
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -21,6 +22,7 @@ const EnvSchema = z.object({
   OFFICE_HANDOFF_CHAIN: z.coerce.number().int().positive().optional(),
   OFFICE_REPLY_TIMEOUT_MINUTES: z.coerce.number().int().nonnegative().default(60),
   OFFICE_CONTEXT_PACK_MAX_CHARS: z.coerce.number().int().positive().default(12000),
+  OFFICE_TRUST_UNIDENTIFIED_WORKERS: z.enum(['true', 'false']).default('false'),
 });
 
 export interface Config {
@@ -40,6 +42,10 @@ export interface Config {
   replyTimeoutMinutes: number;
   contextPackMaxChars: number;
   gitHooksDir: string;
+  /** This host's identity; only a worker reporting the same id may use the repo checkout directly. */
+  machineId: string;
+  /** Treat workers that send no machineId (pre-Phase 5) as on this machine when their roots cover the repo. */
+  trustUnidentifiedWorkers: boolean;
 }
 
 const defaultSkillRoot = resolve(fileURLToPath(new URL('../../../templates/skills', import.meta.url)));
@@ -90,6 +96,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     replyTimeoutMinutes: e.OFFICE_REPLY_TIMEOUT_MINUTES,
     contextPackMaxChars: e.OFFICE_CONTEXT_PACK_MAX_CHARS,
     gitHooksDir: join(packageDir(), 'git-hooks'),
+    machineId: machineId(e.OFFICE_DATA_DIR),
+    trustUnidentifiedWorkers: e.OFFICE_TRUST_UNIDENTIFIED_WORKERS === 'true',
     cookieSecure: env.NODE_ENV === 'production',
     skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot]).map(realOrGiven),
   };

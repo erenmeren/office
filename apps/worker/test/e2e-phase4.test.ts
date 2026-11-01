@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import { buildApp, loadConfig } from '@office/api';
 import { createPrisma, seed } from '@office/db';
-import { FakeAdapter } from '@office/runtime';
+import { FakeAdapter, machineId } from '@office/runtime';
 import type { RunResult, RunSpec } from '@office/shared';
 import { WorkerConnection } from '../src/connection.js';
 
@@ -136,7 +136,7 @@ describe('phase 4 end to end with the fake runtime', () => {
     connection = new WorkerConnection(
       {
         apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken, workspaceRoots: [tempRoot, repoRoot],
-        runtime: 'fake', capacity: 2, name: 'e2e', tags: [], canClone: false,
+        runtime: 'fake', capacity: 2, name: 'e2e', tags: [], canClone: false, machineId: machineId(join(home, 'data')),
       },
       { adapter, heartbeatMs: 200, reconnectBaseMs: 300, logger: pino({ level: 'silent' }) },
     );

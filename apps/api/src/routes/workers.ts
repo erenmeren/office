@@ -13,6 +13,7 @@ const PUBLIC = {
   allowedRoots: true,
   tags: true,
   canClone: true,
+  machineId: true,
   lastHeartbeatAt: true,
 } as const;
 

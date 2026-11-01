@@ -20,6 +20,8 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
     activeRunIds: z.array(z.string()),
     tags: z.array(WorkerTagSchema).default([]),
     canClone: z.boolean().default(false),
+    /** The worker host's identity; a worker is local only when it equals the API's (old workers omit it). */
+    machineId: z.string().min(1).max(128).optional(),
   }),
   z.object({
     type: z.literal('heartbeat'),
