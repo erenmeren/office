@@ -134,7 +134,7 @@ describe('effectiveAllowedTools', () => {
 });
 
 describe('office tools', () => {
-  const bridge = { call: async () => ({ ok: true as const, result: {}, suspend: true }) };
+  const bridge = { call: async () => ({ ok: true as const, result: { messageId: 'm1' }, suspend: true }) };
 
   it('builds the office server and allows its tools only when tools are served', () => {
     const o = buildQueryOptions({ ...spec, tools: ['read_inbox'] }, bridge, () => {});
@@ -150,7 +150,7 @@ describe('office tools', () => {
     h.messages = [init, { ...base, type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['interrupted'] }];
     h.beforeEnd = async () => {
       const { options } = h.calls[0] as { options: { mcpServers: { office: { tools: { handler: (a: unknown) => Promise<unknown> }[] } } } };
-      await options.mcpServers.office.tools[0]!.handler({});
+      await options.mcpServers.office.tools[0]!.handler({ to: 'qa' });
       await new Promise((r) => setTimeout(r, 5));
     };
     const events: EventBody[] = [];
@@ -162,6 +162,9 @@ describe('office tools', () => {
     );
     expect(res).toMatchObject({ status: 'suspended', sdkSessionId: 'sess-9' });
     expect(h.interrupt).toHaveBeenCalled();
+    expect(events.filter((e) => e.type === 'agent.waiting_reply')).toEqual([
+      { type: 'agent.waiting_reply', payload: { messageId: 'm1', to: 'qa' } },
+    ]);
     expect(events.some((e) => e.type === 'agent.failed')).toBe(false);
   });
 

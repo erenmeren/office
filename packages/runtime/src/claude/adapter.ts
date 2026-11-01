@@ -35,7 +35,7 @@ export function effectiveAllowedTools(spec: RunSpec): string[] {
 }
 
 /** Everything passed to the SDK except abortController. The office MCP server exists only when tools are served. */
-export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, onSuspend: () => void): Options {
+export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, onSuspend: (info: { messageId?: string; to: string }) => void): Options {
   const served = tools ? (spec.tools as OfficeToolName[]) : [];
   const allowedTools = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
   const agents = spec.subagents.length
@@ -62,7 +62,10 @@ export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, 
             tool(name, OFFICE_TOOLS[name].description, OFFICE_TOOLS[name].input, async (args) => {
               const r = await tools.call(name, args as Record<string, unknown>);
               if (!r.ok) return { content: [{ type: 'text' as const, text: `Error ${r.code}: ${r.error}` }], isError: true };
-              if (r.suspend) onSuspend();
+              if (r.suspend) {
+                const messageId = (r.result as { messageId?: string } | null)?.messageId;
+                onSuspend({ messageId, to: typeof (args as { to?: unknown }).to === 'string' ? (args as { to: string }).to : 'chief' });
+              }
               return { content: [{ type: 'text' as const, text: JSON.stringify(r.result) }] };
             }),
           ),
@@ -119,8 +122,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       q = query({
         prompt: spec.prompt,
         options: {
-          ...buildQueryOptions(spec, tools, () => {
+          ...buildQueryOptions(spec, tools, (info) => {
             suspended = true;
+            sink.emit({ type: 'agent.waiting_reply', payload: info });
             // after the tool result has been returned to the CLI
             setTimeout(() => void q?.interrupt().catch(() => {}), 0);
           }),
