@@ -248,7 +248,9 @@ async function run(
       if (!task || task.missionId !== run.reviewOfMissionId) throw new ToolError('not_found', 'task not found in the mission under review');
       if (name === 'get_task_evidence') {
         const e = await evidenceFor(prisma, task.id);
-        return { result: { ...e, rule: evidenceRule(e), consultations: await consultationsSatisfied(prisma, task) } };
+        // only the latest run's result text, capped: older ones are in its summaries
+        const runs = e.runs.map((r, i) => ({ ...r, resultText: i === e.runs.length - 1 ? r.resultText?.slice(0, 4000) ?? null : undefined }));
+        return { result: { ...e, runs, rule: evidenceRule(e), consultations: await consultationsSatisfied(prisma, task) } };
       }
       const closed = await closeTask(prisma, hub, task.id, args.decision, args.note, { chief: true, runId: run.id });
       return { result: { taskId: closed.id, status: closed.status } };

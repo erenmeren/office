@@ -81,8 +81,9 @@ export const OFFICE_TOOLS = {
     input: { taskId: z.string() },
   },
   review_task: {
-    description: 'Record your review decision for a task, either done or reopen, with a note (Chief review only).',
-    input: { taskId: z.string(), decision: z.enum(['done', 'reopen']), note: z.string().max(2000).default('') },
+    description:
+      'Record your review decision for a task: done, reopen, or failed (when it used all its attempts), with a note (Chief review only).',
+    input: { taskId: z.string(), decision: z.enum(['done', 'reopen', 'failed']), note: z.string().max(2000).default('') },
   },
 } as const satisfies Record<string, { description: string; input: z.ZodRawShape }>;
 

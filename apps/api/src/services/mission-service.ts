@@ -513,7 +513,7 @@ export async function reviewPrompt(db: Db, mission: Mission) {
         `- ${t.key ?? t.id.slice(0, 8)} (taskId ${t.id}) · ${t.kind} · status ${t.status}`,
         `  title: ${t.title}`,
         `  acceptance: ${t.acceptanceCriteria.join('; ') || 'none'}`,
-        `  runs: ${ev.runs.length}; latest: ${last ? `${last.status}, check ${last.check?.status ?? 'none'}, integration ${last.git?.integration ?? 'none'}` : 'none'}`,
+        `  attempts: ${t.attempts} of ${t.maxAttempts}; runs: ${ev.runs.length}; latest: ${last ? `${last.status}, check ${last.check?.status ?? 'none'}, integration ${last.git?.integration ?? 'none'}` : 'none'}`,
         `  evidence rule: ${rule.ok ? 'met' : `not met (${rule.reason})`}`,
         t.reviewNote ? `  note: ${t.reviewNote}` : '',
       ]
@@ -528,6 +528,7 @@ export async function reviewPrompt(db: Db, mission: Mission) {
     [
       'For every task in status review: read its evidence with get_task_evidence, inspect the mission branch read-only,',
       'then call review_task with done (only when the evidence shows the acceptance criteria are met) or reopen with a note saying what is missing.',
+      'A task that used all its attempts cannot be reopened: decide done or failed.',
       'Finish with the review JSON: a mission summary and your decision for each task you reviewed.',
     ].join(' '),
   ].join('\n\n');

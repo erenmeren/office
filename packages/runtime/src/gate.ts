@@ -4,6 +4,23 @@ import type { EventSink, ToolBridge } from './types.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
+// read-only runs: only these git subcommands (prefix match on `<sub> <args>`)
+const READ_ONLY_GIT = [
+  'status', 'log', 'diff', 'show', 'blame', 'grep', 'ls-files', 'rev-parse', 'branch --list',
+  'worktree list', 'remote -v', 'describe', 'cat-file',
+];
+// every `git [-C dir | -c k=v ...] <sub> <args>` in a command line, up to the next shell separator
+const GIT_CALL = /(?:^|[\s;&|(`])git(?:\s+(?:-[Cc]\s+\S+|--no-pager))*\s+([^;&|\n)`]*)/g;
+
+/** The first git call in `command` that is not on the read-only list. */
+function writingGitCall(command: string): string | undefined {
+  for (const m of command.matchAll(GIT_CALL)) {
+    const call = m[1]!.trim().replace(/\s+/g, ' ');
+    if (!READ_ONLY_GIT.some((r) => call === r || call.startsWith(`${r} `))) return call;
+  }
+  return undefined;
+}
+
 function mayWrite(command: string): boolean {
   const lower = command.toLowerCase();
   return (
@@ -22,8 +39,10 @@ export async function gateToolCall(
 ): Promise<{ allow: true } | { allow: false; message: string }> {
   if (spec.readOnlyCheckout) {
     if (WRITE_TOOLS.has(toolName)) return { allow: false, message: 'Read-only run: writes are not permitted' };
-    if (toolName === 'Bash' && typeof input.command === 'string' && mayWrite(input.command)) {
-      return { allow: false, message: 'Read-only run: this command may write' };
+    if (toolName === 'Bash' && typeof input.command === 'string') {
+      if (mayWrite(input.command)) return { allow: false, message: 'Read-only run: this command may write' };
+      const git = writingGitCall(input.command);
+      if (git !== undefined) return { allow: false, message: `Read-only run: git ${git} is not on the read-only git list` };
     }
   }
   if (!spec.approvalPolicy) return { allow: true };

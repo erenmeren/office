@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/app.js';
-import { createRunForTask } from '../src/services/run-service.js';
+import { createRun, createRunForTask } from '../src/services/run-service.js';
 import { makeApp } from './helpers.js';
 
 const md = (name: string, body = 'body') => `---\nname: ${name}\ndescription: does ${name}\n---\n${body}\n`;
@@ -80,5 +80,25 @@ describe('run spec skills and subagents', () => {
     expect((after.skillsSnapshot as Array<{ name: string }>).map((s) => s.name)).toEqual(['s2-eager', 's2-lazy']);
     const run = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: session.runId } });
     expect(run.agentVersionId).toBe(agent.currentVersion.id);
+  });
+
+  it('every run kind carries the project approval policy and timeout', async () => {
+    await req('PUT', `/projects/${projectId}/settings`, {
+      approvalTimeoutMinutes: 7,
+      approvalPolicy: { destructivePatterns: ['rm -rf', 'git commit'], sensitivePaths: ['.env.local'] },
+    });
+    const agent = (
+      await req('POST', '/agents', { name: 'pol', slug: 'pol', role: 'dev', config: { systemPrompt: 'x', model: 'sonnet', allowedTools: ['Read'] } })
+    ).json();
+    const task = await t.prisma.task.create({ data: { projectId, agentId: agent.id, title: 'T', description: 'd', status: 'ready' } });
+    const specs = [(await createRunForTask(t.prisma, t.app.hub, task, { workerId }, config)).spec];
+    for (const kind of ['chat', 'inbox', 'plan', 'review'] as const) {
+      specs.push((await createRun(t.prisma, t.app.hub, config, { kind, agentId: agent.id, projectId, prompt: 'p', worker: { workerId } })).spec);
+    }
+    expect(specs.map((s) => s.kind)).toEqual(['task', 'chat', 'inbox', 'plan', 'review']);
+    for (const s of specs) {
+      expect(s.approvalPolicy).toMatchObject({ destructivePatterns: ['rm -rf', 'git commit'], sensitivePaths: ['.env.local'] });
+      expect(s.approvalTimeoutMinutes).toBe(7);
+    }
   });
 });

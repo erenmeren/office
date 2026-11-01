@@ -575,4 +575,50 @@ describe('orchestration', () => {
       ok: false, code: 'evidence_missing', error: 'commits not integrated',
     });
   });
+
+  it('code evidence spans runs: a rerun that changes nothing but passes the check after integrated commits is done', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, k } = await s.approved(1, plan);
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('failed') });
+    const r1 = await s.assign(w);
+    expect(await s.tool(w, r1, 'review_task', { taskId: k.a, decision: 'reopen', note: 'fix the tests' })).toMatchObject({ ok: true });
+    await s.finish(w, r1, { status: 'succeeded', structuredOutput: { summary: 's', tasks: [] } });
+    const again = await s.assign(w);
+    await s.finish(w, again, { status: 'succeeded', resultText: 'x'.repeat(5000), git: { ...git(0), integration: 'none' }, check: check('passed') });
+    const r2 = await s.assign(w);
+    expect(r2.kind).toBe('review');
+    const ev = (await s.tool(w, r2, 'get_task_evidence', { taskId: k.a })) as { ok: true; result: { runs: { resultText?: string | null }[]; rule: { ok: boolean } } };
+    expect(ev.result.rule).toEqual({ ok: true });
+    expect(ev.result.runs[0]!.resultText).toBeUndefined();
+    expect(ev.result.runs[1]!.resultText).toHaveLength(4000);
+    expect(await s.tool(w, r2, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: true, result: { status: 'done' } });
+  });
+
+  it('a Chief reopen counts as an attempt: at maxAttempts review_task refuses reopen (logged) and accepts failed', async () => {
+    s = await setup();
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { defaultMaxAttempts: 2 });
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, k } = await s.approved(1, plan);
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('failed') });
+    const r1 = await s.assign(w);
+    expect(await s.tool(w, r1, 'review_task', { taskId: k.a, decision: 'reopen', note: 'again' })).toMatchObject({ ok: true });
+    await s.finish(w, r1, { status: 'succeeded', structuredOutput: { summary: 's', tasks: [] } });
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('failed') });
+    expect(await s.task(k.a)).toMatchObject({ status: 'review', attempts: 2, maxAttempts: 2 });
+    const r2 = await s.assign(w);
+    const warn = vi.spyOn((s.t.app.gateway as unknown as { log: { warn: (...a: unknown[]) => void } }).log, 'warn');
+    expect(await s.tool(w, r2, 'review_task', { taskId: k.a, decision: 'reopen', note: 'again' })).toEqual({
+      ok: false,
+      code: 'max_attempts',
+      error: 'task used 2 of 2 attempts and cannot be reopened; decide done or failed',
+    });
+    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ runId: r2.runId }), 'review_task reopen refused');
+    expect((await s.task(k.a)).status).toBe('review');
+    expect(await s.tool(w, r2, 'review_task', { taskId: k.a, decision: 'failed', note: 'out of attempts' })).toMatchObject({
+      ok: true, result: { status: 'failed' },
+    });
+  });
 });

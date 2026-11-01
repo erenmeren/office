@@ -30,6 +30,7 @@ export async function evidenceFor(db: Db, taskId: string) {
           ? { branch: r.branch, baseCommit: r.baseCommit, headCommit: r.headCommit, integration: r.integration }
           : null,
         check: r.checkResult ? { status: r.checkResult.status, exitCode: r.checkResult.exitCode } : null,
+        resultText: r.resultText,
         summaryIds: summaries.filter((m) => m.runId === r.id).map((m) => m.id),
         messageCount: r.session ? await db.message.count({ where: { senderSessionId: r.session.id } }) : 0,
       })),
@@ -40,17 +41,20 @@ export async function evidenceFor(db: Db, taskId: string) {
 }
 
 /**
- * §8.2: code -> the latest succeeded run committed changes and its check passed;
+ * §8.2: code -> the succeeded runs committed changes, all of them integrated into the mission branch,
+ * and the latest check among them passed (a reopened task's rerun may change nothing);
  * analysis -> an artifact or a memory entry for the task; review -> a `review` artifact.
  */
 export function evidenceRule(e: Pick<Evidence, 'task' | 'runs' | 'artifacts' | 'memoryCount'>): { ok: boolean; reason?: string } {
   if (e.task.kind === 'code') {
-    const last = e.runs.filter((r) => r.status === 'succeeded').at(-1);
-    if (!last) return { ok: false, reason: 'no succeeded run' };
+    const ok = e.runs.filter((r) => r.status === 'succeeded');
+    if (!ok.length) return { ok: false, reason: 'no succeeded run' };
     // shortcut: filesChanged is not stored; a head commit past the base stands for it
-    if (!last.git || last.git.headCommit === last.git.baseCommit) return { ok: false, reason: 'the latest succeeded run changed no files' };
-    if (last.git.integration !== 'fast_forwarded') return { ok: false, reason: 'commits not integrated' };
-    if (last.check?.status !== 'passed') return { ok: false, reason: `check ${last.check?.status ?? 'missing'} on the latest succeeded run` };
+    const committed = ok.filter((r) => r.git && r.git.headCommit !== r.git.baseCommit);
+    if (!committed.length) return { ok: false, reason: 'no succeeded run changed files' };
+    if (committed.some((r) => r.git!.integration !== 'fast_forwarded')) return { ok: false, reason: 'commits not integrated' };
+    const check = ok.filter((r) => r.check).at(-1)?.check;
+    if (check?.status !== 'passed') return { ok: false, reason: `check ${check?.status ?? 'missing'} on the latest checked run` };
     return { ok: true };
   }
   if (e.task.kind === 'analysis') {
@@ -92,14 +96,15 @@ export async function consultationsSatisfied(db: Db, task: Task): Promise<{ ok: 
 export type CloseBy = { chief?: true; runId?: string; userId?: string; override?: boolean };
 
 /**
- * review -> done or review -> ready (reopen). `done` needs the evidence rule and the required consultations
+ * review -> done, ready (reopen) or failed. `done` needs the evidence rule and the required consultations
  * unless the owner overrides. Throws 409 `evidence_missing` / `consultation_missing` with the reason as detail.
+ * The Chief's reopen leads to another run, so it cannot reopen a task that used all its attempts (409 `max_attempts`).
  */
 export async function closeTask(
   prisma: PrismaClient,
   hub: EventHub,
   taskId: string,
-  decision: 'done' | 'reopen',
+  decision: 'done' | 'reopen' | 'failed',
   note: string | undefined,
   by: CloseBy,
 ) {
@@ -116,8 +121,15 @@ export async function closeTask(
         throw new HttpError(409, 'consultation_missing', `missing consultation: ${c.missing.map((m) => `${m.agent} (${m.topic})`).join(', ')}`);
       }
     }
+    if (decision === 'reopen' && by.chief && task.attempts >= task.maxAttempts) {
+      throw new HttpError(
+        409,
+        'max_attempts',
+        `task used ${task.attempts} of ${task.maxAttempts} attempts and cannot be reopened; decide done or failed`,
+      );
+    }
     if (note || decision === 'reopen') await tx.task.update({ where: { id: taskId }, data: { reviewNote: note || 'reopened' } });
-    const updated = await setTaskStatus(tx, outbox, taskId, decision === 'done' ? 'done' : 'ready');
+    const updated = await setTaskStatus(tx, outbox, taskId, decision === 'reopen' ? 'ready' : decision);
     await audit(tx, {
       userId: by.userId,
       action: by.override ? 'task.override' : 'task.reviewed',

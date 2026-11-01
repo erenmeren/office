@@ -14,7 +14,7 @@ describe('normalizeSdkMessage', () => {
   it('maps every fixture message to the expected event types', () => {
     expect(types).toEqual([
       ['agent.started'],
-      ['agent.thinking', 'agent.text', 'agent.tool.started', 'agent.command.executed'],
+      ['agent.thinking', 'agent.text', 'agent.tool.started'],
       ['agent.tool.completed'],
       ['agent.tool.started', 'agent.subagent.spawned'],
       ['agent.tool.started', 'agent.file.changed'],
@@ -35,7 +35,6 @@ describe('normalizeSdkMessage', () => {
       agents: [],
     });
     expect(out[1]![2]!.payload).toEqual({ toolUseId: 'tu-1', tool: 'Bash', input: { command: 'echo hi' } });
-    expect(out[1]![3]!.payload).toEqual({ command: 'echo hi' });
     expect(out[3]![1]!.payload).toEqual({ toolUseId: 'tu-2', description: 'Explore repo', subagentType: 'Explore' });
     expect(out[4]![1]!.payload).toEqual({ path: '/tmp/x.ts', parentToolUseId: 'tu-2' });
     expect(out[5]![0]!.payload).toEqual({ toolUseId: 'tu-3', output: 'denied', parentToolUseId: 'tu-2' });

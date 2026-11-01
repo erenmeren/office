@@ -69,9 +69,10 @@ async function specBase(
   config: Config,
   a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string },
 ) {
-  const [project, loaded] = await Promise.all([
+  const [project, loaded, settings] = await Promise.all([
     prisma.project.findUniqueOrThrow({ where: { id: a.projectId } }),
     loadVersion(prisma, a.agentVersionId),
+    getSettings(prisma, a.projectId),
   ]);
   const { config: cfg } = loaded;
   const summary = a.kind === 'summary';
@@ -114,6 +115,9 @@ async function specBase(
       tools: toolsForKind(a.kind),
       skills: skills.map(({ name, version, checksum, mode, files }) => ({ name, version, checksum, mode, files })),
       subagents: summary ? [] : loaded.subagents,
+      // the project's approval policy gates every run kind, not only mission tasks
+      approvalPolicy: settings.approvalPolicy,
+      approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
     },
   };
 }
@@ -137,8 +141,8 @@ export interface CreateRunInput {
   reviewOfMissionId?: string;
   /** caps the agent version's maxBudgetUsd */
   taskBudgetUsd?: number;
-  /** mission run fields: git, setup/check commands, env, approval policy */
-  spec?: Partial<Pick<RunSpec, 'git' | 'setupCommand' | 'checkCommand' | 'checkTimeoutSeconds' | 'env' | 'approvalPolicy' | 'approvalTimeoutMinutes'>>;
+  /** mission run fields: git, setup/check commands, env */
+  spec?: Partial<Pick<RunSpec, 'git' | 'setupCommand' | 'checkCommand' | 'checkTimeoutSeconds' | 'env'>>;
 }
 
 export async function createRun(prisma: PrismaClient, hub: EventHub, config: Config, input: CreateRunInput) {
@@ -246,7 +250,7 @@ export async function createRunForTask(
   });
 }
 
-/** The run spec fields of a mission task: worktree (git), commands, env, approvals, kind and budget. */
+/** The run spec fields of a mission task: worktree (git), commands, env, kind and budget. */
 async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: string }) {
   const [mission, project, agent, settings] = await Promise.all([
     prisma.mission.findUniqueOrThrow({ where: { id: task.missionId } }),
@@ -273,8 +277,6 @@ async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: 
       checkCommand: code ? settings.checkCommand : undefined,
       checkTimeoutSeconds: settings.checkTimeoutSeconds,
       env: { file: settings.envFile, vars: settings.envTemplate },
-      approvalPolicy: settings.approvalPolicy,
-      approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
     },
   };
 }

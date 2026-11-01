@@ -51,10 +51,18 @@ export function buildQueryOptions(
   const allowedTools = gating ? granted.filter((t) => !GATED_TOOLS.includes(t)) : granted;
   // one decision per tool call: the hook and canUseTool may both see it, the owner is asked once
   const decisions = new Map<string, ReturnType<typeof gateToolCall>>();
+  // agent.command.executed only for a Bash call the gate let through; a denial shows as agent.tool.failed
+  const decide = async (toolName: string, input: Record<string, unknown>) => {
+    const r = await gateToolCall(spec, sink, tools, toolName, input);
+    if (r.allow && toolName === 'Bash') {
+      sink.emit({ type: 'agent.command.executed', payload: redactSecrets({ command: typeof input.command === 'string' ? input.command : undefined }) });
+    }
+    return r;
+  };
   const gate = (toolUseId: string | undefined, toolName: string, input: Record<string, unknown>) => {
-    if (!toolUseId) return gateToolCall(spec, sink, tools, toolName, input);
+    if (!toolUseId) return decide(toolName, input);
     let d = decisions.get(toolUseId);
-    if (!d) decisions.set(toolUseId, (d = gateToolCall(spec, sink, tools, toolName, input)));
+    if (!d) decisions.set(toolUseId, (d = decide(toolName, input)));
     return d;
   };
   // PreToolUse runs before allow rules (allowedTools and project settings), so the gate always applies.
@@ -128,7 +136,7 @@ export function buildQueryOptions(
       const g = await gate(toolUseID, toolName, input);
       return g.allow ? { behavior: 'allow' } : { behavior: 'deny', message: g.message };
     },
-    // gates only; normalizeSdkMessage emits the tool events
+    // gates (and emits agent.command.executed); normalizeSdkMessage emits the other tool events
     hooks: { PreToolUse: [{ hooks: [gateHook], timeout: (spec.approvalTimeoutMinutes ?? 30) * 60 + 60 }] },
     ...(spec.outputFormat && { outputFormat: spec.outputFormat }),
   };

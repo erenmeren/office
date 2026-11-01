@@ -229,7 +229,9 @@ export class WorkerGateway {
           if (!run?.session || run.session.id !== msg.sessionId) {
             return reply({ ok: false, code: 'no_lease', error: 'this worker holds no live lease on that run' });
           }
-          return reply(await executeTool(this.prisma, this.hub, this.config, { run, session: run.session }, msg.name, msg.args));
+          const r = await executeTool(this.prisma, this.hub, this.config, { run, session: run.session }, msg.name, msg.args);
+          if (!r.ok && r.code === 'max_attempts') this.log.warn({ runId: msg.runId, args: msg.args, error: r.error }, 'review_task reopen refused');
+          return reply(r);
         } catch (err) {
           this.log.error({ err, runId: msg.runId, tool: msg.name }, 'tool call failed');
           return reply({ ok: false, code: 'internal_error', error: 'internal error' });

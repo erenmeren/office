@@ -258,7 +258,7 @@ describe('policy gate and structured output', () => {
     const o = buildQueryOptions(s, b, () => {}, { emit: (e) => void events.push(e) });
     expect(await (o.canUseTool as CanUse)('Bash', { command: 'rm -rf x' }, opts)).toEqual({ behavior: 'deny', message: 'no' });
     expect(await (o.canUseTool as CanUse)('Bash', { command: 'ls' }, opts)).toEqual({ behavior: 'allow' });
-    expect(events.map((e) => e.type)).toEqual(['agent.waiting_approval', 'agent.approval.resolved']);
+    expect(events.map((e) => e.type)).toEqual(['agent.waiting_approval', 'agent.approval.resolved', 'agent.command.executed']);
   });
 });
 
@@ -301,7 +301,11 @@ describe('PreToolUse gate hook', () => {
       message: 'no',
     });
     expect(asks).toHaveLength(1);
+    // the denied call never shows as executed; the allowed one does, once, after the gate
+    expect(events.map((e) => e.type)).not.toContain('agent.command.executed');
     expect(await m.hooks[0]!(pre('Bash', { command: 'ls' }, 'tu2'), 'tu2', opts)).toEqual({});
+    await (o.canUseTool as CanUse)('Bash', { command: 'ls' }, { ...opts, toolUseID: 'tu2' });
+    expect(events.filter((e) => e.type === 'agent.command.executed')).toEqual([{ type: 'agent.command.executed', payload: { command: 'ls' } }]);
   });
 
   it('keeps gated tools out of allowedTools and disallowedTools under a policy', () => {

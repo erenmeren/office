@@ -40,6 +40,9 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${body}$`);
 }
 
+// git calls that create or rewrite commits without `git commit`: they need the same approval
+const COMMIT_EQUIVALENT = /\bgit(?:\s+-[Cc]\s+\S+)*\s+(worktree\s+add|cherry-pick|rebase|merge|am|apply|stash)(?![\w-])/i;
+
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read']);
 
 function decide(policy: ApprovalPolicy, type: ApprovalType, reason: string): PolicyVerdict {
@@ -58,6 +61,8 @@ export function evaluateToolCall(
     if (lower.includes('git push')) return decide(policy, 'git_push', `git push: ${command}`);
     const hit = policy.destructivePatterns.find((p) => lower.includes(p.toLowerCase()));
     if (hit) return decide(policy, 'destructive_command', `command matches "${hit}": ${command}`);
+    const commit = policy.destructivePatterns.some((p) => p.toLowerCase() === 'git commit') && COMMIT_EQUIVALENT.exec(command);
+    if (commit) return decide(policy, 'destructive_command', `git ${commit[1]} is commit-equivalent ("git commit"): ${command}`);
     return { verdict: 'allow' };
   }
   if (FILE_TOOLS.has(toolName)) {

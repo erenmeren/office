@@ -57,17 +57,25 @@ authed.describe('every page renders without console noise', () => {
     expectQuiet(noise);
   });
 
-  authed('mission control: submit a request creates a mission', async ({ page, noise }) => {
+  authed('mission control: submit a request creates a mission', async ({ page, request: api, noise }) => {
     await page.goto('/mission-control');
     await page.waitForLoadState('networkidle');
     const request = `E2E mission ${Date.now()}`;
-    await page.getByLabel('Request to Chief').fill(request);
-    await page.getByRole('button', { name: 'Send to Chief' }).click();
-    // no worker runs during e2e, so the mission stays in planning
-    await expect(page.getByLabel('Mission', { exact: true }).locator('option:checked')).toContainText(request);
-    await expect(page.getByText(`Plan v0 · ${request}`)).toBeVisible();
-    await expect(page.getByText('Chief is writing the plan…')).toBeVisible();
-    expectQuiet(noise);
+    try {
+      await page.getByLabel('Request to Chief').fill(request);
+      await page.getByRole('button', { name: 'Send to Chief' }).click();
+      // no worker runs during e2e, so the mission stays in planning
+      await expect(page.getByLabel('Mission', { exact: true }).locator('option:checked')).toContainText(request);
+      await expect(page.getByText(`Plan v0 · ${request}`)).toBeVisible();
+      await expect(page.getByText('Chief is writing the plan…')).toBeVisible();
+      expectQuiet(noise);
+    } finally {
+      // cancel the mission so a worker that connects later never plans it
+      const missions = (await (await api.get(`${API}/missions`)).json()) as { id: string; request: string }[];
+      for (const m of missions.filter((x) => x.request === request)) {
+        expect((await api.post(`${API}/missions/${m.id}/cancel`)).ok()).toBe(true);
+      }
+    }
   });
 
   authed('owner messages an agent', async ({ page, noise }) => {
@@ -80,6 +88,7 @@ authed.describe('every page renders without console noise', () => {
     await page.getByRole('button', { name: 'Start conversation' }).click();
     // the thread switch resets the composer; fill only once the new thread is shown
     await expect(page.getByRole('heading', { name: `You and ${agentName}` })).toBeVisible();
+    // type `message` (the composer default) wakes no agent: nothing for a worker to run later
     const body = `Hello from e2e ${Date.now()}`;
     await page.getByLabel('Message', { exact: true }).fill(body);
     await page.getByRole('button', { name: 'Send', exact: true }).click();
