@@ -160,6 +160,21 @@ describe('remote integration', () => {
     expect(git(server, 'rev-parse', 'refs/heads/office/m-runs/r')).toBe(head);
   });
 
+  it('remote fastForward never pushes a rewritten history onto the mission branch', async () => {
+    const first = await createWorktree(clone, wtDir, 'run-1', 'office/m', 'office/m-runs/1');
+    commitFile(first.path, 'b.txt', 'b', 'b');
+    const b = git(first.path, 'rev-parse', 'HEAD');
+    expect(await fastForward(clone, 'office/m', b, { credential: 'c', baseCommit: first.baseCommit, runBranch: 'office/m-runs/1' })).toBe('fast_forwarded');
+    // the agent resets below its base and commits again: a-c does not contain b
+    const second = await createWorktree(clone, wtDir, 'run-2', 'office/m', 'office/m-runs/2');
+    expect(second.baseCommit).toBe(b);
+    git(second.path, 'reset', '-q', '--hard', 'HEAD~1');
+    commitFile(second.path, 'c.txt', 'c', 'c');
+    const c = git(second.path, 'rev-parse', 'HEAD');
+    expect(await fastForward(clone, 'office/m', c, { credential: 'c', baseCommit: b, runBranch: 'office/m-runs/2' })).toBe('needs_integration');
+    expect(git(server, 'rev-parse', 'office/m')).toBe(b);
+  });
+
   it('a local update-ref CAS and a remote push CAS on the same branch admit exactly one winner', async () => {
     const local = await createWorktree(server, wtDir, 'run-local', 'office/m', 'office/m-runs/local');
     const remote = await createWorktree(clone, wtDir, 'run-remote', 'office/m', 'office/m-runs/remote');

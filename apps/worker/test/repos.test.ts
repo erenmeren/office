@@ -76,6 +76,25 @@ describe('ensureClone', () => {
     expect(git(dir, 'rev-parse', 'refs/heads/office/m3')).toBe(theirs);
   });
 
+  it('drops an unpublished mission branch, so a later call publishes it', async () => {
+    const dir = await ensureClone(opts());
+    git(dir, 'remote', 'set-url', 'office', `file://${root}/unreachable`);
+    await expect(ensureMissionBranch(dir, 'office/p', 'main', CRED)).rejects.toThrow();
+    expect(git(dir, 'branch', '--list', 'office/p')).toBe('');
+    // ensureClone resets the URL; a trailing slash on the API URL is not doubled
+    await ensureClone(opts({ apiUrl: `file://${root}/`, missionBranch: 'office/p' }));
+    expect(git(server, 'rev-parse', 'refs/heads/office/p')).toBe(git(server, 'rev-parse', 'main'));
+  });
+
+  it('replaces a clone directory that is not a repository', async () => {
+    const dir = join(root, 'repos', PROJECT);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'garbage'), 'x');
+    expect(await ensureClone(opts())).toBe(dir);
+    expect(git(dir, 'rev-parse', 'refs/remotes/office/main')).toBe(git(server, 'rev-parse', 'main'));
+    expect(readdirSync(join(root, 'repos'))).toEqual([PROJECT]);
+  });
+
   it('rejects a project id that is not a plain name', async () => {
     await expect(ensureClone(opts({ projectId: '../x' }))).rejects.toThrow('invalid project id');
   });

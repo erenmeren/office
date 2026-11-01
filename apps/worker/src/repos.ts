@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ensureMissionBranch, gitAuth } from './git.js';
+import { ensureMissionBranch, git, gitAuth } from './git.js';
 
 export interface CloneOptions {
   apiUrl: string;
@@ -33,13 +33,25 @@ export async function ensureClone(opts: CloneOptions): Promise<string> {
 }
 
 async function sync(dir: string, o: CloneOptions): Promise<string> {
+  // ws://host -> http://host, wss:// -> https://; joined like the socket URL (`${apiUrl}/ws/worker`), so a base path
+  // is kept and a trailing slash is not doubled. The credential never goes into the URL.
+  const url = o.apiUrl.replace(/^ws/, 'http').replace(/\/+$/, '') + o.remotePath;
+  // a clone killed half-way is not a repository of its own: start over
+  if (existsSync(dir) && (await git(dir, 'rev-parse', '--git-dir').catch(() => '')) !== '.git') {
+    await rm(dir, { recursive: true, force: true });
+  }
   if (!existsSync(dir)) {
     await mkdir(o.reposDir, { recursive: true });
-    // ws://host -> http://host, wss:// -> https://; the credential never goes into the URL
-    const url = o.apiUrl.replace(/^ws/, 'http') + o.remotePath;
-    await gitAuth(o.reposDir, o.credential, 'clone', '-q', '--no-checkout', '--origin', 'office', url, dir);
+    const tmp = `${dir}.tmp-${process.pid}`;
+    await rm(tmp, { recursive: true, force: true });
+    await gitAuth(o.reposDir, o.credential, 'clone', '-q', '--no-checkout', '--origin', 'office', url, tmp);
+    await rename(tmp, dir);
+  } else {
+    // follow a changed OFFICE_API_URL
+    await git(dir, 'remote', 'set-url', 'office', url);
   }
-  // --update-head-ok: run branches the API mirrors back may be checked out in a kept worktree; only that run pushes them
+  // --update-head-ok lets fetch write run branches checked out in kept worktrees; safe because run branch names are
+  // run-id-unique, only the owning run pushes them, and fetch never prunes
   await gitAuth(
     dir,
     o.credential,

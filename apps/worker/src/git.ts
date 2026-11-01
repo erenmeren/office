@@ -51,9 +51,13 @@ export async function ensureMissionBranch(repoPath: string, branch: string, defa
       await git(repoPath, 'branch', branch, defaultBranch).catch(() => {});
     } else {
       await git(repoPath, 'branch', branch, `refs/remotes/office/${defaultBranch}`);
-      await gitAuth(repoPath, credential, 'push', '-q', 'office', `${ref}:${ref}`).catch(() =>
-        gitAuth(repoPath, credential, 'fetch', '-q', 'office', `+${ref}:${ref}`),
-      );
+      await gitAuth(repoPath, credential, 'push', '-q', 'office', `${ref}:${ref}`)
+        .catch(() => gitAuth(repoPath, credential, 'fetch', '-q', 'office', `+${ref}:${ref}`))
+        .catch(async (err) => {
+          // unpublished: drop the local branch so the next run creates and publishes it again
+          await git(repoPath, 'branch', '-D', branch).catch(() => {});
+          throw err;
+        });
     }
   }
   return git(repoPath, 'rev-parse', '--verify', ref);
@@ -123,11 +127,16 @@ export async function fastForward(repoPath: string, missionBranch: string, headC
   if (remote) {
     const run = `refs/heads/${remote.runBranch}`;
     await gitAuth(repoPath, remote.credential, 'push', '-q', 'office', `${run}:${run}`);
-    const pushed = await gitAuth(repoPath, remote.credential, 'push', '-q', 'office', `${headCommit}:${ref}`, `--force-with-lease=${ref}:${remote.baseCommit}`)
-      .then(() => true, () => false);
+    // the lease implies force: a rewritten history (amend, reset) must never reach the mission branch
+    if (!(await succeeds(repoPath, 'merge-base', '--is-ancestor', remote.baseCommit, headCommit))) return 'needs_integration';
+    const pushed = await gitAuth(repoPath, remote.credential, 'push', '-q', 'office', `${headCommit}:${ref}`, `--force-with-lease=${ref}:${remote.baseCommit}`).then(
+      () => true,
+      // the server may have applied the push and the response got lost
+      () => gitAuth(repoPath, remote.credential, 'ls-remote', 'office', ref).then((out) => out.split('\t')[0] === headCommit, () => false),
+    );
     if (!pushed) return 'needs_integration';
-    // mirror the API locally, so removeWorktree sees the run branch as integrated
-    await git(repoPath, 'update-ref', ref, headCommit).catch(() => {});
+    // mirror the API locally, so removeWorktree sees the run branch as integrated; a late update never moves it back
+    await git(repoPath, 'update-ref', ref, headCommit, remote.baseCommit).catch(() => {});
     return 'fast_forwarded';
   }
   const current = await git(repoPath, 'rev-parse', '--verify', ref);
