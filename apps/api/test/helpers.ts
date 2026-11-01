@@ -9,7 +9,7 @@ export async function makeApp() {
   });
   const prisma = createPrisma(config.databaseUrl);
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "SubagentRun","SessionEvent","UsageRecord","AgentSession","TaskRun","Task","AgentSubagent","AgentSkill","AgentVersion","Agent","SkillVersion","Skill","Worker","Project","UserSession","User" CASCADE',
+    'TRUNCATE TABLE "MemorySource","MemoryEntry","MessageDelivery","Message","Conversation","SubagentRun","SessionEvent","UsageRecord","AgentSession","TaskRun","Task","AgentSubagent","AgentSkill","AgentVersion","Agent","SkillVersion","Skill","Worker","Project","UserSession","User" CASCADE',
   );
   const app = await buildApp(config, { prisma, logger: false });
   await app.ready();

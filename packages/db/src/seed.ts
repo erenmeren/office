@@ -35,6 +35,7 @@ type AgentTemplate = {
   slug: string;
   role: string;
   description: string;
+  isSystem?: boolean;
   config: Record<string, unknown> & {
     skills?: { skill: string; mode?: string }[];
     subagents?: (Record<string, unknown> | { template: string })[];
@@ -117,7 +118,7 @@ export async function seed(
     }
     const created = await prisma.$transaction(async (tx) => {
       const a = await tx.agent.create({
-        data: { name: t.name, slug: t.slug, role: t.role, description: t.description },
+        data: { name: t.name, slug: t.slug, role: t.role, description: t.description, isSystem: t.isSystem ?? false },
       });
       const v = await tx.agentVersion.create({
         data: { agentId: a.id, version: 1, config: AgentConfigSchema.parse(input) },

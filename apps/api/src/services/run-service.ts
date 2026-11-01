@@ -26,7 +26,7 @@ export function findLeasedRun(
   prisma: PrismaClient,
   runId: string,
   workerId: string,
-): Promise<(TaskRun & { session: AgentSession | null; task: Task }) | null> {
+): Promise<(TaskRun & { session: AgentSession | null; task: Task | null }) | null> {
   return prisma.taskRun.findFirst({
     where: { id: runId, workerId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: new Date() } },
     include: { session: true, task: true },
@@ -53,6 +53,8 @@ export async function createRunForTask(
     const run = await tx.taskRun.create({
       data: {
         taskId: task.id,
+        agentId: task.agentId,
+        projectId: task.projectId,
         agentVersionId: version.id,
         workerId: worker.workerId,
         status: 'queued',
@@ -113,7 +115,7 @@ async function acceptRunInTx(tx: Prisma.TransactionClient, outbox: Outbox, runId
   }
   await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
   const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId }, include: { task: true } });
-  if (run.task.status !== 'running') await setTaskStatus(tx, outbox, run.taskId, 'running');
+  if (run.task!.status !== 'running') await setTaskStatus(tx, outbox, run.taskId!, 'running');
   queueRunStatus(outbox, runId, 'running');
 }
 
@@ -129,8 +131,8 @@ export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: str
     if (count === 0) return;
     await tx.agentSession.updateMany({ where: { runId }, data: { status: 'lost', endedAt: now } });
     const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId } });
-    await tx.task.update({ where: { id: run.taskId }, data: { attempts: { decrement: 1 } } });
-    await setTaskStatus(tx, outbox, run.taskId, 'ready');
+    await tx.task.update({ where: { id: run.taskId! }, data: { attempts: { decrement: 1 } } });
+    await setTaskStatus(tx, outbox, run.taskId!, 'ready');
     queueRunStatus(outbox, runId, 'lost');
   });
   hub.publishAll(outbox);
@@ -195,10 +197,10 @@ export async function completeRun(
     });
     if (status === 'succeeded') {
       // Phase 1 auto-closes review; the Chief takes it over in Phase 4.
-      await setTaskStatus(tx, outbox, run.taskId, 'review');
-      await setTaskStatus(tx, outbox, run.taskId, 'done');
+      await setTaskStatus(tx, outbox, run.taskId!, 'review');
+      await setTaskStatus(tx, outbox, run.taskId!, 'done');
     } else {
-      await setTaskStatus(tx, outbox, run.taskId, status);
+      await setTaskStatus(tx, outbox, run.taskId!, status);
     }
     queueRunStatus(outbox, runId, status);
   });
@@ -224,7 +226,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
       if (run.session) {
         await tx.agentSession.update({ where: { id: run.session.id }, data: { status: 'lost', endedAt: now } });
       }
-      const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
+      const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId! } });
       await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
       queueRunStatus(outbox, run.id, 'lost');
       return true;
