@@ -104,7 +104,12 @@ export interface Worker {
   name: string;
   status: WorkerStatus;
   capacity: number;
+  allowedRoots: string[];
+  tags: string[];
+  canClone: boolean;
   lastHeartbeatAt: string | null;
+  online: boolean;
+  activeRuns: number;
 }
 
 export const TERMINAL: TaskStatus[] = ['done', 'failed', 'cancelled'];

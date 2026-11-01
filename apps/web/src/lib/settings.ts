@@ -1,4 +1,4 @@
-import type { ProjectSettings } from '@office/shared';
+import { WorkerTagSchema, type ProjectSettings } from '@office/shared';
 
 export type PolicyKey = keyof Omit<ProjectSettings['approvalPolicy'], 'destructivePatterns' | 'sensitivePaths'>;
 
@@ -15,6 +15,12 @@ export const linesToList = (text: string) =>
   text
     .split(/\r?\n/)
     .map((l) => l.trim())
+    .filter(Boolean);
+
+export const commaToList = (text: string) =>
+  text
+    .split(',')
+    .map((t) => t.trim())
     .filter(Boolean);
 
 export const listToLines = (list: string[]) => list.join('\n');
@@ -36,5 +42,6 @@ export function validateSettingsDraft(draft: ProjectSettings): { field: string; 
   draft.envTemplate.forEach((r, i) => {
     if (!ENV_NAME.test(r.name)) out.push({ field: `envTemplate.${i}`, message: `Env row ${i + 1}: name must be upper case letters, digits and underscores, and not start with a digit.` });
   });
+  if (draft.requiredWorkerTags.some((t) => !WorkerTagSchema.safeParse(t).success)) out.push({ field: 'requiredWorkerTags', message: 'tags are lowercase letters, digits and dashes' });
   return out;
 }
