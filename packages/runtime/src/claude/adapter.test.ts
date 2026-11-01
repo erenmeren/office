@@ -164,4 +164,44 @@ describe('office tools', () => {
     expect(h.interrupt).toHaveBeenCalled();
     expect(events.some((e) => e.type === 'agent.failed')).toBe(false);
   });
+
+  async function suspendThen(setup: () => void) {
+    h.beforeEnd = async () => {
+      const { options } = h.calls[0] as { options: { mcpServers: { office: { tools: { handler: (a: unknown) => Promise<unknown> }[] } } } };
+      await options.mcpServers.office.tools[0]!.handler({});
+      await new Promise((r) => setTimeout(r, 5));
+    };
+    setup();
+    const events: EventBody[] = [];
+    const res = await new ClaudeAdapter().run(
+      { ...spec, tools: ['send_message'] },
+      { emit: (e) => void events.push(e) },
+      new AbortController().signal,
+      bridge,
+    );
+    return { res, events };
+  }
+
+  it('suspends with the init session id when the SDK throws after interrupt', async () => {
+    const { res, events } = await suspendThen(() => {
+      h.messages = [init];
+      h.throwAtEnd = new Error('interrupted');
+    });
+    expect(res).toMatchObject({ status: 'suspended', sdkSessionId: 'sess-9' });
+    expect(events.some((e) => e.type === 'agent.failed')).toBe(false);
+  });
+
+  it('suspends with the init session id when the stream ends without a result', async () => {
+    const { res } = await suspendThen(() => {
+      h.messages = [init];
+    });
+    expect(res).toMatchObject({ status: 'suspended', sdkSessionId: 'sess-9' });
+  });
+
+  it('turns a bridge error into an isError tool result', async () => {
+    const failing = { call: async () => ({ ok: false as const, code: 'x', error: 'boom' }) };
+    const o = buildQueryOptions({ ...spec, tools: ['read_inbox'] }, failing, () => {});
+    const server = o.mcpServers!.office as unknown as { tools: { handler: (a: unknown) => Promise<unknown> }[] };
+    expect(await server.tools[0]!.handler({})).toEqual({ content: [{ type: 'text', text: 'Error x: boom' }], isError: true });
+  });
 });
