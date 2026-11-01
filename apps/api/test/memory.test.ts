@@ -107,6 +107,9 @@ describe('memory', () => {
     expect(bad.statusCode).toBe(404);
     const ok = await t.app.inject({ method: 'POST', url: `/memory/${e.id}/verify?projectId=${projectId}`, headers: { cookie } });
     expect(ok.statusCode).toBe(200);
+    const again = await t.app.inject({ method: 'POST', url: `/memory/${e.id}/verify?projectId=${projectId}`, headers: { cookie } });
+    expect(again.statusCode).toBe(200);
+    expect(again.json().verifiedAt).toBe(ok.json().verifiedAt); // verifying twice is a no-op
   });
 
   it('project-less agent lesson is managed and appears in the pack', async () => {

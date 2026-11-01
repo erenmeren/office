@@ -33,7 +33,7 @@ export async function agentRoutes(app: FastifyInstance) {
   };
 
   app.get('/agents', async () => {
-    const agents = await app.prisma.agent.findMany({ orderBy: { createdAt: 'asc' } });
+    const agents = await app.prisma.agent.findMany({ where: { isSystem: false }, orderBy: { createdAt: 'asc' } });
     return Promise.all(agents.map(withCurrent));
   });
 

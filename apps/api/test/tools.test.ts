@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { TaskRun } from '@office/db';
+import { sendMessage } from '../src/services/message-service.js';
 import { executeTool } from '../src/services/tool-service.js';
 import { makeApp } from './helpers.js';
 
@@ -85,6 +86,57 @@ describe('office tools', () => {
     expect((await t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).agentId).toBe(b);
   });
 
+  it('handoff ping-pong A->B->A->B: the 4th handoff is limit_exceeded (chain 3) and writes nothing', async () => {
+    const task = await t.prisma.task.create({ data: { projectId, agentId: a, title: 'Ping-pong' } });
+    const hand = async (from: string, to: string) => call(await ctx('task', { taskId: task.id }, from), 'handoff_task', { to, body: 'yours' });
+    expect(await hand(a, 'b')).toMatchObject({ ok: true });
+    expect(await hand(b, 'a')).toMatchObject({ ok: true });
+    expect(await hand(a, 'b')).toMatchObject({ ok: true });
+    const chains = await t.prisma.message.findMany({ where: { taskId: task.id }, orderBy: { createdAt: 'asc' } });
+    expect(chains.map((m) => m.handoffChain)).toEqual([1, 2, 3]);
+    expect(chains[1]!.inReplyToId).toBe(chains[0]!.id);
+    const before = await t.prisma.message.count();
+    expect(await hand(b, 'a')).toMatchObject({ ok: false, code: 'limit_exceeded' });
+    expect(await t.prisma.message.count()).toBe(before);
+    // the rejected handoff did not reassign the task either
+    expect((await t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).agentId).toBe(b);
+  });
+
+  it('escalation depth grows across agents; beyond depth 2 is limit_exceeded and writes nothing', async () => {
+    const chief = (await t.prisma.agent.create({ data: { name: 'chief', slug: 'chief', role: 'lead' } })).id;
+    const task = await t.prisma.task.create({ data: { projectId, agentId: a, title: 'Escalate' } });
+    // b escalated to a (depth 1); a escalates to the chief from it -> depth 2
+    const first = await sendMessage(t.prisma, t.config.messageLimits, {
+      projectId, senderAgentId: b, taskId: task.id, type: 'escalation', body: 'stuck', recipientAgentIds: [a],
+    });
+    const r = (await call(await ctx('task', { taskId: task.id }, a), 'escalate_to_chief', { body: 'help' })) as {
+      ok: true; result: { messageId: string };
+    };
+    expect(await t.prisma.message.findUniqueOrThrow({ where: { id: r.result.messageId } })).toMatchObject({
+      escalationDepth: 2, inReplyToId: first.message.id,
+    });
+    // a depth-2 escalation reaches b; b escalating again would be depth 3
+    await sendMessage(t.prisma, t.config.messageLimits, {
+      projectId, senderAgentId: chief, taskId: task.id, type: 'escalation', body: 'deeper', recipientAgentIds: [b], inReplyToId: first.message.id,
+    });
+    const before = await t.prisma.message.count();
+    expect(await call(await ctx('task', { taskId: task.id }, b), 'escalate_to_chief', { body: 'help' })).toMatchObject({
+      ok: false, code: 'limit_exceeded',
+    });
+    expect(await t.prisma.message.count()).toBe(before);
+  });
+
+  it('reply_message with another project\'s message id is not_found', async () => {
+    const foreign = await sendMessage(t.prisma, t.config.messageLimits, {
+      projectId: otherProjectId, senderAgentId: b, type: 'question', body: 'elsewhere', recipientAgentIds: [a],
+    });
+    const before = await t.prisma.message.count();
+    expect(await call(await ctx('task'), 'reply_message', { messageId: foreign.message.id, body: 'x' })).toMatchObject({
+      ok: false, code: 'not_found',
+    });
+    expect(await t.prisma.message.count()).toBe(before);
+  });
+
   it('read_inbox returns and acknowledges; reply_message answers', async () => {
     const ca = await ctx('task');
     const cb = await ctx('inbox', {}, b);
@@ -139,6 +191,15 @@ describe('office tools', () => {
     // own proposal is readable; another agent's is not
     expect(await call(c, 'read_memory', { id: e.id })).toMatchObject({ ok: true });
     expect(await call(await ctx('task', {}, b), 'read_memory', { id: e.id })).toMatchObject({ code: 'not_found' });
+  });
+
+  it('propose_memory with scope agent_project keeps the author as agentId', async () => {
+    const r = (await call(await ctx('task'), 'propose_memory', {
+      scope: 'agent_project', type: 'lesson', title: 'My lesson', content: 'c', sources: [],
+    })) as { ok: true; result: { entryId: string } };
+    expect(await t.prisma.memoryEntry.findUniqueOrThrow({ where: { id: r.result.entryId } })).toMatchObject({
+      scope: 'agent_project', agentId: a, projectId,
+    });
   });
 
   it('submit_summary writes one verified task_summary; second call -> already_submitted; task_summary proposal -> invalid_args', async () => {

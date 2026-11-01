@@ -80,19 +80,37 @@ describe('message bus', () => {
     expect(await err(send({ recipientAgentIds: [sys] }))).toBe('unknown_recipient');
   });
 
+  // the rejected send must write nothing
+  const rejectsWithoutWriting = async (p: () => Promise<unknown>) => {
+    const before = await t.prisma.message.count();
+    expect(await err(p())).toBe('limit_exceeded');
+    expect(await t.prisma.message.count()).toBe(before);
+  };
+
   it('limits', async () => {
     for (let i = 0; i < 20; i++) await send({ senderSessionId: 's-lim' });
-    expect(await err(send({ senderSessionId: 's-lim' }))).toBe('limit_exceeded');
+    await rejectsWithoutWriting(() => send({ senderSessionId: 's-lim' }));
 
     const e1 = await send({ type: 'escalation' });
     const e2 = await send({ type: 'escalation', inReplyToId: e1.message.id });
     expect(e2.message.escalationDepth).toBe(2);
-    expect(await err(send({ type: 'escalation', inReplyToId: e2.message.id }))).toBe('limit_exceeded');
+    await rejectsWithoutWriting(() => send({ type: 'escalation', inReplyToId: e2.message.id }));
 
     let prev = (await send({ type: 'handoff' })).message;
     for (let i = 0; i < 2; i++) prev = (await send({ type: 'handoff', inReplyToId: prev.id })).message;
     expect(prev.handoffChain).toBe(3);
-    expect(await err(send({ type: 'handoff', inReplyToId: prev.id }))).toBe('limit_exceeded');
+    await rejectsWithoutWriting(() => send({ type: 'handoff', inReplyToId: prev.id }));
+  });
+
+  it('per-task limit: the message after the cap is limit_exceeded (default cap 100)', async () => {
+    expect(limits.perTask).toBe(100);
+    const small = { ...limits, perTask: 5 };
+    const taskId = (await t.prisma.task.create({ data: { projectId, agentId: a, title: 'Chatty' } })).id;
+    const sendOnTask = () =>
+      sendMessage(t.prisma, small, { projectId, type: 'message', body: 'm', senderAgentId: a, recipientAgentIds: [b], taskId });
+    for (let i = 0; i < small.perTask; i++) await sendOnTask();
+    await rejectsWithoutWriting(sendOnTask);
+    expect(await t.prisma.message.count({ where: { taskId } })).toBe(small.perTask);
   });
 
   it('concurrent sends cannot overshoot the cap', async () => {

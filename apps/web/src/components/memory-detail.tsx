@@ -49,7 +49,7 @@ export function MemoryDetail({
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <TypeTag type={e.type} />
-          <MemoryStatusTag status={e.status} label={e.status === 'verified' ? 'Verified by you' : undefined} />
+          <MemoryStatusTag status={e.status} label={e.status === 'verified' ? (e.authorType === 'system' ? 'Verified by the system' : 'Verified by you') : undefined} />
         </div>
         <h2 className="font-heading text-xl leading-[26px] font-semibold">{e.title}</h2>
         <p className="max-w-prose text-sm whitespace-pre-wrap text-ink-2">{e.content}</p>

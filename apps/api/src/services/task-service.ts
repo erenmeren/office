@@ -2,13 +2,17 @@ import type { Prisma, PrismaClient } from '@office/db';
 import { transitionTask, type TaskStatus } from '@office/shared';
 import type { EventHub, Outbox } from './event-hub.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
+import { HttpError } from '../lib/errors.js';
 
 export type Db = PrismaClient | Prisma.TransactionClient;
 
-export function createTask(
+export async function createTask(
   prisma: Db,
   data: { projectId: string; agentId: string; title: string; description: string; priority?: number },
 ) {
+  const agent = await prisma.agent.findUnique({ where: { id: data.agentId } });
+  // system agents (office-summarizer) and inactive agents never take owner tasks
+  if (!agent || agent.isSystem || !agent.isActive) throw new HttpError(400, 'invalid_agent');
   // Phase 1 has no dependencies, so every new task is immediately ready.
   return prisma.task.create({ data: { ...data, status: 'ready' } });
 }

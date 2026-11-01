@@ -79,16 +79,24 @@ async function run(
     return a.id;
   };
 
-  const post = async (input: Partial<SendInput> & Pick<SendInput, 'type' | 'body'>) => {
+  // `alsoInTx` runs in the message's transaction (handoff reassigns the task atomically with its message)
+  const post = async (
+    input: Partial<SendInput> & Pick<SendInput, 'type' | 'body'>,
+    alsoInTx?: (tx: Db) => Promise<unknown>,
+  ) => {
     if (input.awaitReply && run.kind === 'inbox') throw new ToolError('not_allowed', 'inbox runs cannot await a reply');
-    const { message, deliveries } = await sendMessage(prisma, config.messageLimits, {
-      projectId,
-      senderAgentId: agentId,
-      senderSessionId: session.id,
-      senderRunId: run.id,
-      taskId,
-      recipientAgentIds: [],
-      ...input,
+    const { message, deliveries } = await prisma.$transaction(async (tx) => {
+      const sent = await sendMessage(tx, config.messageLimits, {
+        projectId,
+        senderAgentId: agentId,
+        senderSessionId: session.id,
+        senderRunId: run.id,
+        taskId,
+        recipientAgentIds: [],
+        ...input,
+      });
+      if (alsoInTx) await alsoInTx(tx);
+      return sent;
     });
     const view = toMessageView({ ...message, deliveries });
     for (const topic of [`conversation:${view.conversationId}`, 'global']) {
@@ -103,12 +111,25 @@ async function run(
     };
   };
 
+  // the latest message of `type` received by this agent on the task (or, without a task, in the run's conversation);
+  // the new message chains from it so escalation depth / handoff chain grow across agents
+  const receivedParent = async (type: 'handoff' | 'escalation') => {
+    const scope = taskId ? { taskId } : run.conversationId ? { conversationId: run.conversationId } : null;
+    if (!scope) return undefined;
+    const m = await prisma.message.findFirst({
+      where: { projectId, type, ...scope, deliveries: { some: { recipientAgentId: agentId } } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    return m?.id;
+  };
+
   const propose = (db: Db, p: Args, author: string, rid: string, tid: string | undefined) => {
     const sources: MemorySourceInput[] = [...p.sources, { kind: 'run', ref: rid }];
     return createEntry(db, {
       projectId,
       scope: p.scope,
-      agentId: p.scope === 'agent' ? author : undefined,
+      agentId: p.scope === 'agent' || p.scope === 'agent_project' ? author : undefined,
       type: p.type,
       title: p.title,
       content: p.content,
@@ -145,13 +166,15 @@ async function run(
         body: args.body,
         recipientAgentIds: [await slugToId('chief')],
         awaitReply: args.awaitReply,
+        inReplyToId: await receivedParent('escalation'),
       });
     case 'handoff_task': {
       const to = await slugToId(args.to);
-      const out = await post({ type: 'handoff', body: args.body, recipientAgentIds: [to] });
       // the task continues with the new agent on its next run
-      if (taskId) await prisma.task.updateMany({ where: { id: taskId, agentId }, data: { agentId: to } });
-      return out;
+      return post(
+        { type: 'handoff', body: args.body, recipientAgentIds: [to], inReplyToId: await receivedParent('handoff') },
+        async (tx) => taskId && tx.task.updateMany({ where: { id: taskId, agentId }, data: { agentId: to } }),
+      );
     }
     case 'reply_message': {
       const parent = await prisma.message.findFirst({ where: { id: args.messageId, projectId } });

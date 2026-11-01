@@ -135,7 +135,8 @@ export async function getEntry(db: Db, id: string, projectId: string) {
 }
 
 async function setStatus(db: Db, id: string, projectId: string | undefined, status: MemoryStatus) {
-  await ownEntry(db, id, projectId);
+  const e = await ownEntry(db, id, projectId);
+  if (status === 'verified' && e.status === 'verified') return e; // keep the original verifiedAt
   return db.memoryEntry.update({
     where: { id },
     data: { status, verifiedAt: status === 'verified' ? new Date() : null },
