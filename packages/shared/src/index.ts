@@ -7,3 +7,6 @@ export * from './protocol.js';
 export * from './agent-config.js';
 export * from './skill.js';
 export * from './subagent.js';
+export * from './messaging.js';
+export * from './memory.js';
+export * from './office-tools.js';

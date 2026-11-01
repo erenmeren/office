@@ -159,6 +159,8 @@ export async function completeRun(
   const run = await findLeasedRun(prisma, runId, workerId);
   if (!run || !run.session) throw new LeaseError(runId);
   const r = redactSecrets(result);
+  // 'suspended' results are wired up in a later Phase 3 task; map to waiting_reply meanwhile
+  const status = r.status === 'suspended' ? 'waiting_reply' : r.status;
   const now = new Date();
   const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
@@ -168,7 +170,7 @@ export async function completeRun(
     const { count } = await tx.taskRun.updateMany({
       where: { id: runId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: now } },
       data: {
-        status: r.status,
+        status,
         resultText: r.resultText,
         error: r.error,
         finishedAt: now,
@@ -178,7 +180,7 @@ export async function completeRun(
     if (count === 0) throw new LeaseError(runId);
     await tx.agentSession.update({
       where: { id: run.session!.id },
-      data: { status: r.status, sdkSessionId: r.sdkSessionId, endedAt: now },
+      data: { status, sdkSessionId: r.sdkSessionId, endedAt: now },
     });
     await tx.usageRecord.create({
       data: {
@@ -191,14 +193,14 @@ export async function completeRun(
         costUsd: r.usage.costUsd,
       },
     });
-    if (r.status === 'succeeded') {
+    if (status === 'succeeded') {
       // Phase 1 auto-closes review; the Chief takes it over in Phase 4.
       await setTaskStatus(tx, outbox, run.taskId, 'review');
       await setTaskStatus(tx, outbox, run.taskId, 'done');
     } else {
-      await setTaskStatus(tx, outbox, run.taskId, r.status);
+      await setTaskStatus(tx, outbox, run.taskId, status);
     }
-    queueRunStatus(outbox, runId, r.status);
+    queueRunStatus(outbox, runId, status);
   });
   hub.publishAll(outbox);
 }

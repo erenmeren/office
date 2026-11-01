@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EventType } from './enums.js';
-import { RunSpecSchema } from './run-spec.js';
+import { RunResultSchema, RunSpecSchema } from './run-spec.js';
 
 const base = {
   runId: 'r1',
@@ -33,5 +33,19 @@ describe('RunSpecSchema', () => {
   });
   it('knows agent.skill.invoked', () => {
     expect(EventType.options).toContain('agent.skill.invoked');
+  });
+});
+
+describe('Phase 3 run fields', () => {
+  it('defaults kind, startSeq and tools', () => {
+    const p = RunSpecSchema.parse(base);
+    expect(p.kind).toBe('task');
+    expect(p.startSeq).toBe(0);
+    expect(p.tools).toEqual([]);
+  });
+  it('requires sdkSessionId for suspended results', () => {
+    const usage = { inputTokens: 1, outputTokens: 1, costUsd: 0, numTurns: 1, durationMs: 1 };
+    expect(RunResultSchema.parse({ status: 'suspended', usage, sdkSessionId: 's' }).status).toBe('suspended');
+    expect(() => RunResultSchema.parse({ status: 'suspended', usage })).toThrow();
   });
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RunKindSchema } from './enums.js';
 import { RunSkillSchema } from './skill.js';
 import { SubagentDefinitionSchema } from './subagent.js';
 
@@ -18,6 +19,10 @@ export const RunSpecSchema = z.object({
   maxConcurrentSubagents: z.number().int().default(4),
   maxSubagentDepth: z.number().int().default(1),
   resumeSdkSessionId: z.string().optional(),
+  kind: RunKindSchema.default('task'),
+  startSeq: z.number().int().nonnegative().default(0),
+  // office tool names this run may call; the worker serves exactly these
+  tools: z.array(z.string()).default([]),
   skills: z.array(RunSkillSchema).default([]),
   subagents: z.array(SubagentDefinitionSchema).default([]),
   // worker-filled: directory passed to additionalDirectories; never set by the API
@@ -25,8 +30,9 @@ export const RunSpecSchema = z.object({
 });
 export type RunSpec = z.infer<typeof RunSpecSchema>;
 
-export const RunResultSchema = z.object({
-  status: z.enum(['succeeded', 'failed', 'cancelled']),
+export const RunResultSchema = z
+  .object({
+  status: z.enum(['succeeded', 'failed', 'cancelled', 'suspended']),
   resultText: z.string().optional(),
   error: z.string().optional(),
   sdkSessionId: z.string().optional(),
@@ -37,5 +43,10 @@ export const RunResultSchema = z.object({
     numTurns: z.number(),
     durationMs: z.number(),
   }),
-});
+  })
+  .superRefine((r, ctx) => {
+    if (r.status === 'suspended' && !r.sdkSessionId) {
+      ctx.addIssue({ code: 'custom', path: ['sdkSessionId'], message: 'required when suspended' });
+    }
+  });
 export type RunResult = z.infer<typeof RunResultSchema>;
