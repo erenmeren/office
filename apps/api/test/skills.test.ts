@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { makeApp } from './helpers.js';
 
 const md = (name: string, body = 'body') => `---\nname: ${name}\ndescription: does ${name}\n---\n${body}\n`;
@@ -20,8 +20,20 @@ describe('skills', () => {
   });
   afterAll(() => t.close());
 
-  const req = (method: 'GET' | 'POST', url: string, payload?: object) =>
+  const req = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) =>
     t.app.inject({ method, url, headers: { cookie }, payload });
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd });
+  const makeRepo = async (name: string, skill: string, body?: string) => {
+    const repo = join(root, name);
+    await mkdir(join(repo, 'skills', skill), { recursive: true });
+    await writeFile(join(repo, 'skills', skill, 'SKILL.md'), md(skill, body));
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'init');
+    return repo;
+  };
+  afterEach(() => vi.unstubAllGlobals());
 
   it('creates a UI skill as approved, versions it, and dedups identical content', async () => {
     const files = { 'SKILL.md': md('ui-skill') };
@@ -119,5 +131,64 @@ describe('skills', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe('bad_git_url');
     }
+  });
+
+  it('imports from git by frontmatter name, and refuses a bad market id', async () => {
+    const repo = await makeRepo('repo-by-name', 'named-skill');
+    const res = await req('POST', '/skills/import', { source: 'git', url: `file://${repo}`, name: 'named-skill' });
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ name: 'named-skill', source: 'git', sourceRef: `file://${repo}#HEAD:skills/named-skill` });
+    const missing = await req('POST', '/skills/import', { source: 'git', url: `file://${repo}`, name: 'nope' });
+    expect([missing.statusCode, missing.json().error]).toEqual([400, 'market_skill_not_found']);
+    const bad = await req('POST', '/skills/import', { source: 'market', id: 'not-an-id' });
+    expect([bad.statusCode, bad.json().error]).toEqual([400, 'bad_market_id']);
+  });
+
+  it('proxies the marketplace search and reports 502 when skills.sh is down', async () => {
+    const hit = { id: 'o/r/s', source: 'o/r', skillId: 's', name: 's', installs: 5, extra: 'dropped' };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ skills: [hit] }), { status: 200 })));
+    const res = await req('GET', '/skills/market?q=react');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ skills: [{ id: 'o/r/s', source: 'o/r', skillId: 's', name: 's', installs: 5 }] });
+    expect((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0]).toBe('https://skills.sh/api/search?q=react');
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('down'); }));
+    const down = await req('GET', '/skills/market?q=react');
+    expect([down.statusCode, down.json().error]).toEqual([502, 'market_unavailable']);
+    expect((await req('GET', '/skills/market')).statusCode).toBe(400);
+  });
+
+  it('updates a git skill from its source and refuses to update a UI skill', async () => {
+    const repo = await makeRepo('repo-upd', 'upd-skill');
+    const skill = (await req('POST', '/skills/import', { source: 'git', url: `file://${repo}`, path: 'skills/upd-skill' })).json();
+    const same = await req('POST', `/skills/${skill.id}/update`);
+    expect([same.statusCode, same.json().created]).toEqual([200, false]);
+    await writeFile(join(repo, 'skills/upd-skill/SKILL.md'), md('upd-skill', 'v2 body'));
+    git(repo, 'commit', '-qam', 'v2');
+    const upd = await req('POST', `/skills/${skill.id}/update`);
+    expect([upd.statusCode, upd.json().created, upd.json().version.version]).toEqual([201, true, 2]);
+    expect((await req('GET', `/skills/${skill.id}`)).json().currentVersion.files['SKILL.md']).toContain('v2 body');
+    const ui = (await req('POST', '/skills', { name: 'ui-fixed', files: { 'SKILL.md': md('ui-fixed') } })).json();
+    const no = await req('POST', `/skills/${ui.id}/update`);
+    expect([no.statusCode, no.json().error]).toEqual([400, 'not_updatable']);
+  });
+
+  it('lists model and usedBy, deletes an unpinned skill, and refuses to delete a pinned one', async () => {
+    const files = { 'SKILL.md': `---\nname: pinned-skill\ndescription: d\nmodel: haiku\n---\nbody\n` };
+    const pinned = (await req('POST', '/skills', { name: 'pinned-skill', files })).json();
+    const loose = (await req('POST', '/skills', { name: 'loose-skill', files: { 'SKILL.md': md('loose-skill') } })).json();
+    const agent = await req('POST', '/agents', {
+      name: 'pinner', slug: 'pinner', role: 'dev',
+      config: { systemPrompt: 'x', model: 'sonnet', allowedTools: ['Read'], skills: [{ skillId: pinned.id }] },
+    });
+    expect(agent.statusCode).toBe(201);
+    const list = (await req('GET', '/skills')).json() as { id: string; model: string | null; usedBy: string[] }[];
+    expect(list.find((s) => s.id === pinned.id)).toMatchObject({ model: 'haiku', usedBy: [agent.json().id] });
+    expect(list.find((s) => s.id === loose.id)).toMatchObject({ model: null, usedBy: [] });
+
+    const refused = await req('DELETE', `/skills/${pinned.id}`);
+    expect([refused.statusCode, refused.json().error, refused.json().message]).toEqual([409, 'skill_pinned', 'pinned by pinner']);
+    expect((await req('DELETE', `/skills/${loose.id}`)).statusCode).toBe(204);
+    expect((await req('GET', `/skills/${loose.id}`)).statusCode).toBe(404);
+    expect(await t.prisma.skillVersion.count({ where: { skillId: loose.id } })).toBe(0);
   });
 });

@@ -25,16 +25,16 @@ export const RunSkillSchema = z.object({
 });
 export type RunSkill = z.infer<typeof RunSkillSchema>;
 
-export function parseSkillFrontmatter(markdown: string): { name?: string; description?: string } {
+export function parseSkillFrontmatter(markdown: string): { name?: string; description?: string; model?: string } {
   const lines = markdown.split(/\r?\n/);
   if (lines[0]?.trim() !== '---') return {};
   const end = lines.indexOf('---', 1);
   if (end < 0) return {};
-  const out: { name?: string; description?: string } = {};
+  const out: { name?: string; description?: string; model?: string } = {};
   for (const line of lines.slice(1, end)) {
-    const m = /^(name|description):\s*(.*?)\s*$/.exec(line);
+    const m = /^(name|description|model):\s*(.*?)\s*$/.exec(line);
     if (!m) continue;
-    out[m[1] as 'name' | 'description'] = m[2]!.replace(/^(["'])(.*)\1$/, '$2');
+    out[m[1] as 'name' | 'description' | 'model'] = m[2]!.replace(/^(["'])(.*)\1$/, '$2');
   }
   return out;
 }
