@@ -96,6 +96,8 @@ Phase 5 (hybrid workers):
 - Remote worker container: `COPY . .` before `pnpm install` defeats layer caching (1.02 GB image); the enroll token stays in the container environment after enrollment; the entrypoint checks only that `credentials.json` exists.
 - The host firewall: on this machine ufw drops Docker bridge traffic to host port 4000, so the acceptance ran the container with the host-network override (`infra/compose.hostnet.yaml`); network isolation of the container was therefore not exercised, only filesystem isolation.
 - Data note for the owner: the `remote-1` worker row `57d49b72` from an earlier enrollment is `revoked` and stays listed; the current container is `d30c51d2`.
+- Local workers need `/etc/machine-id`: on a host without it (macOS, minimal Linux) the API and the worker each persist their own random fallback id, the ids never match, no worker is ever local and chat, inbox, summary and non-mission task runs are never scheduled (only "no eligible worker" is logged). An `OFFICE_MACHINE_ID` override read by both sides would close this.
+- A `needs_integration` caused by the worker's own ancestry check (rewritten history) carries no reason and no event; only a rejected lease push reports its stderr.
 
 Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, project membership, interactive PTY shell.
 
