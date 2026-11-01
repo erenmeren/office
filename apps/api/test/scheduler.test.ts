@@ -83,7 +83,8 @@ describe('scheduler', () => {
     const w = await worker();
     const spec = await assign(w);
     expect(spec.prompt).toContain('Fix the bug');
-    expect(spec).toMatchObject({ cwd: '/tmp/office-ws/p1', systemPrompt: 'be nice', model: 'sonnet', allowedTools: ['Read'] });
+    expect(spec).toMatchObject({ cwd: '/tmp/office-ws/p1', model: 'sonnet', allowedTools: ['Read'], kind: 'task', startSeq: 0 });
+    expect(spec.systemPrompt).toMatch(/^be nice\n\nYou can message teammates/);
     const got = await getTask(task.id);
     expect(got.status).toBe('queued');
     expect(got.attempts).toBe(1);

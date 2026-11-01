@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import pino, { type Logger } from 'pino';
 import WebSocket from 'ws';
 import type { RuntimeAdapter } from '@office/runtime';
-import { ApiToWorkerSchema, type ApiToWorker, type WorkerToApi } from '@office/shared';
+import { ApiToWorkerSchema, type ApiToWorker, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import type { WorkerConfig } from './config.js';
 import { loadCredential, saveCredential } from './credentials.js';
 import { RunExecutor } from './executor.js';
@@ -13,6 +13,7 @@ const MAX_BACKOFF_MS = 30_000;
 const START_TIMEOUT_MS = 10_000;
 // auth failed / revoked / replaced by another connection: retrying cannot help
 const FATAL_CLOSE_CODES = new Set([4401, 4403, 4409]);
+const DISCONNECTED: ToolCallResult = { ok: false, code: 'disconnected', error: 'worker disconnected' };
 
 export interface ConnectionOptions {
   adapter: RuntimeAdapter;
@@ -103,6 +104,8 @@ export class WorkerConnection {
     socket.on('error', (err) => this.log.warn({ err: err.message }, 'worker socket error'));
     socket.on('close', (code) => {
       clearInterval(this.heartbeatTimer);
+      // answers to calls in flight would go to the closed socket and never arrive
+      this.executor.failPendingTools();
       if (this.stopped) return;
       if (FATAL_CLOSE_CODES.has(code)) {
         this.log.error({ code }, 'API closed the connection; not reconnecting');
@@ -151,6 +154,9 @@ export class WorkerConnection {
         this.log.info({ runId: msg.spec.runId }, 'run assigned');
         this.executor.accept(msg.spec);
         return;
+      case 'tool.result':
+        this.executor.resolveTool(msg.callId, msg.result);
+        return;
       case 'run.cancel':
         this.log.info({ runId: msg.runId }, 'run cancelled by API');
         this.executor.cancel(msg.runId);
@@ -181,6 +187,11 @@ export class WorkerConnection {
         return;
       }
       this.unsentResults.delete(msg.runId);
+    }
+    // tool calls are not buffered: a call made while disconnected fails at once
+    if (msg.type === 'tool.call' && !open) {
+      this.executor.resolveTool(msg.callId, DISCONNECTED);
+      return;
     }
     if (open) this.socket!.send(JSON.stringify(msg));
   }

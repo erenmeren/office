@@ -1,6 +1,6 @@
 # Architecture
 
-This is a short overview of the design in `docs/superpowers/specs/2026-10-31-agent-office-design.md` (§5) and of what exists after Phase 2.
+This is a short overview of the design in `docs/superpowers/specs/2026-10-31-agent-office-design.md` (§5) and of what exists after Phase 3.
 
 ## Shape
 
@@ -10,12 +10,13 @@ This is a short overview of the design in `docs/superpowers/specs/2026-10-31-age
                  HTTP + cookie |  WebSocket /ws/ui (replay + live events)
                                v
   apps/web (Next.js, :3000) -------> apps/api (Fastify, :4000)  control plane
-                                       | REST: auth, projects, agents, skills, tasks, runs, workers
-                                       | scheduler, leases, event store, event hub
+                                       | REST: auth, projects, agents, skills, tasks, runs, workers,
+                                       |   conversations, messages, memory
+                                       | scheduler, leases, event store, event hub, office tools
                                        | Postgres (Prisma, :5433)   Redis (:6380, unused in Phase 1)
                                        ^
                  WebSocket /ws/worker  |  outbound from the worker; hello, heartbeat,
-                 (worker credential)   |  run.accepted, run.event, run.result
+                 (worker credential)   |  run.accepted, run.event, run.result, tool.call, tool.result
                                        |
                               apps/worker  execution plane
                                        | RuntimeAdapter (packages/runtime)
@@ -50,6 +51,33 @@ Materialization: when building the `RunSpec`, the API includes each pinned skill
 
 The adapter reports `agent.skill.invoked` when the agent calls the `Skill` tool, and `agent.subagent.spawned` / `agent.subagent.completed` when it calls a subagent; the API records the latter as `SubagentRun` rows (`GET /runs/:id/subagents`).
 
+## Messaging, memory and run kinds (Phase 3)
+
+A `TaskRun` has a `kind`:
+
+- `task`: the run of a task, as above.
+- `inbox`: wakes an idle agent that has unread `question`, `help_request`, `handoff` or `escalation` mail from another agent. It has no task, gets only `Read`, `Glob` and `Grep` of the version's built-in tools, at most 8 turns and 0.25 USD, and is told to read its inbox and answer.
+- `chat`: wakes an agent for mail from the owner in a `human` conversation. It resumes the conversation's SDK session, so the owner talks to one continuous session. Unlike `inbox`, it keeps the agent version's full tool surface and budget (spec §6.3). Approval gates for `chat` and `task` runs arrive in Phase 4.
+- `summary`: a run of the hidden `office-summarizer` agent (`haiku`) for one finished task run. It gets only the `submit_summary` tool: no built-in tools, skills or subagents.
+
+Agents message and remember through 14 office tools (`packages/shared/src/office-tools.ts`): `send_message`, `reply_message`, `read_inbox`, `get_conversation`, `list_agents`, `request_help`, `handoff_task`, `escalate_to_chief`, `search_memory`, `read_memory`, `propose_memory`, `get_task_history`, `get_project_decisions`, and `submit_summary` (summary runs only). The Claude adapter serves them as an in-process SDK MCP server named `office`. A tool call goes from the SDK to the worker's `ToolBridge`, over the socket as `tool.call`, and the API executes it under the run's live lease. The answer comes back as `tool.result`. The API takes the agent and project from the calling session, never from the arguments.
+
+Every message is stored before it is delivered. Delivery into a live session is at session boundaries: the agent sees new mail when it calls `read_inbox` or at its next run.
+
+Waiting for a reply: `send_message`, `request_help` or `escalate_to_chief` with `awaitReply` ends the agent's turn. The adapter interrupts the SDK query and returns `suspended` with the SDK session id. The API moves the run, session and task to `waiting_reply`, releases the lease and frees the worker slot. When the reply arrives, or after `OFFICE_REPLY_TIMEOUT_MINUTES` (default 60), the scheduler resumes the same run on a worker: `waiting_reply → queued`, `resumeSdkSessionId` set, the reply (or a timeout note) as the prompt, and `startSeq` so the event `seq` continues. The API records `agent.resumed` itself.
+
+Scheduler tick (every 2 s), in order:
+
+1. Expire leases (`waiting_reply` runs hold none).
+2. Assign `ready` tasks.
+3. Resume `waiting_reply` runs whose reply arrived or whose wait timed out.
+4. Wake idle agents with unread wake mail: one inbox or chat run per agent and project at a time, and at most two wake runs per unread wake delivery.
+5. Summarize finished task runs: one summary run per run, claimed through `summarizedAt`. With no summarizer agent the runs wait.
+
+The context pack: before every run, `buildContextPack` builds a short section for the system prompt, capped at `OFFICE_CONTEXT_PACK_MAX_CHARS` (default 12000). It holds the project overview, up to 10 verified memory entries ranked by full-text match against the task text (terms OR-ed), recent task summaries, the unread inbox and the agent's own lessons. The included entry ids, summary ids, inbox count and size are stored on `AgentSession.contextPack`, and the task page shows them.
+
+Memory: agents propose entries (`proposed`). The owner verifies, rejects, edits or deletes them in Project Memory; an edit is a new row that supersedes the old one. Only verified entries reach the context pack and `search_memory`. The summarizer's `task_summary` is stored `verified` with its run and task as sources.
+
 ## Where each spec entity lives today
 
 Built in Phase 1 (Prisma schema in `packages/db/prisma/schema.prisma`, logic in `apps/api/src`):
@@ -72,9 +100,18 @@ Built in Phase 2:
 - `AgentSession.skillsSnapshot`: the pins a session ran with.
 - Skill materialization: `apps/worker/src/skills.ts`. Agent Studio and the Skill Library: `apps/web/src/app/agents`, `apps/web/src/app/skills`.
 
+Built in Phase 3:
+
+- `Conversation`, `Message`, `MessageDelivery`: `services/message-service.ts`, `routes/conversations.ts`; conversations of kind `direct`, `task`, `group` and `human`, one delivery row per recipient, limits.
+- `MemoryEntry`, `MemorySource`: `services/memory-service.ts`, `routes/memory.ts`; types `decision`, `convention`, `api_contract`, `known_issue`, `lesson`, `task_summary`; status `proposed`, `verified`, `rejected`; a supersede chain; sources of kind `event`, `message`, `commit`, `file`, `run`, `task`; a generated `tsvector` column for search and an unused `pgvector` column.
+- `TaskRun` additions: `kind`, nullable `taskId`, `agentId`, `projectId`, `conversationId`, `waitingSince`, `waitingForMessageId`, `summaryOfRunId`, `summarizedAt`. `AgentSession.contextPack`. `Agent.isSystem` (the seeded `office-summarizer`).
+- The office tools: `services/tool-service.ts` (execution), `ws/worker-gateway.ts` (`tool.call`), `packages/runtime` (`ToolBridge`, the in-process MCP server), `apps/worker/src/executor.ts` (relay).
+- The context pack: `services/context-pack.ts`.
+- Conversations and Project Memory pages: `apps/web/src/app/conversations`, `apps/web/src/app/memory`.
+
 Not built yet:
 
-- Phase 3: `Conversation`, `Message`, `MessageDelivery`, `MemoryEntry`, `MemorySource`, `MemoryRevision`, task summaries, the context pack and the MCP tools agents use to message and remember.
-- Phase 4: `ProjectAgent` (deferred from Phase 2), `Mission`, `TaskDependency`, `GitWorkspace`, `Approval`, `Artifact`, check results, mission branches and per-run worktrees, the Chief's planning and review sessions, and the `waiting_reply` / `waiting_approval` lifecycle (the enum values exist already).
+- Phase 3 leftovers: a `MemoryRevision` table (a revision is a new `MemoryEntry` row that supersedes the old one), streaming delivery into a live session, semantic memory search, the memory purge.
+- Phase 4: `ProjectAgent` (deferred from Phase 2), `Mission`, `TaskDependency`, `GitWorkspace`, `Approval`, `Artifact`, check results, mission branches and per-run worktrees, the Chief's planning and review sessions, and the `waiting_approval` lifecycle (`waiting_reply` is built in Phase 3).
 - Phase 5: remote workers, `WorkerCapability`, remote clone.
 - Phase 6: `AuditLog`, `ProjectMember`, Agent Inspector, cost views, the interactive shell.

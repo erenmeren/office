@@ -41,6 +41,59 @@ enum RunKind {
   chat
 }
 
+enum ConversationKind {
+  direct
+  group
+  task
+  human
+}
+
+enum MessageType {
+  message
+  question
+  reply
+  handoff
+  help_request
+  escalation
+  artifact
+}
+
+enum DeliveryStatus {
+  pending
+  delivered
+  acknowledged
+}
+
+enum MemoryType {
+  decision
+  convention
+  api_contract
+  known_issue
+  lesson
+  task_summary
+}
+
+enum MemoryScope {
+  project
+  agent_project
+  agent
+}
+
+enum MemoryStatus {
+  proposed
+  verified
+  rejected
+}
+
+enum MemorySourceKind {
+  event
+  message
+  commit
+  file
+  run
+  task
+}
+
 enum WorkerStatus {
   pending
   online
@@ -77,6 +130,7 @@ model Project {
   tasks         Task[]
   sessions      AgentSession[]
   usage         UsageRecord[]
+  runs          TaskRun[]
 }
 
 model Agent {
@@ -87,11 +141,13 @@ model Agent {
   role             String
   description      String         @default("")
   isActive         Boolean        @default(true)
+  isSystem         Boolean        @default(false)
   currentVersionId String?
   versions         AgentVersion[]
   tasks            Task[]
   sessions         AgentSession[]
   usage            UsageRecord[]
+  runs             TaskRun[]
 }
 
 model AgentVersion {
@@ -145,8 +201,15 @@ model Task {
 model TaskRun {
   id             String        @id @default(uuid())
   createdAt      DateTime      @default(now())
-  taskId         String
+  taskId         String?
+  agentId        String
+  projectId      String
   kind           RunKind       @default(task)
+  conversationId String?
+  waitingSince   DateTime?
+  waitingForMessageId String?
+  summaryOfRunId String?
+  summarizedAt   DateTime?
   agentVersionId String
   workerId       String?
   status         RunStatus     @default(queued)
@@ -156,13 +219,19 @@ model TaskRun {
   resultText     String?
   error          String?
   costUsd        Float         @default(0)
-  task           Task          @relation(fields: [taskId], references: [id])
+  task           Task?         @relation(fields: [taskId], references: [id])
+  agent          Agent         @relation(fields: [agentId], references: [id])
+  project        Project       @relation(fields: [projectId], references: [id])
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
   agentVersion   AgentVersion  @relation(fields: [agentVersionId], references: [id])
   worker         Worker?       @relation(fields: [workerId], references: [id])
   session        AgentSession?
   usage          UsageRecord[]
 
   @@index([taskId])
+  @@index([agentId])
+  @@index([projectId])
+  @@index([conversationId])
   @@index([agentVersionId])
   @@index([workerId])
 }
@@ -179,6 +248,7 @@ model AgentSession {
   startedAt      DateTime
   endedAt        DateTime?
   skillsSnapshot Json?
+  contextPack    Json?
   run            TaskRun        @relation(fields: [runId], references: [id])
   agent          Agent          @relation(fields: [agentId], references: [id])
   project        Project        @relation(fields: [projectId], references: [id])
@@ -293,4 +363,101 @@ model SubagentRun {
   session      AgentSession @relation(fields: [sessionId], references: [id])
 
   @@index([sessionId])
+}
+
+model Conversation {
+  id            String           @id @default(uuid())
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  projectId     String
+  kind          ConversationKind
+  title         String
+  taskId        String?
+  agentIds      String[]
+  includesOwner Boolean          @default(false)
+  sdkSessionId  String?
+  messages      Message[]
+  runs          TaskRun[]
+
+  @@index([projectId, updatedAt])
+  @@index([taskId])
+}
+
+model Message {
+  id              String            @id @default(uuid())
+  createdAt       DateTime          @default(now())
+  conversationId  String
+  projectId       String
+  type            MessageType
+  body            String
+  senderAgentId   String?
+  senderUserId    String?
+  senderSessionId String?
+  taskId          String?
+  inReplyToId     String?
+  awaitingReply   Boolean           @default(false)
+  idempotencyKey  String?           @unique
+  escalationDepth Int               @default(0)
+  handoffChain    Int               @default(0)
+  conversation    Conversation      @relation(fields: [conversationId], references: [id])
+  deliveries      MessageDelivery[]
+
+  @@index([conversationId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([inReplyToId])
+}
+
+model MessageDelivery {
+  id               String         @id @default(uuid())
+  createdAt        DateTime       @default(now())
+  messageId        String
+  recipientAgentId String?
+  recipientUserId  String?
+  status           DeliveryStatus @default(pending)
+  deliveredAt      DateTime?
+  acknowledgedAt   DateTime?
+  message          Message        @relation(fields: [messageId], references: [id])
+
+  @@unique([messageId, recipientAgentId])
+  @@index([recipientAgentId, status])
+}
+
+model MemoryEntry {
+  id             String                       @id @default(uuid())
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+  projectId      String?
+  agentId        String?
+  scope          MemoryScope
+  type           MemoryType
+  title          String
+  content        String
+  authorType     String
+  authorAgentId  String?
+  status         MemoryStatus                 @default(proposed)
+  version        Int                          @default(1)
+  supersededById String?
+  supersededBy   MemoryEntry?                 @relation("Supersedes", fields: [supersededById], references: [id])
+  supersedes     MemoryEntry[]                @relation("Supersedes")
+  taskId         String?
+  runId          String?
+  verifiedAt     DateTime?
+  embedding      Unsupported("vector(1536)")?
+  search         Unsupported("tsvector")?
+  sources        MemorySource[]
+
+  @@index([projectId, status, type])
+  @@index([agentId])
+  @@index([taskId])
+}
+
+model MemorySource {
+  id            String           @id @default(uuid())
+  memoryEntryId String
+  kind          MemorySourceKind
+  ref           String
+  label         String?
+  memoryEntry   MemoryEntry      @relation(fields: [memoryEntryId], references: [id])
+
+  @@index([memoryEntryId])
 }

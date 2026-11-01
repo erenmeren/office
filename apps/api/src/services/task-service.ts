@@ -2,13 +2,17 @@ import type { Prisma, PrismaClient } from '@office/db';
 import { transitionTask, type TaskStatus } from '@office/shared';
 import type { EventHub, Outbox } from './event-hub.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
+import { HttpError } from '../lib/errors.js';
 
 export type Db = PrismaClient | Prisma.TransactionClient;
 
-export function createTask(
+export async function createTask(
   prisma: Db,
   data: { projectId: string; agentId: string; title: string; description: string; priority?: number },
 ) {
+  const agent = await prisma.agent.findUnique({ where: { id: data.agentId } });
+  // system agents (office-summarizer) and inactive agents never take owner tasks
+  if (!agent || agent.isSystem || !agent.isActive) throw new HttpError(400, 'invalid_agent');
   // Phase 1 has no dependencies, so every new task is immediately ready.
   return prisma.task.create({ data: { ...data, status: 'ready' } });
 }
@@ -36,12 +40,13 @@ export async function cancelTask(prisma: PrismaClient, hub: EventHub, gateway: W
   const { task, cancelled } = await prisma.$transaction(async (tx) => {
     const current = await tx.task.findUniqueOrThrow({ where: { id: taskId } });
     transitionTask(current.status, 'cancelled'); // fail before touching runs
-    const runs = await tx.taskRun.findMany({ where: { taskId, status: { in: ['queued', 'running'] } } });
+    const live = ['queued', 'running', 'waiting_reply'] as const;
+    const runs = await tx.taskRun.findMany({ where: { taskId, kind: 'task', status: { in: [...live] } } });
     const cancelled: typeof runs = [];
     for (const run of runs) {
       // guarded so a run that finishes concurrently keeps its result
       const { count } = await tx.taskRun.updateMany({
-        where: { id: run.id, status: { in: ['queued', 'running'] } },
+        where: { id: run.id, status: { in: [...live] } },
         data: { status: 'cancelled', finishedAt: now },
       });
       if (count === 0) continue;
@@ -58,7 +63,8 @@ export async function cancelTask(prisma: PrismaClient, hub: EventHub, gateway: W
   });
   hub.publishAll(outbox);
   for (const run of cancelled) {
-    if (!run.workerId) continue;
+    // a waiting run holds no worker slot
+    if (!run.workerId || run.status === 'waiting_reply') continue;
     gateway.send(run.workerId, { type: 'run.cancel', runId: run.id });
     gateway.releaseRun(run.workerId, run.id);
   }

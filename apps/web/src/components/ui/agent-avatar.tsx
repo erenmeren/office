@@ -38,3 +38,22 @@ function AgentAvatar({ name, identity, size, className, style, ...props }: Agent
 }
 
 export { AgentAvatar, avatarVariants };
+
+/** The owner, in the header's pink "You" style. */
+function OwnerAvatar({ className, ...props }: React.ComponentProps<'span'>) {
+  return (
+    <span
+      aria-hidden
+      data-slot="owner-avatar"
+      className={cn(
+        'grid size-6 shrink-0 place-items-center rounded-lg bg-linear-to-br from-pink to-[#ffa66b] font-heading text-[10px] font-bold leading-none text-on-brand',
+        className,
+      )}
+      {...props}
+    >
+      You
+    </span>
+  );
+}
+
+export { OwnerAvatar };

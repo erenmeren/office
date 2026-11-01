@@ -39,7 +39,7 @@ it('seed is idempotent: second run reports exists and adds no rows', async () =>
   const before = await count();
   const second = await seed(prisma, root);
   expect(second.every((l) => l.includes(' exists '))).toBe(true);
-  expect(second).toHaveLength(1 + 12 + 5);
+  expect(second).toHaveLength(1 + 12 + 6);
   expect(await count()).toEqual(before);
 });
 
@@ -58,4 +58,12 @@ it('seeds approved skills and the default team with pins and subagents', async (
   expect(pins).toHaveLength(6);
   expect(pins.find((p) => p.skill.name === 'frontend-design')?.mode).toBe('eager');
   expect(await prisma.agentSubagent.count({ where: { agentVersionId: designer.currentVersionId! } })).toBe(3);
+});
+
+it('seeds the system summarizer agent; team agents are not system', async () => {
+  await seed(prisma, mkdtempSync(join(tmpdir(), 'office-seed-')));
+  const sum = await prisma.agent.findUniqueOrThrow({ where: { slug: 'office-summarizer' } });
+  expect(sum.isSystem).toBe(true);
+  expect(sum.currentVersionId).not.toBeNull();
+  for (const slug of slugs) expect((await prisma.agent.findUniqueOrThrow({ where: { slug } })).isSystem).toBe(false);
 });

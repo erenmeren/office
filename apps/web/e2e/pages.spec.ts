@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/mission-control', '/agents', '/skills', '/workers', '/tasks/new'];
+const STATIC = ['/', '/mission-control', '/conversations', '/agents', '/skills', '/memory', '/workers', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {
@@ -51,6 +51,44 @@ authed.describe('every page renders without console noise', () => {
       await node.click();
       await expect(node).toHaveAttribute('aria-pressed', 'true');
       await expect(page.getByText(tasks[0].id.slice(0, 8), { exact: true }).first()).toBeVisible();
+    }
+    expectQuiet(noise);
+  });
+
+  authed('owner messages an agent', async ({ page, noise }) => {
+    await page.goto('/conversations');
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: 'Message an agent' }).click();
+    const select = page.getByLabel('Agent', { exact: true });
+    await select.selectOption({ index: 0 });
+    const agentName = (await select.locator('option').first().textContent())?.trim();
+    await page.getByRole('button', { name: 'Start conversation' }).click();
+    // the thread switch resets the composer; fill only once the new thread is shown
+    await expect(page.getByRole('heading', { name: `You and ${agentName}` })).toBeVisible();
+    const body = `Hello from e2e ${Date.now()}`;
+    await page.getByLabel('Message', { exact: true }).fill(body);
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByRole('article').filter({ hasText: body })).toBeVisible();
+    await expect(page.getByText('Saved · delivers at the next session boundary').first()).toBeVisible();
+    expectQuiet(noise);
+  });
+
+  authed('owner adds and verifies memory', async ({ page, noise }) => {
+    await page.goto('/memory');
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: 'Add memory' }).click();
+    const title = `E2E decision ${Date.now()}`;
+    await page.getByLabel('Title', { exact: true }).fill(title);
+    await page.getByLabel('Content', { exact: true }).fill('Use Postgres for everything.');
+    await page.getByRole('button', { name: 'Save memory' }).click();
+    const row = page.getByRole('button').filter({ hasText: title }).first();
+    await expect(row).toBeVisible();
+    await expect(row.getByText('Verified', { exact: true })).toBeVisible();
+    // Proposed entries come from agents only and are real data: show them, never verify them.
+    const review = page.getByRole('button', { name: 'Review now' });
+    if (await review.isVisible()) {
+      await review.click();
+      await expect(page.getByRole('button').filter({ hasText: 'Needs review' }).first()).toBeVisible();
     }
     expectQuiet(noise);
   });

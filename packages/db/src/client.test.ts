@@ -23,7 +23,7 @@ describe('db schema', () => {
     });
     const [version] = await prisma.agentVersion.findMany({ where: { agentId: agent.id } });
     const task = await prisma.task.create({ data: { projectId: project.id, agentId: agent.id, title: 't' } });
-    const run = await prisma.taskRun.create({ data: { taskId: task.id, agentVersionId: version!.id } });
+    const run = await prisma.taskRun.create({ data: { taskId: task.id, agentId: agent.id, projectId: project.id, agentVersionId: version!.id } });
     const session = await prisma.agentSession.create({
       data: { runId: run.id, agentId: agent.id, projectId: project.id, model: 'm', status: 'running', startedAt: new Date() },
     });
@@ -47,7 +47,7 @@ describe('db schema', () => {
     });
     const [av] = await prisma.agentVersion.findMany({ where: { agentId: agent.id } });
     const task = await prisma.task.create({ data: { projectId: project.id, agentId: agent.id, title: 't' } });
-    const run = await prisma.taskRun.create({ data: { taskId: task.id, agentVersionId: av!.id } });
+    const run = await prisma.taskRun.create({ data: { taskId: task.id, agentId: agent.id, projectId: project.id, agentVersionId: av!.id } });
     const session = await prisma.agentSession.create({
       data: { runId: run.id, agentId: agent.id, projectId: project.id, model: 'm', status: 'running', startedAt: new Date() },
     });

@@ -1,19 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventBody, RunSpec } from '@office/shared';
 
-const h = vi.hoisted(() => ({ messages: [] as unknown[], throwAtEnd: undefined as Error | undefined, calls: [] as unknown[] }));
+const h = vi.hoisted(() => ({ messages: [] as unknown[], throwAtEnd: undefined as Error | undefined, calls: [] as unknown[], interrupt: vi.fn(async () => {}), beforeEnd: undefined as (() => Promise<void>) | undefined }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (params: unknown) => {
     h.calls.push(params);
-    return (async function* () {
+    const gen = (async function* () {
+      if (h.beforeEnd) await h.beforeEnd();
       for (const m of h.messages) yield m;
       if (h.throwAtEnd) throw h.throwAtEnd;
     })();
+    return Object.assign(gen, { interrupt: h.interrupt });
   },
+  tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({ name, description, inputSchema, handler }),
+  createSdkMcpServer: (o: { name: string; tools: unknown[] }) => ({ type: 'sdk', name: o.name, instance: {}, tools: o.tools }),
 }));
 
-const { ClaudeAdapter, effectiveAllowedTools } = await import('./adapter.js');
+const { ClaudeAdapter, buildQueryOptions, effectiveAllowedTools } = await import('./adapter.js');
 
 const spec: RunSpec = {
   runId: 'r1',
@@ -31,7 +35,10 @@ const spec: RunSpec = {
   maxSubagentDepth: 1,
   skills: [],
   subagents: [],
-};
+  kind: 'task',
+  startSeq: 0,
+  tools: [],
+} as RunSpec;
 const init = { type: 'system', subtype: 'init', model: 'm', tools: [], session_id: 'sess-9', apiKeySource: 'none' };
 const base = { is_error: false, total_cost_usd: 0.01, num_turns: 1, duration_ms: 5, usage: { input_tokens: 1, output_tokens: 2 }, session_id: 'sess-9' };
 
@@ -45,6 +52,8 @@ beforeEach(() => {
   h.messages = [];
   h.throwAtEnd = undefined;
   h.calls = [];
+  h.beforeEnd = undefined;
+  h.interrupt.mockClear();
 });
 
 describe('ClaudeAdapter', () => {
@@ -72,7 +81,8 @@ describe('ClaudeAdapter', () => {
     expect(options.settingSources).toEqual(['project']);
     expect(options.disallowedTools).toContain('Bash');
     expect(options.disallowedTools).not.toContain('Read');
-    expect(options.disallowedTools).toContain('mcp__*');
+    expect(options.disallowedTools).not.toContain('mcp__*');
+    expect(options.strictMcpConfig).toBe(true);
     expect(options.disallowedTools).toEqual(
       expect.arrayContaining(['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool']),
     );
@@ -120,5 +130,81 @@ describe('effectiveAllowedTools', () => {
   it('does not duplicate Skill or Agent', () => {
     const s = { ...spec, allowedTools: ['Skill', 'Agent', 'Task'], skills: [skill], subagents: [sub] };
     expect(effectiveAllowedTools(s)).toEqual(['Skill', 'Agent', 'Task']);
+  });
+});
+
+describe('office tools', () => {
+  const bridge = { call: async () => ({ ok: true as const, result: { messageId: 'm1' }, suspend: true }) };
+
+  it('builds the office server and allows its tools only when tools are served', () => {
+    const o = buildQueryOptions({ ...spec, tools: ['read_inbox'] }, bridge, () => {});
+    expect(Object.keys(o.mcpServers ?? {})).toEqual(['office']);
+    expect(o.allowedTools).toContain('mcp__office__read_inbox');
+    expect(o.disallowedTools?.some((t) => t.startsWith('mcp__'))).toBe(false);
+    expect(o.strictMcpConfig).toBe(true);
+    expect(buildQueryOptions({ ...spec, tools: [] }, bridge, () => {}).mcpServers).toBeUndefined();
+    expect(buildQueryOptions({ ...spec, tools: ['read_inbox'] }, undefined, () => {}).mcpServers).toBeUndefined();
+  });
+
+  it('maps a suspend tool call to a suspended result and interrupts', async () => {
+    h.messages = [init, { ...base, type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['interrupted'] }];
+    h.beforeEnd = async () => {
+      const { options } = h.calls[0] as { options: { mcpServers: { office: { tools: { handler: (a: unknown) => Promise<unknown> }[] } } } };
+      await options.mcpServers.office.tools[0]!.handler({ to: 'qa' });
+      await new Promise((r) => setTimeout(r, 5));
+    };
+    const events: EventBody[] = [];
+    const res = await new ClaudeAdapter().run(
+      { ...spec, tools: ['send_message'] },
+      { emit: (e) => void events.push(e) },
+      new AbortController().signal,
+      bridge,
+    );
+    expect(res).toMatchObject({ status: 'suspended', sdkSessionId: 'sess-9' });
+    expect(h.interrupt).toHaveBeenCalled();
+    expect(events.filter((e) => e.type === 'agent.waiting_reply')).toEqual([
+      { type: 'agent.waiting_reply', payload: { messageId: 'm1', to: 'qa' } },
+    ]);
+    expect(events.some((e) => e.type === 'agent.failed')).toBe(false);
+  });
+
+  async function suspendThen(setup: () => void) {
+    h.beforeEnd = async () => {
+      const { options } = h.calls[0] as { options: { mcpServers: { office: { tools: { handler: (a: unknown) => Promise<unknown> }[] } } } };
+      await options.mcpServers.office.tools[0]!.handler({});
+      await new Promise((r) => setTimeout(r, 5));
+    };
+    setup();
+    const events: EventBody[] = [];
+    const res = await new ClaudeAdapter().run(
+      { ...spec, tools: ['send_message'] },
+      { emit: (e) => void events.push(e) },
+      new AbortController().signal,
+      bridge,
+    );
+    return { res, events };
+  }
+
+  it('suspends with the init session id when the SDK throws after interrupt', async () => {
+    const { res, events } = await suspendThen(() => {
+      h.messages = [init];
+      h.throwAtEnd = new Error('interrupted');
+    });
+    expect(res).toMatchObject({ status: 'suspended', sdkSessionId: 'sess-9' });
+    expect(events.some((e) => e.type === 'agent.failed')).toBe(false);
+  });
+
+  it('suspends with the init session id when the stream ends without a result', async () => {
+    const { res } = await suspendThen(() => {
+      h.messages = [init];
+    });
+    expect(res).toMatchObject({ status: 'suspended', sdkSessionId: 'sess-9' });
+  });
+
+  it('turns a bridge error into an isError tool result', async () => {
+    const failing = { call: async () => ({ ok: false as const, code: 'x', error: 'boom' }) };
+    const o = buildQueryOptions({ ...spec, tools: ['read_inbox'] }, failing, () => {});
+    const server = o.mcpServers!.office as unknown as { tools: { handler: (a: unknown) => Promise<unknown> }[] };
+    expect(await server.tools[0]!.handler({})).toEqual({ content: [{ type: 'text', text: 'Error x: boom' }], isError: true });
   });
 });

@@ -5,6 +5,7 @@ import { useCallback } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowUpRight, Ban } from 'lucide-react';
 import { canTransitionTask } from '@office/shared';
+import { TaskContext } from '@/components/task-context';
 import { RunEvents } from '@/components/run-events';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { Badge } from '@/components/ui/badge';
@@ -103,6 +104,7 @@ export function TaskDetail({ taskId }: { taskId: string }) {
               </KvValue>
             </Kv>
           </div>
+          <TaskContext taskId={t.id} projectId={t.projectId} latest={latest} />
           {t.description && (
             <Kv>
               <KvLabel>Request</KvLabel>

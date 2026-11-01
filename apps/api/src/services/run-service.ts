@@ -6,6 +6,9 @@ import type { EventHub, Outbox, RunStatusChanged } from './event-hub.js';
 import { loadVersion } from './agent-service.js';
 import { appendEvent } from './event-store.js';
 import { setTaskStatus } from './task-service.js';
+import { buildContextPack } from './context-pack.js';
+import { toolsForKind } from './tool-service.js';
+import type { WorkerGateway } from '../ws/worker-gateway.js';
 
 export class LeaseError extends Error {
   constructor(runId: string) {
@@ -26,35 +29,112 @@ export function findLeasedRun(
   prisma: PrismaClient,
   runId: string,
   workerId: string,
-): Promise<(TaskRun & { session: AgentSession | null; task: Task }) | null> {
+): Promise<(TaskRun & { session: AgentSession | null; task: Task | null }) | null> {
   return prisma.taskRun.findFirst({
     where: { id: runId, workerId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: new Date() } },
     include: { session: true, task: true },
   });
 }
 
-export async function createRunForTask(
+type RunKind = TaskRun['kind'];
+
+const MESSAGING_SECTION: Partial<Record<RunKind, string>> = {
+  inbox:
+    'You were woken to answer your inbox. Call read_inbox, reply to each question with reply_message, then stop. Do not start new work.',
+  summary: 'Call submit_summary exactly once.',
+};
+const DEFAULT_MESSAGING_SECTION =
+  'You can message teammates with the office tools (list_agents, send_message, read_inbox, …). Check read_inbox when you are blocked or when the context pack reports unread mail. Propose durable knowledge with propose_memory; the owner verifies it.';
+const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];
+
+/** Everything in a run spec that depends on the agent version, kind and project, plus the context pack. */
+async function specBase(
   prisma: PrismaClient,
-  hub: EventHub,
-  task: Task,
-  worker: { workerId: string },
   config: Config,
+  a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string },
 ) {
-  const [agent, project] = await Promise.all([
-    prisma.agent.findUniqueOrThrow({ where: { id: task.agentId } }),
-    prisma.project.findUniqueOrThrow({ where: { id: task.projectId } }),
+  const [project, loaded] = await Promise.all([
+    prisma.project.findUniqueOrThrow({ where: { id: a.projectId } }),
+    loadVersion(prisma, a.agentVersionId),
   ]);
+  const { config: cfg } = loaded;
+  const summary = a.kind === 'summary';
+  const inbox = a.kind === 'inbox';
+  const skills = summary ? [] : loaded.skills;
+  const pack = summary
+    ? null
+    : await buildContextPack(prisma, {
+        projectId: a.projectId,
+        agentId: a.agentId,
+        taskText: a.taskText,
+        maxChars: config.contextPackMaxChars,
+      });
+  const systemPrompt = [
+    cfg.systemPrompt,
+    skillPromptSection(skills),
+    MESSAGING_SECTION[a.kind] ?? DEFAULT_MESSAGING_SECTION,
+    pack?.text,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  return {
+    version: loaded.version,
+    model: cfg.model,
+    skills,
+    pack,
+    spec: {
+      agentId: a.agentId,
+      projectId: a.projectId,
+      cwd: project.repoPath,
+      systemPrompt,
+      model: cfg.model,
+      effort: cfg.effort,
+      allowedTools: summary ? [] : inbox ? cfg.allowedTools.filter((t) => INBOX_TOOLS.includes(t)) : cfg.allowedTools,
+      maxTurns: inbox ? Math.min(cfg.maxTurns, 8) : cfg.maxTurns,
+      maxBudgetUsd: inbox ? Math.min(cfg.maxBudgetUsd, 0.25) : cfg.maxBudgetUsd,
+      maxConcurrentSubagents: cfg.maxConcurrentSubagents,
+      maxSubagentDepth: cfg.maxSubagentDepth,
+      kind: a.kind,
+      tools: toolsForKind(a.kind),
+      skills: skills.map(({ name, version, checksum, mode, files }) => ({ name, version, checksum, mode, files })),
+      subagents: summary ? [] : loaded.subagents,
+    },
+  };
+}
+
+export interface CreateRunInput {
+  kind: RunKind;
+  agentId: string;
+  projectId: string;
+  taskId?: string;
+  conversationId?: string;
+  prompt: string;
+  worker: { workerId: string };
+  resumeSdkSessionId?: string;
+  startSeq?: number;
+  summaryOfRunId?: string;
+}
+
+export async function createRun(prisma: PrismaClient, hub: EventHub, config: Config, input: CreateRunInput) {
+  const agent = await prisma.agent.findUniqueOrThrow({ where: { id: input.agentId } });
   if (!agent.currentVersionId) throw new Error(`Agent ${agent.id} has no current version`);
-  const { version, config: cfg, skills, subagents } = await loadVersion(prisma, agent.currentVersionId);
-  const section = skillPromptSection(skills);
+  const { kind, agentId, projectId, taskId } = input;
+  const base = await specBase(prisma, config, {
+    kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt,
+  });
 
   const outbox: Outbox = [];
   const created = await prisma.$transaction(async (tx) => {
     const run = await tx.taskRun.create({
       data: {
-        taskId: task.id,
-        agentVersionId: version.id,
-        workerId: worker.workerId,
+        kind,
+        taskId,
+        agentId,
+        projectId,
+        conversationId: input.conversationId,
+        summaryOfRunId: input.summaryOfRunId,
+        agentVersionId: base.version.id,
+        workerId: input.worker.workerId,
         status: 'queued',
         leaseExpiresAt: leaseUntil(config),
       },
@@ -62,40 +142,149 @@ export async function createRunForTask(
     const session = await tx.agentSession.create({
       data: {
         runId: run.id,
-        agentId: task.agentId,
-        projectId: task.projectId,
-        model: cfg.model,
+        agentId,
+        projectId,
+        model: base.model,
         status: 'starting',
         startedAt: new Date(),
-        skillsSnapshot: skills.map(({ skillId, skillVersionId, name, version, checksum, mode }) => ({
+        skillsSnapshot: base.skills.map(({ skillId, skillVersionId, name, version, checksum, mode }) => ({
           skillId, skillVersionId, name, version, checksum, mode,
         })),
+        ...(base.pack && {
+          contextPack: {
+            entryIds: base.pack.entryIds,
+            summaryIds: base.pack.summaryIds,
+            inboxCount: base.pack.inboxCount,
+            chars: base.pack.text.length,
+          },
+        }),
       },
     });
-    await tx.task.update({ where: { id: task.id }, data: { attempts: { increment: 1 } } });
-    await setTaskStatus(tx, outbox, task.id, 'queued');
+    if (kind === 'task' && taskId) {
+      await tx.task.update({ where: { id: taskId }, data: { attempts: { increment: 1 } } });
+      await setTaskStatus(tx, outbox, taskId, 'queued');
+    }
     const spec = RunSpecSchema.parse({
+      ...base.spec,
       runId: run.id,
       sessionId: session.id,
-      agentId: task.agentId,
-      projectId: task.projectId,
-      cwd: project.repoPath,
-      prompt: `${task.title}\n\n${task.description}`,
-      systemPrompt: cfg.systemPrompt + (section ? '\n\n' + section : ''),
-      model: cfg.model,
-      effort: cfg.effort,
-      allowedTools: cfg.allowedTools,
-      maxTurns: cfg.maxTurns,
-      maxBudgetUsd: cfg.maxBudgetUsd,
-      maxConcurrentSubagents: cfg.maxConcurrentSubagents,
-      maxSubagentDepth: cfg.maxSubagentDepth,
-      skills: skills.map(({ name, version, checksum, mode, files }) => ({ name, version, checksum, mode, files })),
-      subagents,
+      prompt: input.prompt,
+      resumeSdkSessionId: input.resumeSdkSessionId,
+      startSeq: input.startSeq ?? 0,
     });
     return { run, session, spec };
   });
   hub.publishAll(outbox);
   return created;
+}
+
+export function createRunForTask(
+  prisma: PrismaClient,
+  hub: EventHub,
+  task: Task,
+  worker: { workerId: string },
+  config: Config,
+) {
+  return createRun(prisma, hub, config, {
+    kind: 'task',
+    agentId: task.agentId,
+    projectId: task.projectId,
+    taskId: task.id,
+    prompt: `${task.title}\n\n${task.description}`,
+    worker,
+  });
+}
+
+export type ResumeReason =
+  | { reason: 'reply'; reply: { id: string; body: string; sender: string } }
+  | { reason: 'timeout' };
+
+/**
+ * waiting_reply -> queued on `worker`: the same run and session continue, resuming the SDK session.
+ * Returns false when the run is no longer waiting (cancelled, or resumed concurrently).
+ */
+export async function resumeRun(
+  prisma: PrismaClient,
+  hub: EventHub,
+  config: Config,
+  gateway: Pick<WorkerGateway, 'send'>,
+  runId: string,
+  opts: ResumeReason & { worker: { workerId: string } },
+  log?: { warn: (obj: object, msg: string) => void },
+) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId }, include: { session: true, task: true } });
+  if (!run?.session || run.status !== 'waiting_reply') return false;
+  const session = run.session;
+  const prompt =
+    opts.reason === 'reply'
+      ? `Reply from ${opts.reply.sender}:\n${opts.reply.body}`
+      : `No reply was received within ${config.replyTimeoutMinutes} minutes. Continue or escalate.`;
+  const base = await specBase(prisma, config, {
+    kind: run.kind,
+    agentId: run.agentId,
+    projectId: run.projectId,
+    agentVersionId: run.agentVersionId,
+    taskText: run.task ? `${run.task.title}\n\n${run.task.description}` : prompt,
+  });
+  const max = await prisma.sessionEvent.aggregate({ where: { sessionId: session.id }, _max: { seq: true } });
+  const seq = (max._max.seq ?? 0) + 1;
+  const now = new Date();
+
+  const { count } = await prisma.$transaction(async (tx) => {
+    const res = await tx.taskRun.updateMany({
+      where: { id: runId, status: 'waiting_reply' },
+      data: {
+        status: 'queued',
+        workerId: opts.worker.workerId,
+        leaseExpiresAt: leaseUntil(config),
+        waitingSince: null,
+        waitingForMessageId: null,
+      },
+    });
+    if (res.count) await tx.agentSession.update({ where: { id: session.id }, data: { status: 'queued' } });
+    return res;
+  });
+  if (count === 0) return false;
+
+  const event: OfficeEvent = {
+    type: 'agent.resumed',
+    seq,
+    ts: now.toISOString(),
+    sessionId: session.id,
+    runId,
+    agentId: run.agentId,
+    projectId: run.projectId,
+    payload: opts.reason === 'reply' ? { reason: 'reply', messageId: opts.reply.id } : { reason: 'timeout' },
+  };
+  if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${runId}`, event);
+  hub.publish(`run:${runId}`, { type: 'run.status.changed', runId, status: 'queued' });
+
+  // the worker numbers its next event startSeq + 1, after agent.resumed
+  const spec = RunSpecSchema.parse({
+    ...base.spec,
+    runId,
+    sessionId: session.id,
+    prompt,
+    resumeSdkSessionId: session.sdkSessionId ?? undefined,
+    startSeq: seq,
+  });
+  if (!gateway.send(opts.worker.workerId, { type: 'run.assign', spec })) {
+    log?.warn({ runId, workerId: opts.worker.workerId }, 'resume run.assign not delivered; run waits again');
+    await prisma.$transaction(async (tx) => {
+      const back = await tx.taskRun.updateMany({
+        where: { id: runId, status: 'queued' },
+        data: {
+          status: 'waiting_reply',
+          leaseExpiresAt: null,
+          waitingSince: run.waitingSince,
+          waitingForMessageId: run.waitingForMessageId,
+        },
+      });
+      if (back.count) await tx.agentSession.update({ where: { id: session.id }, data: { status: 'waiting_reply' } });
+    });
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -113,7 +302,7 @@ async function acceptRunInTx(tx: Prisma.TransactionClient, outbox: Outbox, runId
   }
   await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
   const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId }, include: { task: true } });
-  if (run.task.status !== 'running') await setTaskStatus(tx, outbox, run.taskId, 'running');
+  if (run.kind === 'task' && run.task && run.task.status !== 'running') await setTaskStatus(tx, outbox, run.task.id, 'running');
   queueRunStatus(outbox, runId, 'running');
 }
 
@@ -129,8 +318,12 @@ export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: str
     if (count === 0) return;
     await tx.agentSession.updateMany({ where: { runId }, data: { status: 'lost', endedAt: now } });
     const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId } });
-    await tx.task.update({ where: { id: run.taskId }, data: { attempts: { decrement: 1 } } });
-    await setTaskStatus(tx, outbox, run.taskId, 'ready');
+    if (run.kind === 'task' && run.taskId) {
+      await tx.task.update({ where: { id: run.taskId }, data: { attempts: { decrement: 1 } } });
+      await setTaskStatus(tx, outbox, run.taskId, 'ready');
+    }
+    // let the scheduler summarize that run again
+    if (run.summaryOfRunId) await tx.taskRun.update({ where: { id: run.summaryOfRunId }, data: { summarizedAt: null } });
     queueRunStatus(outbox, runId, 'lost');
   });
   hub.publishAll(outbox);
@@ -159,6 +352,8 @@ export async function completeRun(
   const run = await findLeasedRun(prisma, runId, workerId);
   if (!run || !run.session) throw new LeaseError(runId);
   const r = redactSecrets(result);
+  const suspended = r.status === 'suspended';
+  const status = r.status === 'suspended' ? 'waiting_reply' : r.status;
   const now = new Date();
   const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
@@ -167,18 +362,15 @@ export async function completeRun(
     // guarded again here so a lease expiring between the check and the write still loses
     const { count } = await tx.taskRun.updateMany({
       where: { id: runId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: now } },
-      data: {
-        status: r.status,
-        resultText: r.resultText,
-        error: r.error,
-        finishedAt: now,
-        costUsd: r.usage.costUsd,
-      },
+      data: suspended
+        ? // parked without a lease: the worker slot is free; workerId stays for the record
+          { status, waitingSince: now, leaseExpiresAt: null, costUsd: { increment: r.usage.costUsd } }
+        : { status, resultText: r.resultText, error: r.error, finishedAt: now, costUsd: { increment: r.usage.costUsd } },
     });
     if (count === 0) throw new LeaseError(runId);
     await tx.agentSession.update({
       where: { id: run.session!.id },
-      data: { status: r.status, sdkSessionId: r.sdkSessionId, endedAt: now },
+      data: { status, sdkSessionId: r.sdkSessionId, ...(suspended ? {} : { endedAt: now }) },
     });
     await tx.usageRecord.create({
       data: {
@@ -191,14 +383,19 @@ export async function completeRun(
         costUsd: r.usage.costUsd,
       },
     });
-    if (r.status === 'succeeded') {
-      // Phase 1 auto-closes review; the Chief takes it over in Phase 4.
-      await setTaskStatus(tx, outbox, run.taskId, 'review');
-      await setTaskStatus(tx, outbox, run.taskId, 'done');
-    } else {
-      await setTaskStatus(tx, outbox, run.taskId, r.status);
+    if (run.kind === 'chat' && run.conversationId && r.sdkSessionId) {
+      await tx.conversation.update({ where: { id: run.conversationId }, data: { sdkSessionId: r.sdkSessionId } });
     }
-    queueRunStatus(outbox, runId, r.status);
+    if (run.kind === 'task' && run.taskId) {
+      if (status === 'succeeded') {
+        // Phase 1 auto-closes review; the Chief takes it over in Phase 4.
+        await setTaskStatus(tx, outbox, run.taskId, 'review');
+        await setTaskStatus(tx, outbox, run.taskId, 'done');
+      } else {
+        await setTaskStatus(tx, outbox, run.taskId, status);
+      }
+    }
+    queueRunStatus(outbox, runId, status);
   });
   hub.publishAll(outbox);
 }
@@ -222,8 +419,12 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
       if (run.session) {
         await tx.agentSession.update({ where: { id: run.session.id }, data: { status: 'lost', endedAt: now } });
       }
-      const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
-      await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
+      if (run.kind === 'task' && run.taskId) {
+        const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
+        // a resumed run lost before accept: its task is still waiting_reply, which cannot go to ready
+        if (task.status === 'waiting_reply') await setTaskStatus(tx, outbox, task.id, 'running');
+        await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
+      }
       queueRunStatus(outbox, run.id, 'lost');
       return true;
     });

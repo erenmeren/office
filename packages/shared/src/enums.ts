@@ -29,6 +29,7 @@ export type RunStatus = z.infer<typeof RunStatus>;
 
 export const RunKind = z.enum(['task', 'inbox', 'plan', 'review', 'summary', 'chat']);
 export type RunKind = z.infer<typeof RunKind>;
+export const RunKindSchema = RunKind;
 
 export const WorkerStatus = z.enum(['pending', 'online', 'offline', 'revoked']);
 export type WorkerStatus = z.infer<typeof WorkerStatus>;
@@ -48,6 +49,8 @@ export const EventType = z.enum([
   'agent.message.sent',
   'agent.message.received',
   'agent.waiting_approval',
+  'agent.waiting_reply',
+  'agent.resumed',
   'agent.approval.resolved',
   'agent.completed',
   'agent.failed',

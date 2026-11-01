@@ -7,6 +7,7 @@ import { InvalidTransitionError, SkillValidationError } from '@office/shared';
 import type { PrismaClient } from '@office/db';
 import type { Config } from './config.js';
 import { HttpError } from './lib/errors.js';
+import { MessageError } from './services/message-service.js';
 import { registerPrisma } from './plugins/prisma.js';
 import { registerAuth } from './plugins/auth.js';
 import { healthRoutes } from './routes/health.js';
@@ -15,6 +16,8 @@ import { projectRoutes } from './routes/projects.js';
 import { agentRoutes } from './routes/agents.js';
 import { skillRoutes } from './routes/skills.js';
 import { taskRoutes } from './routes/tasks.js';
+import { conversationRoutes } from './routes/conversations.js';
+import { memoryRoutes } from './routes/memory.js';
 import { runRoutes } from './routes/runs.js';
 import { workerRoutes } from './routes/workers.js';
 import { EventHub } from './services/event-hub.js';
@@ -48,6 +51,9 @@ export async function buildApp(
     if (err instanceof HttpError) {
       return reply.code(err.status).send(err.detail ? { error: err.code, message: err.detail } : { error: err.code });
     }
+    if (err instanceof MessageError) {
+      return reply.code(err.code === 'not_found' ? 404 : 400).send({ error: err.code });
+    }
     if (err instanceof SkillValidationError) {
       return reply.code(400).send({ error: 'invalid_skill', code: err.code, message: err.message });
     }
@@ -80,6 +86,8 @@ export async function buildApp(
   gateway.register(app);
   new UiGateway(app.prisma, hub, app.log).register(app, config.webOrigin);
   await app.register(taskRoutes);
+  await app.register(conversationRoutes, { config });
+  await app.register(memoryRoutes);
   await app.register(runRoutes);
   await app.register(workerRoutes);
   app.addHook('onReady', async () => scheduler.start());

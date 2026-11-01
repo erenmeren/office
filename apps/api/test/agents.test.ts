@@ -126,4 +126,11 @@ describe('agents', () => {
     const dup = await req('POST', '/projects', { name: 'P2', slug: 'p', repoPath: '/tmp/p2' });
     expect(dup.statusCode).toBe(409);
   });
+
+  it('GET /agents hides system agents; the detail route still returns them', async () => {
+    const sys = await t.prisma.agent.create({ data: { name: 'Sum', slug: 'office-summarizer', role: 'system', isSystem: true } });
+    const list = (await req('GET', '/agents')).json() as { id: string }[];
+    expect(list.map((a) => a.id)).not.toContain(sys.id);
+    expect((await req('GET', `/agents/${sys.id}`)).statusCode).toBe(200);
+  });
 });
