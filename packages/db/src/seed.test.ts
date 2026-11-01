@@ -39,7 +39,7 @@ it('seed is idempotent: second run reports exists and adds no rows', async () =>
   const before = await count();
   const second = await seed(prisma, root);
   expect(second.every((l) => l.includes(' exists '))).toBe(true);
-  expect(second).toHaveLength(1 + 12 + 6);
+  expect(second).toHaveLength(1 + 12 + 6 + 1 + 5);
   expect(await count()).toEqual(before);
 });
 
@@ -66,4 +66,16 @@ it('seeds the system summarizer agent; team agents are not system', async () => 
   expect(sum.isSystem).toBe(true);
   expect(sum.currentVersionId).not.toBeNull();
   for (const slug of slugs) expect((await prisma.agent.findUniqueOrThrow({ where: { slug } })).isSystem).toBe(false);
+});
+
+it('seeds project agents for non-system agents and sandbox settings, idempotently', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'office-seed-'));
+  await seed(prisma, root);
+  const project = await prisma.project.findUniqueOrThrow({ where: { slug: 'office-sandbox' } });
+  const nonSystem = slugs.length;
+  const count = () => prisma.projectAgent.count({ where: { projectId: project.id, agent: { slug: { in: slugs } } } });
+  expect(await count()).toBe(nonSystem);
+  expect((project.settings as { checkCommand?: string }).checkCommand).toBe('node --test');
+  await seed(prisma, root);
+  expect(await count()).toBe(nonSystem);
 });

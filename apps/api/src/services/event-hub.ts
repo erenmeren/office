@@ -8,7 +8,16 @@ export type TaskStatusChanged = {
 };
 export type MessageCreated = Extract<UiServerMessage, { type: 'message.created' }>;
 export type MemoryChanged = Extract<UiServerMessage, { type: 'memory.changed' }>;
-export type HubMessage = OfficeEvent | RunStatusChanged | TaskStatusChanged | MessageCreated | MemoryChanged;
+export type MissionStatusChanged = Omit<Extract<UiServerMessage, { type: 'mission.status.changed' }>, 'topic'>;
+export type ApprovalChanged = Omit<Extract<UiServerMessage, { type: 'approval.changed' }>, 'topic'>;
+export type HubMessage =
+  | OfficeEvent
+  | RunStatusChanged
+  | TaskStatusChanged
+  | MessageCreated
+  | MemoryChanged
+  | MissionStatusChanged
+  | ApprovalChanged;
 
 /** Messages collected inside a transaction; publish them with `hub.publishAll` only after it commits. */
 export type Outbox = Array<{ topic: string; message: HubMessage }>;

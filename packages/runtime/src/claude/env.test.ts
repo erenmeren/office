@@ -18,3 +18,16 @@ it('strips CLAUDE*, AI_AGENT and Office secrets and sets subagent limits', () =>
     CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH: '1',
   });
 });
+
+it('sets the git author and committer from spec.git', () => {
+  const git = {
+    repoPath: '/r', defaultBranch: 'main', missionBranch: 'office/m', taskSlug: 't',
+    committerName: 'Office', committerEmail: 'o@example.invalid', agentName: 'developer',
+  };
+  expect(buildChildEnv({ PATH: '/bin' }, { maxConcurrentSubagents: 1, maxSubagentDepth: 1, git })).toMatchObject({
+    GIT_AUTHOR_NAME: 'Office',
+    GIT_AUTHOR_EMAIL: 'o@example.invalid',
+    GIT_COMMITTER_NAME: 'Office',
+    GIT_COMMITTER_EMAIL: 'o@example.invalid',
+  });
+});

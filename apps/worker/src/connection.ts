@@ -33,6 +33,8 @@ export class WorkerConnection {
   private backoffMs: number;
   // results produced while disconnected, sent after the next welcome
   private unsentResults = new Map<string, WorkerToApi>();
+  // approval requests made while disconnected, sent after the next welcome; the API's timeout then applies
+  private unsentApprovals = new Map<string, WorkerToApi>();
   private heartbeatTimer?: NodeJS.Timeout;
   private reconnectTimer?: NodeJS.Timeout;
   private stopped = false;
@@ -48,7 +50,7 @@ export class WorkerConnection {
     this.heartbeatMs = opts.heartbeatMs ?? 10_000;
     this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
     this.backoffMs = this.reconnectBaseMs;
-    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir);
+    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log);
   }
 
   /** Connects and resolves once the API welcomes this worker. */
@@ -141,6 +143,9 @@ export class WorkerConnection {
         }
         this.backoffMs = this.reconnectBaseMs;
         for (const result of this.unsentResults.values()) this.send(result);
+        const approvals = [...this.unsentApprovals.values()];
+        this.unsentApprovals.clear();
+        for (const request of approvals) this.send(request);
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = setInterval(
           () => this.send({ type: 'heartbeat', capacity: this.config.capacity, activeRunIds: this.activeRunIds() }),
@@ -156,6 +161,9 @@ export class WorkerConnection {
         return;
       case 'tool.result':
         this.executor.resolveTool(msg.callId, msg.result);
+        return;
+      case 'approval.result':
+        this.executor.resolveApproval(msg.runId, msg.decision);
         return;
       case 'run.cancel':
         this.log.info({ runId: msg.runId }, 'run cancelled by API');
@@ -191,6 +199,11 @@ export class WorkerConnection {
     // tool calls are not buffered: a call made while disconnected fails at once
     if (msg.type === 'tool.call' && !open) {
       this.executor.resolveTool(msg.callId, DISCONNECTED);
+      return;
+    }
+    // one already sent stays pending across a reconnect; the API re-sends its decision
+    if (msg.type === 'approval.request' && !open) {
+      this.unsentApprovals.set(msg.request.requestId, msg);
       return;
     }
     if (open) this.socket!.send(JSON.stringify(msg));

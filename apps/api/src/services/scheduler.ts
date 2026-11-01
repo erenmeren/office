@@ -10,6 +10,10 @@ import type { EventHub } from './event-hub.js';
 import { pendingWakeDeliveries } from './message-service.js';
 import { abandonRun, createRun, createRunForTask, expireLeases, resumeRun } from './run-service.js';
 import { summaryPrompt } from './summary-prompt.js';
+import { startPlanRun, startReviewRun } from './mission-service.js';
+import { gate, requestBudgetApproval } from './budget-service.js';
+import { getSettings } from './project-service.js';
+import { expireApprovals } from './approval-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
@@ -29,6 +33,8 @@ export class Scheduler {
   // ready tasks already warned about having no eligible worker
   private warnedNoWorker = new Set<string>();
   private warnedNoSummarizer = false;
+  // ready tasks already logged as blocked, with the reason logged
+  private loggedBlocked = new Map<string, string>();
 
   constructor(
     private prisma: PrismaClient,
@@ -68,19 +74,64 @@ export class Scheduler {
     } catch (err) {
       this.log.error({ err }, 'expireLeases failed');
     }
-    let tasks;
     try {
-      tasks = await this.prisma.task.findMany({
-        where: { status: 'ready' },
-        orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
-        include: { project: true },
-      });
+      await this.planMissions();
+    } catch (err) {
+      this.log.error({ err }, 'planning missions failed');
+    }
+    try {
+      await this.resumeWaiting();
+    } catch (err) {
+      this.log.error({ err }, 'resuming waiting runs failed');
+    }
+    try {
+      await this.assignReadyTasks();
     } catch (err) {
       this.log.error({ err }, 'scheduler could not list ready tasks');
-      return;
     }
+    try {
+      await this.wakeAgents();
+    } catch (err) {
+      this.log.error({ err }, 'waking agents failed');
+    }
+    try {
+      await this.summarize();
+    } catch (err) {
+      this.log.error({ err }, 'enqueuing summary runs failed');
+    }
+    try {
+      await expireApprovals(this.prisma, this.hub, this.gateway);
+    } catch (err) {
+      this.log.error({ err }, 'expiring approvals failed');
+    }
+    try {
+      await this.reviewMissions();
+    } catch (err) {
+      this.log.error({ err }, 'starting mission reviews failed');
+    }
+  }
+
+  /** Ready tasks, by priority, that pass the agent/project gates and find a worker. */
+  private async assignReadyTasks() {
+    const tasks = await this.prisma.task.findMany({
+      where: { status: 'ready' },
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+      include: { project: true, agent: true },
+    });
     for (const task of tasks) {
       try {
+        const verdict = await gate(this.prisma, await getSettings(this.prisma, task.projectId), task, task.agent);
+        if (!verdict.ok) {
+          if (this.loggedBlocked.get(task.id) !== verdict.reason) {
+            this.loggedBlocked.set(task.id, verdict.reason);
+            this.log.info({ taskId: task.id, reason: verdict.reason }, 'ready task held back');
+          }
+          if (verdict.budgetExceeded && task.missionId) {
+            await requestBudgetApproval(this.prisma, this.hub, task.missionId, `${verdict.reason}; approve to continue`);
+          }
+          continue;
+        }
+        this.loggedBlocked.delete(task.id);
         const worker = this.pickWorker(task.project.repoPath);
         if (!worker) {
           if (!this.warnedNoWorker.has(task.id)) {
@@ -96,20 +147,43 @@ export class Scheduler {
         this.log.error({ err, taskId: task.id }, 'scheduling task failed');
       }
     }
-    try {
-      await this.resumeWaiting();
-    } catch (err) {
-      this.log.error({ err }, 'resuming waiting runs failed');
+  }
+
+  /** Each `review` mission without a review run gets one for the Chief. */
+  private async reviewMissions() {
+    const missions = await this.prisma.mission.findMany({
+      where: { status: 'review', reviewRunId: null },
+      include: { project: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const mission of missions) {
+      try {
+        const worker = this.pickWorker(mission.project.repoPath);
+        if (!worker) continue;
+        const { spec } = await startReviewRun(this.prisma, this.hub, this.config, mission, worker);
+        await this.assign(worker.workerId, spec);
+      } catch (err) {
+        this.log.error({ err, missionId: mission.id }, 'starting review run failed');
+      }
     }
-    try {
-      await this.wakeAgents();
-    } catch (err) {
-      this.log.error({ err }, 'waking agents failed');
-    }
-    try {
-      await this.summarize();
-    } catch (err) {
-      this.log.error({ err }, 'enqueuing summary runs failed');
+  }
+
+  /** Each `planning` mission without a plan run gets one for the Chief. */
+  private async planMissions() {
+    const missions = await this.prisma.mission.findMany({
+      where: { status: 'planning', planRunId: null },
+      include: { project: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const mission of missions) {
+      try {
+        const worker = this.pickWorker(mission.project.repoPath);
+        if (!worker) continue;
+        const { spec } = await startPlanRun(this.prisma, this.hub, this.config, mission, worker);
+        await this.assign(worker.workerId, spec);
+      } catch (err) {
+        this.log.error({ err, missionId: mission.id }, 'starting plan run failed');
+      }
     }
   }
 
@@ -176,7 +250,7 @@ export class Scheduler {
         if (!agent || agent.isSystem || !agent.isActive) continue;
         const scope = { agentId: wake.agentId, projectId: wake.projectId };
         const busy = await this.prisma.taskRun.count({
-          where: { ...scope, status: { in: ['queued', 'running', 'waiting_reply'] } },
+          where: { ...scope, status: { in: ['queued', 'running', 'waiting_reply', 'waiting_approval'] } },
         });
         if (busy) continue;
         // shortcut: one count per pending delivery; fine for small inboxes, batch it if inboxes grow large

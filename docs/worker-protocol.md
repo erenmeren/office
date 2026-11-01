@@ -15,8 +15,10 @@ Messages on one socket are handled strictly in order.
 - `run.accepted { runId }`: the worker has started the assigned run; the run moves `queued → running` and the task moves to `running`.
 - `run.rejected { runId, reason }`: the worker refuses the run (for example `cwd outside allowed roots`); the API logs it, and the run keeps its lease until it expires and the task is retried.
 - `run.event { event }`: one normalized `OfficeEvent` (`type`, `seq`, `ts`, `sessionId`, `runId`, `agentId`, `projectId`, `payload`), redacted by the worker; the API redacts it again, persists it as a `SessionEvent` and publishes it to `run:<runId>` subscribers.
-- `run.result { runId, sessionId, result }`: the final `RunResult` (`status` succeeded, failed, cancelled or suspended, `resultText`, `error`, `sdkSessionId`, `usage` with tokens, `costUsd`, turns and duration); the API finishes the run, the session and the task, and writes a `UsageRecord`. `suspended` (Phase 3) means the agent called an office tool with `awaitReply` and the adapter interrupted the session; `sdkSessionId` is required with it. The API then moves the run, session and task to `waiting_reply` and releases the lease instead of finishing the run.
+- `run.result { runId, sessionId, result }`: the final `RunResult` (Phase 4 adds `structuredOutput` for plan and review runs; `git { branch, baseCommit, headCommit, commits[], diffStat, filesChanged, integration: none|fast_forwarded|needs_integration, worktreePath? }` for runs with a worktree; `check { command, status: passed|failed|timeout|skipped, exitCode, durationMs, output }` for code runs, output capped at 200 000 characters). The API stores `GitWorkspace` and `CheckResult` rows, the check output as an `Artifact`, and appends `agent.check.completed { checkResultId, command, status, exitCode, durationMs, artifactId }` to the run's events itself. The base fields are `status` (succeeded, failed, cancelled or suspended), `resultText`, `error`, `sdkSessionId` and `usage` (tokens, `costUsd`, turns and duration). The API finishes the run, the session and the task, and writes a `UsageRecord`. `suspended` (Phase 3) means the agent called an office tool with `awaitReply` and the adapter interrupted the session; `sdkSessionId` is required with it. The API then moves the run, session and task to `waiting_reply` and releases the lease instead of finishing the run.
 - `tool.call { runId, sessionId, callId, name, args }` (Phase 3): the agent called office tool `name` through the in-process MCP server. The API checks that this worker holds a live lease on the run and that `sessionId` is the run's session, executes the tool with the agent and project of that session, and answers with `tool.result` carrying the same `callId`. A tool outside the run kind's set (`submit_summary` only for `summary` runs, every other tool for `task`, `inbox` and `chat` runs) is answered `unknown_tool`.
+
+- `approval.request { runId, sessionId, request: { requestId, toolName, input, type, reason } }` (Phase 4): the gate stopped a tool call that the project's approval policy marks `ask`. The API stores an `Approval` row (`pending`, `expiresAt` = now + `approvalTimeoutMinutes`), moves the run, session and task to `waiting_approval` (the lease stays live, the session keeps running and waits), and publishes `approval.changed`. A task-scoped approval that already matches the call, or a repeated `requestId` already decided, is answered at once with `approval.result`. A request for a run this worker holds no live lease on is answered `approval.result deny`, not `error`. Requests the worker could not send are buffered and sent after reconnect.
 
 ### API to worker (`ApiToWorkerSchema`)
 
@@ -29,8 +31,10 @@ Messages on one socket are handled strictly in order.
   - `tools` (Phase 3): the office tool names the adapter serves for this run (from `toolsForKind`).
   - `startSeq` (Phase 3): the last `seq` already stored for the session; a resumed run numbers its events from `startSeq + 1`. It is 0 for a new run.
   - `resumeSdkSessionId`: set when a `waiting_reply` run resumes, and for a `chat` run that continues its conversation's session.
+  - Phase 4 mission fields: `git { repoPath, defaultBranch, missionBranch, taskSlug, committerName, committerEmail, agentName }` (the worker creates a worktree under `<OFFICE_WORKER_HOME>/worktrees/<runId>` on the run branch `<missionBranch>-runs/<taskSlug>-<run8>` from the mission branch head, and installs the `Office-Agent:` trailer hook), `readOnlyCheckout` (plan, review and analysis runs: the gate blocks `Edit`, `Write`, `MultiEdit`, `NotebookEdit` and Bash commands that look like writes or call git outside the read-only git list, and no commit is expected), `setupCommand`, `checkCommand` and `checkTimeoutSeconds` (default 900), `env { file, vars }` (the project's dummy `envTemplate`, written to `file` in the worktree with mode 0600 and listed in the repository's shared `.git/info/exclude`), `approvalPolicy` and `approvalTimeoutMinutes` (default 30; since Task 12b set on every run kind, not only mission runs), `outputFormat { type: 'json_schema', schema }` (plan and review runs answer with structured output), and `taskKind`. Plan runs (since Task 12c) and review runs carry a `git` block with `readOnlyCheckout`: they run on a read-only worktree of the mission branch (`taskSlug` `plan` or `review`), which the worker creates from the default branch when it does not exist yet. When the worker removes a finished worktree it also deletes the run branch if the mission branch contains it (fast-forwarded or no commits); a `needs_integration` branch is kept.
 - `run.cancel { runId }`: stop the run; the worker interrupts the SDK session and reports a `cancelled` result.
 - `tool.result { callId, result }` (Phase 3): the answer to a `tool.call`. `result` is `{ ok: true, result, suspend? }` or `{ ok: false, code, error }`. Codes include `unknown_tool`, `invalid_args`, `not_found`, `limit_exceeded`, `no_lease` and `internal_error`. `suspend: true` tells the adapter to end the session after this result (the call had `awaitReply`).
+- `approval.result { runId, decision: { requestId, decision: allow|deny, message? } }` (Phase 4): the owner's decision, a task-scoped match, or the timeout deny. Before sending, the API moves a run whose requests are all decided back to `running`, and records `Approval.deliveredAt` once the worker has it; undelivered decisions are re-sent on the worker's next `hello`. The worker ignores decisions for unknown or already resolved `requestId`s, and denies on its own `approvalTimeoutMinutes + 5` minutes after a request (backstop). The worker reads `approvalTimeoutMinutes` from the run spec at run start; the API reads it from the project settings when the request arrives (`expiresAt`), so a settings change during a run moves only the API's expiry.
 - `error { message }`: the previous message was invalid or rejected (for example a `run.result` without a live lease).
 
 ### Office tool calls (Phase 3)
@@ -42,6 +46,8 @@ After a successful call the worker records a derived event in the run's event st
 - `send_message`, `request_help`, `handoff_task`, `escalate_to_chief` and `reply_message`: `agent.message.sent { messageId, conversationId, to?, type }`.
 - `read_inbox`: `agent.message.received { count }`.
 - `propose_memory`: `memory.proposed { entryId }`.
+
+Phase 4 events: the gate emits `agent.waiting_approval { requestId, toolName, input, type, reason }` before it asks and `agent.approval.resolved { requestId, decision, message? }` after; the API emits `agent.check.completed` (above).
 
 The adapter emits `agent.waiting_reply { messageId, to }` when a call with `awaitReply` suspends the run. The API records `agent.resumed { reason, messageId? }` itself when it resumes the run. The worker skips skill materialization for `summary` runs.
 
@@ -66,7 +72,7 @@ A `run.result` for a run still `queued` (its `run.accepted` was lost) is accepte
 
 ## UI connection: `/ws/ui`
 
-Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. Topics are `global`, `task:<taskId>`, `run:<runId>` and `conversation:<conversationId>` (Phase 3).
+Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. Topics are `global`, `task:<taskId>`, `run:<runId>`, `conversation:<conversationId>` (Phase 3) and `mission:<missionId>` (Phase 4).
 
 ### UI to API (`UiClientMessageSchema`)
 
@@ -80,6 +86,8 @@ Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. T
 - `run.status.changed { topic, runId, status }`: a run changed status; published to `run:<id>`.
 - `message.created { topic, message }` (Phase 3): a message was stored; published to `conversation:<id>` and `global`. `message` is the same view `GET /conversations/:id` returns.
 - `memory.changed { topic: global, entryId, status }` (Phase 3): a memory entry was created, verified, rejected, edited or deleted.
+- `approval.changed { topic, approval }` (Phase 4): an approval was created, decided or expired; published to `mission:<id>`, `run:<id>` and `global`. `approval` is the `ApprovalView` of `GET /approvals/:id`.
+- `mission.status.changed { topic, mission: { id, status, updatedAt } }` (Phase 4): published to `mission:<id>` and `global`.
 - `replay.done { topic, lastSeq }`: replay of a `run:` topic is complete up to `lastSeq`; everything after this is live.
 - `error { message }`: invalid message, unknown run (`run not found`) or a failed replay.
 

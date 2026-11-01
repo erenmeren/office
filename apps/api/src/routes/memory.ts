@@ -6,6 +6,7 @@ import {
   MemoryStatusSchema,
   MemoryTypeSchema,
 } from '@office/shared';
+import { audit } from '../services/audit-service.js';
 import { HttpError } from '../lib/errors.js';
 import {
   createEntry,
@@ -75,6 +76,7 @@ export async function memoryRoutes(app: FastifyInstance) {
   app.post('/memory/:id/verify', async (req) => {
     const { id } = req.params as { id: string };
     const e = await verifyEntry(app.prisma, id, optProject(req.query));
+    await audit(app.prisma, { userId: req.user!.id, action: 'memory.verified', targetType: 'memory', targetId: id });
     changed(e.id, e.status);
     return e;
   });
@@ -82,6 +84,7 @@ export async function memoryRoutes(app: FastifyInstance) {
   app.post('/memory/:id/reject', async (req) => {
     const { id } = req.params as { id: string };
     const e = await rejectEntry(app.prisma, id, optProject(req.query));
+    await audit(app.prisma, { userId: req.user!.id, action: 'memory.rejected', targetType: 'memory', targetId: id });
     changed(e.id, e.status);
     return e;
   });

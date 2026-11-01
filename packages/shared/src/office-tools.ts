@@ -75,6 +75,16 @@ export const OFFICE_TOOLS = {
     description: 'Submit the final summary of the run together with up to 10 memory proposals.',
     input: { summary: body, proposals: z.array(MemoryProposalSchema).max(10).default([]) },
   },
+  get_task_evidence: {
+    description:
+      "Read a task's recorded evidence: its runs with git summary, check results, summaries and message counts (Chief review only).",
+    input: { taskId: z.string() },
+  },
+  review_task: {
+    description:
+      'Record your review decision for a task: done, reopen, or failed (when it used all its attempts), with a note (Chief review only).',
+    input: { taskId: z.string(), decision: z.enum(['done', 'reopen', 'failed']), note: z.string().max(2000).default('') },
+  },
 } as const satisfies Record<string, { description: string; input: z.ZodRawShape }>;
 
 export type OfficeToolName = keyof typeof OFFICE_TOOLS;

@@ -16,8 +16,12 @@ import { projectRoutes } from './routes/projects.js';
 import { agentRoutes } from './routes/agents.js';
 import { skillRoutes } from './routes/skills.js';
 import { taskRoutes } from './routes/tasks.js';
+import { missionRoutes } from './routes/missions.js';
+import { approvalRoutes } from './routes/approvals.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { memoryRoutes } from './routes/memory.js';
+import { auditRoutes } from './routes/audit.js';
+import { artifactRoutes } from './routes/artifacts.js';
 import { runRoutes } from './routes/runs.js';
 import { workerRoutes } from './routes/workers.js';
 import { EventHub } from './services/event-hub.js';
@@ -65,7 +69,7 @@ export async function buildApp(
     return reply.code(status).send({ error: status === 500 ? 'internal_error' : err.message });
   });
 
-  await app.register(cors, { origin: config.webOrigin, credentials: true });
+  await app.register(cors, { origin: config.webOrigin, credentials: true, methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] });
   await app.register(cookie, { secret: config.cookieSecret });
   await app.register(websocket);
   registerPrisma(app, config.databaseUrl, deps.prisma);
@@ -73,7 +77,7 @@ export async function buildApp(
 
   await app.register(healthRoutes);
   await app.register(authRoutes, { cookieSecure: config.cookieSecure });
-  await app.register(projectRoutes);
+  await app.register(projectRoutes, { config });
   await app.register(agentRoutes);
   await app.register(skillRoutes, { config });
 
@@ -86,8 +90,12 @@ export async function buildApp(
   gateway.register(app);
   new UiGateway(app.prisma, hub, app.log).register(app, config.webOrigin);
   await app.register(taskRoutes);
+  await app.register(missionRoutes);
+  await app.register(approvalRoutes);
   await app.register(conversationRoutes, { config });
   await app.register(memoryRoutes);
+  await app.register(auditRoutes);
+  await app.register(artifactRoutes, { config });
   await app.register(runRoutes);
   await app.register(workerRoutes);
   app.addHook('onReady', async () => scheduler.start());

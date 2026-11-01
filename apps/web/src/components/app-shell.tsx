@@ -7,8 +7,23 @@ import type { ReactNode } from 'react';
 import { cn } from 'cn';
 import { AppSidebar, NAV, isActive } from '@/components/app-sidebar';
 import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
 import { post } from '@/lib/api';
-import { useMe, useProjects } from '@/lib/queries';
+import { useBudget, useMe, useProjects } from '@/lib/queries';
+
+/** Today's spend against the project's daily limit. */
+function BudgetBar({ projectId }: { projectId?: string }) {
+  const budget = useBudget(projectId).data;
+  if (!budget) return null;
+  return (
+    <div className="flex min-w-[150px] flex-col gap-1.5">
+      <span className="font-mono text-[12.5px] whitespace-nowrap text-ink-2">
+        Today ${budget.spentTodayUsd.toFixed(2)} / ${budget.dailyBudgetUsd.toFixed(2)}
+      </span>
+      <Progress value={budget.dailyBudgetUsd ? (budget.spentTodayUsd / budget.dailyBudgetUsd) * 100 : 0} label="Daily budget used" className="h-1" />
+    </div>
+  );
+}
 
 function AppHeader() {
   const pathname = usePathname();
@@ -27,6 +42,7 @@ function AppHeader() {
         <ChevronRight className="size-3.5 shrink-0" aria-hidden />
         <span className="font-medium text-ink">{page}</span>
       </div>
+      <BudgetBar projectId={projects.data?.[0]?.id} />
       {/* compact nav for viewports without the sidebar */}
       <nav aria-label="Primary (compact)" className="flex gap-1 lg:hidden">
         {NAV.map((n) => (

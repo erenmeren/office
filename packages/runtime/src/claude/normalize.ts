@@ -40,9 +40,6 @@ function toolUseEvents(id: string, tool: string, rawInput: unknown): EventBody[]
   if (FILE_TOOLS.has(tool)) {
     events.push({ type: 'agent.file.changed', payload: { path: str(input.file_path) ?? str(input.notebook_path) } });
   }
-  if (tool === 'Bash') {
-    events.push({ type: 'agent.command.executed', payload: { command: str(input.command) } });
-  }
   return events;
 }
 

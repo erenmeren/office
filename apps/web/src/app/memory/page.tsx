@@ -28,9 +28,15 @@ function MemoryView() {
   const list = useMemory(project?.id, { q, status: reviewing ? 'proposed' : undefined });
   const total = useMemory(project?.id).data?.length ?? 0;
   const proposed = useMemoryCounts(project?.id).data?.proposed ?? 0;
-  const entries = (list.data ?? []).filter((e) => matchesType(e, type));
+  const taskId = params.get('taskId');
+  const entries = (list.data ?? []).filter((e) => matchesType(e, type) && (!taskId || e.taskId === taskId));
   const selectedId = params.get('id') ?? entries[0]?.id;
-  const select = (id?: string) => router.replace(id ? `/memory?id=${id}` : '/memory');
+  const select = (id?: string, task = taskId) => {
+    const qs = new URLSearchParams();
+    if (id) qs.set('id', id);
+    if (task) qs.set('taskId', task);
+    router.replace(qs.size ? `/memory?${qs}` : '/memory');
+  };
 
   useEffect(
     () =>
@@ -73,7 +79,17 @@ function MemoryView() {
 
       <Card>
         <CardContent>
-          <MemorySearch q={q} onQ={setQ} type={type} onType={setType} proposed={proposed} reviewing={reviewing} onReview={setReviewing} />
+          <MemorySearch
+            q={q}
+            onQ={setQ}
+            type={type}
+            onType={setType}
+            proposed={proposed}
+            reviewing={reviewing}
+            onReview={setReviewing}
+            taskId={taskId}
+            onClearTask={() => select(undefined, null)}
+          />
         </CardContent>
       </Card>
 

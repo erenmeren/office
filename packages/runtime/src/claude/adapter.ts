@@ -1,5 +1,6 @@
-import { createSdkMcpServer, query, tool, type AgentDefinition, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
+import { gateToolCall } from '../gate.js';
 import { redactSecrets } from '../redact.js';
 import type { EventSink, RuntimeAdapter, ToolBridge } from '../types.js';
 import { buildChildEnv } from './env.js';
@@ -23,6 +24,8 @@ const BUILTIN_TOOLS = [
   'ReadMcpResourceTool',
   'ReadMcpResourceDirTool',
 ];
+// tools the gate must see: never auto-allowed while a policy or read-only checkout applies
+const GATED_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 
 /** spec.allowedTools plus Skill/Agent when skills/subagents are pinned, so pinning implies the grant. */
 export function effectiveAllowedTools(spec: RunSpec): string[] {
@@ -35,9 +38,42 @@ export function effectiveAllowedTools(spec: RunSpec): string[] {
 }
 
 /** Everything passed to the SDK except abortController. The office MCP server exists only when tools are served. */
-export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, onSuspend: (info: { messageId?: string; to: string }) => void): Options {
+export function buildQueryOptions(
+  spec: RunSpec,
+  tools: ToolBridge | undefined,
+  onSuspend: (info: { messageId?: string; to: string }) => void,
+  sink: EventSink = { emit: () => {} },
+): Options {
   const served = tools ? (spec.tools as OfficeToolName[]) : [];
-  const allowedTools = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
+  const granted = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
+  // allowedTools entries skip canUseTool, so gated tools are left out (not disallowed): the CLI asks for them
+  const gating = !!spec.approvalPolicy || spec.readOnlyCheckout;
+  const allowedTools = gating ? granted.filter((t) => !GATED_TOOLS.includes(t)) : granted;
+  // one decision per tool call: the hook and canUseTool may both see it, the owner is asked once
+  const decisions = new Map<string, ReturnType<typeof gateToolCall>>();
+  // agent.command.executed only for a Bash call the gate let through; a denial shows as agent.tool.failed
+  const decide = async (toolName: string, input: Record<string, unknown>) => {
+    const r = await gateToolCall(spec, sink, tools, toolName, input);
+    if (r.allow && toolName === 'Bash') {
+      sink.emit({ type: 'agent.command.executed', payload: redactSecrets({ command: typeof input.command === 'string' ? input.command : undefined }) });
+    }
+    return r;
+  };
+  const gate = (toolUseId: string | undefined, toolName: string, input: Record<string, unknown>) => {
+    if (!toolUseId) return decide(toolName, input);
+    let d = decisions.get(toolUseId);
+    if (!d) decisions.set(toolUseId, (d = decide(toolName, input)));
+    return d;
+  };
+  // PreToolUse runs before allow rules (allowedTools and project settings), so the gate always applies.
+  // An allowed call returns no decision, leaving the allowed-list check in place.
+  const gateHook: HookCallback = async (input) => {
+    if (input.hook_event_name !== 'PreToolUse') return {};
+    const r = await gate(input.tool_use_id, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
+    return r.allow
+      ? {}
+      : { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: r.message } };
+  };
   const agents = spec.subagents.length
     ? Object.fromEntries(
         spec.subagents.map(({ name, description, prompt, skills, tools, model, maxTurns }): [string, AgentDefinition] => [
@@ -78,13 +114,14 @@ export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, 
     systemPrompt: spec.systemPrompt,
     allowedTools,
     // strictMcpConfig keeps every MCP server except the in-process office one out of the session
-    disallowedTools: BUILTIN_TOOLS.filter((t) => !allowedTools.includes(t)),
+    disallowedTools: BUILTIN_TOOLS.filter((t) => !granted.includes(t)),
     ...(server && { mcpServers: { [MCP_SERVER_NAME]: server } }),
     strictMcpConfig: true,
     permissionMode: 'default',
     maxTurns: spec.maxTurns,
     maxBudgetUsd: spec.maxBudgetUsd,
     // Project settings are trusted workspace content (owner-controlled repos); deny rules still cap the tool surface. See docs/security.md.
+    // Their allow rules cannot skip the gate: the PreToolUse hook below runs before allow rules.
     settingSources: ['project'],
     resume: spec.resumeSdkSessionId,
     additionalDirectories: spec.skillsDir ? [spec.skillsDir] : undefined,
@@ -93,10 +130,15 @@ export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, 
     env: buildChildEnv(process.env, spec),
     // allowedTools auto-approves listed tools; disallowedTools blocks ungranted built-ins
     // ahead of project allow rules; this is the deny path for anything else that asks.
-    canUseTool: async (toolName) =>
-      allowedTools.includes(toolName)
-        ? { behavior: 'allow' }
-        : { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' },
+    // then read-only and approval-policy gating, which may wait for the owner
+    canUseTool: async (toolName, input, { toolUseID }) => {
+      if (!granted.includes(toolName)) return { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' };
+      const g = await gate(toolUseID, toolName, input);
+      return g.allow ? { behavior: 'allow' } : { behavior: 'deny', message: g.message };
+    },
+    // gates (and emits agent.command.executed); normalizeSdkMessage emits the other tool events
+    hooks: { PreToolUse: [{ hooks: [gateHook], timeout: (spec.approvalTimeoutMinutes ?? 30) * 60 + 60 }] },
+    ...(spec.outputFormat && { outputFormat: spec.outputFormat }),
   };
 }
 
@@ -127,7 +169,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
             sink.emit({ type: 'agent.waiting_reply', payload: info });
             // after the tool result has been returned to the CLI
             setTimeout(() => void q?.interrupt().catch(() => {}), 0);
-          }),
+          }, sink),
           abortController,
         },
       });
@@ -146,7 +188,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
         result = suspended
           ? { status: 'suspended', sdkSessionId: msg.session_id, usage }
           : msg.subtype === 'success'
-            ? { status: 'succeeded', resultText: redactSecrets(msg.result), sdkSessionId: msg.session_id, usage }
+            ? {
+                status: 'succeeded',
+                resultText: redactSecrets(msg.result),
+                sdkSessionId: msg.session_id,
+                usage,
+                ...(msg.structured_output !== undefined && { structuredOutput: msg.structured_output }),
+              }
             : {
                 status: 'failed',
                 error: redactSecrets(msg.errors.join('; ') || msg.subtype),

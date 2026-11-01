@@ -10,6 +10,7 @@ import { appendEvent } from '../services/event-store.js';
 import { completeRun, findLeasedRun, markRunning, renewLeases } from '../services/run-service.js';
 import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
+import { requestApproval, resendDecisions } from '../services/approval-service.js';
 
 interface Connection {
   socket: WebSocket;
@@ -21,7 +22,13 @@ interface Connection {
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 
 // emitted by the API itself; a worker must not forge them
-const SERVER_ONLY_EVENTS = new Set(['run.lease.lost', 'run.status.changed', 'task.status.changed', 'agent.resumed']);
+const SERVER_ONLY_EVENTS = new Set([
+  'run.lease.lost',
+  'run.status.changed',
+  'task.status.changed',
+  'agent.resumed',
+  'agent.check.completed',
+]);
 
 export class WorkerGateway {
   private conns = new Map<string, Connection>();
@@ -149,6 +156,9 @@ export class WorkerGateway {
     this.conns.set(worker.id, { socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, activeRuns });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
     this.cancelUnleased(worker.id, msg.activeRunIds, activeRuns);
+    await resendDecisions(this.prisma, this.hub, this, worker.id).catch((err: unknown) =>
+      this.log.error({ err, workerId: worker.id }, 're-sending approval decisions failed'),
+    );
     return worker.id;
   }
 
@@ -160,7 +170,7 @@ export class WorkerGateway {
   /** Every run the DB says this worker holds; the worker's own report is not trusted for capacity. */
   private async leasedRuns(workerId: string) {
     const owned = await this.prisma.taskRun.findMany({
-      where: { workerId, status: { in: ['queued', 'running'] } },
+      where: { workerId, status: { in: ['queued', 'running', 'waiting_approval'] } },
       select: { id: true },
     });
     return new Set(owned.map((r) => r.id));
@@ -219,14 +229,30 @@ export class WorkerGateway {
           if (!run?.session || run.session.id !== msg.sessionId) {
             return reply({ ok: false, code: 'no_lease', error: 'this worker holds no live lease on that run' });
           }
-          return reply(await executeTool(this.prisma, this.hub, this.config, { run, session: run.session }, msg.name, msg.args));
+          const r = await executeTool(this.prisma, this.hub, this.config, { run, session: run.session }, msg.name, msg.args);
+          if (!r.ok && r.code === 'max_attempts') this.log.warn({ runId: msg.runId, args: msg.args, error: r.error }, 'review_task reopen refused');
+          return reply(r);
         } catch (err) {
           this.log.error({ err, runId: msg.runId, tool: msg.name }, 'tool call failed');
           return reply({ ok: false, code: 'internal_error', error: 'internal error' });
         }
       }
+      case 'approval.request': {
+        const run = await findLeasedRun(this.prisma, msg.runId, workerId);
+        if (!run?.session || run.session.id !== msg.sessionId) {
+          // answered, so the worker's run does not wait for a decision that can never come
+          return this.send(workerId, {
+            type: 'approval.result',
+            runId: msg.runId,
+            decision: { requestId: msg.request.requestId, decision: 'deny', message: 'no live lease' },
+          });
+        }
+        const decision = await requestApproval(this.prisma, this.hub, { run, session: run.session, request: msg.request });
+        if (decision) this.send(workerId, { type: 'approval.result', runId: run.id, decision });
+        return;
+      }
       case 'run.result':
-        await completeRun(this.prisma, this.hub, { runId: msg.runId, workerId, result: msg.result });
+        await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
         this.releaseRun(workerId, msg.runId);
         return;
     }

@@ -62,5 +62,46 @@ export const EventType = z.enum([
   'worker.disconnected',
   'memory.proposed',
   'memory.verified',
+  'agent.check.completed',
+  'mission.status.changed',
 ]);
 export type EventType = z.infer<typeof EventType>;
+
+export const TaskKindSchema = z.enum(['code', 'analysis', 'review']);
+export type TaskKind = z.infer<typeof TaskKindSchema>;
+
+export const MissionStatusSchema = z.enum([
+  'planning',
+  'plan_failed',
+  'awaiting_approval',
+  'approved',
+  'running',
+  'review',
+  'done',
+  'failed',
+  'cancelled',
+]);
+export type MissionStatus = z.infer<typeof MissionStatusSchema>;
+
+export const ApprovalTypeSchema = z.enum([
+  'plan',
+  'git_push',
+  'merge',
+  'deploy',
+  'destructive_command',
+  'sensitive_path',
+  'budget_exceeded',
+]);
+export type ApprovalType = z.infer<typeof ApprovalTypeSchema>;
+
+export const ApprovalStatusSchema = z.enum(['pending', 'approved', 'denied', 'expired']);
+export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;
+
+export const ApprovalScopeSchema = z.enum(['once', 'task']);
+export type ApprovalScope = z.infer<typeof ApprovalScopeSchema>;
+
+export const CheckStatusSchema = z.enum(['passed', 'failed', 'timeout', 'skipped']);
+export type CheckStatus = z.infer<typeof CheckStatusSchema>;
+
+export const IntegrationStatusSchema = z.enum(['none', 'fast_forwarded', 'needs_integration']);
+export type IntegrationStatus = z.infer<typeof IntegrationStatusSchema>;

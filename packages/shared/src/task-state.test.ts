@@ -40,6 +40,11 @@ describe('task state machine', () => {
     expect(canTransitionTask('failed', 'ready')).toBe(true);
   });
 
+  it('allows review -> ready (reopen)', () => {
+    expect(TASK_TRANSITIONS.review).toContain('ready');
+    expect(transitionTask('review', 'ready')).toBe('ready');
+  });
+
   it('every status appears as a key in TASK_TRANSITIONS', () => {
     for (const s of TaskStatus.options) expect(TASK_TRANSITIONS).toHaveProperty(s);
   });

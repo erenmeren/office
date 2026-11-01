@@ -1,7 +1,12 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { EventBody, RunSpec, ToolCallResult } from '@office/shared';
+import { ApprovalPolicySchema, PlanSchema, type EventBody, type RunSpec, type ToolCallResult } from '@office/shared';
 import type { ToolBridge } from '../types.js';
 import { FakeAdapter } from './adapter.js';
+import { FAKE_PLAN } from './plan.js';
 
 function spec(prompt: string): RunSpec {
   return {
@@ -160,5 +165,107 @@ describe('FakeAdapter tool markers', () => {
   it('ignores markers without a bridge', async () => {
     const { res } = await run({ prompt: 'ASK:qa:x' });
     expect(res.status).toBe('succeeded');
+  });
+});
+
+describe('FakeAdapter orchestration markers', () => {
+  const policy = ApprovalPolicySchema.parse({});
+  function approving(decision: 'allow' | 'deny') {
+    const { b, calls } = bridge();
+    b.askApproval = async (r) => ({ requestId: r.requestId, decision });
+    return { b, calls };
+  }
+
+  it('PLAN returns FAKE_PLAN as structured output', async () => {
+    const { res } = await run({ prompt: 'PLAN' }, bridge().b);
+    expect(res.status).toBe('succeeded');
+    expect(res.structuredOutput).toEqual(FAKE_PLAN);
+    expect(PlanSchema.parse(FAKE_PLAN).tasks).toHaveLength(2);
+    expect(FAKE_PLAN.tasks.map((t) => [t.key, t.agent, t.kind])).toEqual([
+      ['a', 'developer', 'code'],
+      ['b', 'qa-engineer', 'review'],
+    ]);
+  });
+
+  it('plan kind uses OFFICE_FAKE_PLAN when set', async () => {
+    process.env.OFFICE_FAKE_PLAN = JSON.stringify({ summary: 'env plan', tasks: [], risks: [] });
+    try {
+      const { res } = await run({ prompt: 'x', kind: 'plan' }, bridge().b);
+      expect(res.structuredOutput).toEqual({ summary: 'env plan', tasks: [], risks: [] });
+    } finally {
+      delete process.env.OFFICE_FAKE_PLAN;
+    }
+  });
+
+  it('REVIEW reviews each listed task as done; tool errors do not stop it', async () => {
+    const { b, calls } = bridge(() => ({ ok: false, error: 'x', code: 'bad' }));
+    const { res, events } = await run({ prompt: 'REVIEW:t1,t2' }, b);
+    expect(calls).toEqual([
+      { name: 'review_task', args: { taskId: 't1', decision: 'done', note: 'fake review' } },
+      { name: 'review_task', args: { taskId: 't2', decision: 'done', note: 'fake review' } },
+    ]);
+    expect(events.filter((e) => e.type === 'agent.tool.failed')).toHaveLength(2);
+    expect(res.structuredOutput).toEqual({ summary: 'fake review', tasks: [] });
+  });
+
+  it('DANGER denied by the owner fails the tool call', async () => {
+    const { b } = approving('deny');
+    const { res, events } = await run({ prompt: 'DANGER:rm -rf x', approvalPolicy: policy }, b);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('agent.waiting_approval');
+    expect(types).toContain('agent.approval.resolved');
+    const failed = events.find((e) => e.type === 'agent.tool.failed');
+    expect(failed?.payload.output).toBe('denied: Denied by the owner');
+    expect(types).not.toContain('agent.command.executed');
+    expect(res.status).toBe('succeeded');
+  });
+
+  it('DANGER allowed by the owner completes without running the command', async () => {
+    const { b } = approving('allow');
+    const { events } = await run({ prompt: 'DANGER:rm -rf x', approvalPolicy: policy }, b);
+    const started = events.find((e) => e.type === 'agent.tool.started' && e.payload.tool === 'Bash');
+    expect(started?.payload.input).toEqual({ command: 'rm -rf x' });
+    const id = started!.payload.toolUseId;
+    expect(events).toContainEqual({ type: 'agent.command.executed', payload: { command: 'rm -rf x' } });
+    expect(events).toContainEqual({ type: 'agent.tool.completed', payload: { toolUseId: id, output: '' } });
+  });
+
+  it('SECRETWRITE goes through the gate as a sensitive path', async () => {
+    const asked: string[] = [];
+    const { b } = bridge();
+    b.askApproval = async (r) => (asked.push(r.type), { requestId: r.requestId, decision: 'deny' });
+    const { events } = await run({ prompt: 'SECRETWRITE', approvalPolicy: policy }, b);
+    expect(asked).toEqual(['sensitive_path']);
+    expect(events.some((e) => e.type === 'agent.tool.failed')).toBe(true);
+  });
+
+  it('COMMIT writes the file and commits it in a git repo', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fake-commit-'));
+    const env = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' };
+    const saved = { ...process.env };
+    Object.assign(process.env, env);
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      const { events, res } = await run({ prompt: 'COMMIT:src/a.txt:one\\ntwo', cwd: dir }, bridge().b);
+      expect(res.status).toBe('succeeded');
+      expect(readFileSync(join(dir, 'src/a.txt'), 'utf8')).toBe('one\ntwo');
+      expect(execFileSync('git', ['log', '--format=%s %an'], { cwd: dir, encoding: 'utf8' }).trim()).toBe('fake: src/a.txt t');
+      expect(events).toContainEqual({ type: 'agent.file.changed', payload: { path: 'src/a.txt' } });
+      expect(events).toContainEqual({ type: 'agent.command.executed', payload: { command: 'git commit' } });
+    } finally {
+      process.env = saved;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('COMMIT outside a git repo or with .. fails the tool call and continues', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fake-nogit-'));
+    try {
+      const { events, res } = await run({ prompt: 'COMMIT:a.txt:x\nCOMMIT:../b.txt:x', cwd: dir }, bridge().b);
+      expect(events.filter((e) => e.type === 'agent.tool.failed')).toHaveLength(2);
+      expect(res.status).toBe('succeeded');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
