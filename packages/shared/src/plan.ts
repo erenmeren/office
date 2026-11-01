@@ -48,7 +48,7 @@ const nonEmptyStrArray = {
 export const PLAN_JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['summary', 'tasks', 'risks'],
+  required: ['summary', 'tasks'],
   properties: {
     summary: { type: 'string', minLength: 1, maxLength: 2000 },
     tasks: {
@@ -66,9 +66,6 @@ export const PLAN_JSON_SCHEMA = {
           'agent',
           'requirements',
           'acceptanceCriteria',
-          'dependsOn',
-          'requiredConsultations',
-          'approvalPoints',
         ],
         properties: {
           key: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$' },
@@ -115,7 +112,7 @@ export const REVIEW_JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['taskId', 'decision', 'note'],
+        required: ['taskId', 'decision'],
         properties: {
           taskId: { type: 'string' },
           decision: { type: 'string', enum: ['done', 'reopen'] },
@@ -232,15 +229,17 @@ export function validatePlan(
   if (cycle) errors.push(`dependency cycle: ${cycle.join(' -> ')}`);
   if (errors.length) return { ok: false, errors };
 
-  // Kahn, ties by input order.
-  const indeg = new Map(plan.tasks.map((t) => [t.key, t.dependsOn.length]));
+  // Kahn, ties by input order; dependsOn deduped so in-degrees match decrements.
+  const uniq = new Map(plan.tasks.map((t) => [t.key, [...new Set(t.dependsOn)]]));
+  const indeg = new Map([...uniq].map(([k, d]) => [k, d.length]));
   const order: string[] = [];
   const remaining = plan.tasks.map((t) => t.key);
   while (remaining.length) {
     const i = remaining.findIndex((k) => indeg.get(k) === 0);
+    if (i < 0) return { ok: false, errors: [`dependency cycle: ${remaining.join(' -> ')}`] };
     const k = remaining.splice(i, 1)[0]!;
     order.push(k);
-    for (const t of plan.tasks) if (t.dependsOn.includes(k)) indeg.set(t.key, indeg.get(t.key)! - 1);
+    for (const [key, d] of uniq) if (d.includes(k)) indeg.set(key, indeg.get(key)! - 1);
   }
   return { ok: true, order };
 }

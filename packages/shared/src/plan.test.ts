@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import {
   PLAN_JSON_SCHEMA,
@@ -81,6 +82,21 @@ describe('validatePlan', () => {
   });
 });
 
+describe('validatePlan edge cases', () => {
+  it('tolerates duplicate dependsOn entries', () => {
+    expect(validatePlan(plan(task('b', ['a', 'a']), task('a')), roster)).toEqual({ ok: true, order: ['a', 'b'] });
+  });
+  it('reports a self-dependency', () => {
+    expect(validatePlan(plan(task('a', ['a'])), roster)).toEqual({ ok: false, errors: ['dependency cycle: a -> a'] });
+  });
+});
+
+const requiredKeys = (shape: Record<string, unknown>) =>
+  Object.entries(shape)
+    .filter(([, v]) => !(v instanceof z.ZodDefault) && !(v instanceof z.ZodOptional))
+    .map(([k]) => k)
+    .sort();
+
 describe('JSON schemas', () => {
   it('PLAN_JSON_SCHEMA is object-shaped and matches PlanTaskSchema keys', () => {
     expect(PLAN_JSON_SCHEMA.type).toBe('object');
@@ -88,8 +104,14 @@ describe('JSON schemas', () => {
     const keys = Object.keys(PLAN_JSON_SCHEMA.properties.tasks.items.properties).sort();
     expect(keys).toEqual(Object.keys(PlanTaskSchema.shape).sort());
   });
+  it('required lists equal the non-optional, non-defaulted Zod keys', () => {
+    expect([...PLAN_JSON_SCHEMA.properties.tasks.items.required].sort()).toEqual(requiredKeys(PlanTaskSchema.shape));
+    expect([...PLAN_JSON_SCHEMA.required].sort()).toEqual(requiredKeys(PlanSchema.shape));
+    const reviewTask = ReviewDecisionSchema.shape.tasks.element;
+    expect([...REVIEW_JSON_SCHEMA.properties.tasks.items.required].sort()).toEqual(requiredKeys(reviewTask.shape));
+    expect([...REVIEW_JSON_SCHEMA.required].sort()).toEqual(requiredKeys(ReviewDecisionSchema.shape));
+  });
   it('REVIEW_JSON_SCHEMA matches ReviewDecisionSchema keys', () => {
     expect(Object.keys(REVIEW_JSON_SCHEMA.properties).sort()).toEqual(Object.keys(ReviewDecisionSchema.shape).sort());
-    expect(REVIEW_JSON_SCHEMA.required).toEqual(['summary', 'tasks']);
-  });
+      });
 });
