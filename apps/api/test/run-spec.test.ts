@@ -40,7 +40,7 @@ describe('run spec skills and subagents', () => {
     const task = await t.prisma.task.create({
       data: { projectId, agentId: agent.id, title: 'Do it', description: 'details', status: 'ready' },
     });
-    const { spec, session } = await createRunForTask(t.prisma, t.app.hub, task, { workerId }, config);
+    const { spec, session } = await createRunForTask(t.prisma, t.app.hub, task, { workerId, local: () => true }, config);
     return { eager, lazy, agent, base, spec, session };
   };
 
@@ -91,7 +91,7 @@ describe('run spec skills and subagents', () => {
       await req('POST', '/agents', { name: 'pol', slug: 'pol', role: 'dev', config: { systemPrompt: 'x', model: 'sonnet', allowedTools: ['Read'] } })
     ).json();
     const task = await t.prisma.task.create({ data: { projectId, agentId: agent.id, title: 'T', description: 'd', status: 'ready' } });
-    const specs = [(await createRunForTask(t.prisma, t.app.hub, task, { workerId }, config)).spec];
+    const specs = [(await createRunForTask(t.prisma, t.app.hub, task, { workerId, local: () => true }, config)).spec];
     for (const kind of ['chat', 'inbox', 'plan', 'review'] as const) {
       specs.push((await createRun(t.prisma, t.app.hub, config, { kind, agentId: agent.id, projectId, prompt: 'p', worker: { workerId } })).spec);
     }

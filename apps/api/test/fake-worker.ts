@@ -10,6 +10,8 @@ export interface FakeWorkerOptions {
   capacity?: number;
   allowedRoots?: string[];
   activeRunIds?: string[];
+  tags?: string[];
+  canClone?: boolean;
 }
 
 /** Connects to the listening app, sends `hello`, resolves after the first reply (welcome or error). */
@@ -65,6 +67,8 @@ export async function connectFakeWorker(app: FastifyInstance, opts: FakeWorkerOp
     capacity: opts.capacity ?? 1,
     allowedRoots: opts.allowedRoots ?? [],
     activeRunIds: opts.activeRunIds ?? [],
+    tags: opts.tags ?? [],
+    canClone: opts.canClone ?? false,
   });
   const first = await new Promise<ApiToWorker>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('no reply to hello after 5s')), 5000);

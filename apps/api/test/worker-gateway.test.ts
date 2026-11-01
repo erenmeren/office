@@ -56,6 +56,26 @@ describe('worker gateway', () => {
     await re.close();
   });
 
+  it('stores tags and canClone from hello and shows them on GET /workers with online and activeRuns', async () => {
+    const { id, enrollToken } = await enroll();
+    const pending = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', capacity: 2, tags: ['gpu', 'linux'], canClone: true });
+    const row = await t.prisma.worker.findUniqueOrThrow({ where: { id } });
+    expect(row).toMatchObject({ tags: ['gpu', 'linux'], canClone: true });
+    expect(t.app.gateway.onlineWorkers()[0]).toMatchObject({ workerId: id, tags: ['gpu', 'linux'], canClone: true });
+
+    const list = (await req('GET', '/workers')).json() as Array<Record<string, unknown>>;
+    expect(list.find((x) => x.id === id)).toMatchObject({
+      name: 'w1', status: 'online', capacity: 2, allowedRoots: [], tags: ['gpu', 'linux'], canClone: true, online: true, activeRuns: 0,
+    });
+    expect(list.find((x) => x.id === pending.id)).toMatchObject({ online: false, activeRuns: 0, tags: [], canClone: false });
+
+    await w.close();
+    await until(async () => !t.app.gateway.onlineWorkers().length, 'worker gone');
+    const after = (await req('GET', '/workers')).json() as Array<Record<string, unknown>>;
+    expect(after.find((x) => x.id === id)).toMatchObject({ online: false, activeRuns: 0 });
+  });
+
   it('rejects a bad credential with an error, then closes', async () => {
     const w = await connectFakeWorker(t.app, { credential: 'nope', name: 'x' });
     expect(w.received[0]!.type).toBe('error');

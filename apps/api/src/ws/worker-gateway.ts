@@ -1,9 +1,12 @@
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { PrismaClient } from '@office/db';
 import { WorkerToApiSchema, type ApiToWorker, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
+import { isUnderRoot } from '../lib/paths.js';
 import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
 import { appendEvent } from '../services/event-store.js';
@@ -17,6 +20,19 @@ interface Connection {
   capacity: number;
   activeRuns: Set<string>;
   allowedRoots: string[];
+  tags: string[];
+  canClone: boolean;
+}
+
+export type OnlineWorker = ReturnType<WorkerGateway['onlineWorkers']>[number];
+
+// worker roots are real paths, so compare the repo's real path too (resolve only if it does not exist here)
+function realOrResolved(path: string) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
 }
 
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
@@ -50,6 +66,10 @@ export class WorkerGateway {
       capacity: c.capacity,
       activeRuns: c.activeRuns.size,
       allowedRoots: c.allowedRoots,
+      tags: c.tags,
+      canClone: c.canClone,
+      /** True when the worker's allowedRoots cover `repoPath`: it can use the repo checkout directly. */
+      local: (repoPath: string) => c.allowedRoots.some((r) => isUnderRoot(realOrResolved(repoPath), r)),
     }));
   }
 
@@ -144,6 +164,8 @@ export class WorkerGateway {
         name: msg.name,
         capacity: msg.capacity,
         allowedRoots: msg.allowedRoots,
+        tags: msg.tags,
+        canClone: msg.canClone,
         status: 'online',
         lastHeartbeatAt: new Date(),
         ...(credential ? { credentialHash: hashToken(credential), enrollTokenHash: null } : {}),
@@ -153,7 +175,9 @@ export class WorkerGateway {
     await renewLeases(this.prisma, worker.id, msg.activeRunIds, this.config);
     const activeRuns = await this.leasedRuns(worker.id);
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');
-    this.conns.set(worker.id, { socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, activeRuns });
+    this.conns.set(worker.id, {
+      socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, tags: msg.tags, canClone: msg.canClone, activeRuns,
+    });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
     this.cancelUnleased(worker.id, msg.activeRunIds, activeRuns);
     await resendDecisions(this.prisma, this.hub, this, worker.id).catch((err: unknown) =>

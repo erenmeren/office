@@ -6,6 +6,7 @@ import type { RunSpec } from '@office/shared';
 import { makeApp } from './helpers.js';
 import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
 import { expireLeases } from '../src/services/run-service.js';
+import { sendMessage } from '../src/services/message-service.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const usage = { inputTokens: 10, outputTokens: 20, costUsd: 0.5, numTurns: 1, durationMs: 5 };
@@ -38,10 +39,11 @@ describe('scheduler', () => {
   const createTask = async (title = 'Fix the bug') =>
     (await req('POST', '/tasks', { projectId, agentId, title, description: 'details' })).json() as { id: string };
   const getTask = async (id: string) => (await req('GET', `/tasks/${id}`)).json();
-  const worker = async (opts: { allowedRoots?: string[]; capacity?: number } = {}) => {
+  const worker = async (opts: { allowedRoots?: string[]; capacity?: number; tags?: string[]; canClone?: boolean } = {}) => {
     const { enrollToken } = (await req('POST', '/workers', { name: 'w' })).json();
     const w = await connectFakeWorker(t.app, {
       enrollToken, name: 'w', capacity: opts.capacity ?? 1, allowedRoots: opts.allowedRoots ?? ['/tmp/office-ws'],
+      tags: opts.tags, canClone: opts.canClone,
     });
     workers.push(w);
     return w;
@@ -364,6 +366,69 @@ describe('scheduler', () => {
     expect(await w.waitFor('run.cancel')).toEqual({ type: 'run.cancel', runId: spec.runId });
     expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('cancelled');
     expect(t.app.gateway.onlineWorkers()[0]!.activeRuns).toBe(0);
+  });
+
+  /** A ready code task of a running mission. */
+  const missionTask = async () => {
+    const mission = await t.prisma.mission.create({ data: { projectId, title: 'M', request: 'r', status: 'running' } });
+    return t.prisma.task.create({ data: { projectId, agentId, missionId: mission.id, title: 'code it', kind: 'code', status: 'ready' } });
+  };
+  const assigns = (w: FakeWorker) => w.received.filter((m) => m.type === 'run.assign').length;
+
+  it('assigns a mission code run to a canClone worker when no local worker covers the repo', async () => {
+    await missionTask();
+    const w = await worker({ allowedRoots: [], canClone: true });
+    const spec = await assign(w);
+    expect(spec.kind).toBe('task');
+    expect(spec.git?.remote).toEqual({ path: `/git/${projectId}` });
+    expect(spec.git?.repoPath).toBeUndefined();
+    // no control-plane path reaches a remote worker
+    expect(spec.cwd).toBe('remote');
+    expect(JSON.stringify(spec)).not.toContain('/tmp/office-ws');
+  });
+
+  it('gives a local worker the repoPath of a mission run', async () => {
+    await missionTask();
+    const w = await worker({ canClone: true });
+    const spec = await assign(w);
+    expect(spec.git).toMatchObject({ repoPath: '/tmp/office-ws/p1' });
+    expect(spec.git?.remote).toBeUndefined();
+    expect(spec.cwd).toBe('/tmp/office-ws/p1');
+  });
+
+  it('never assigns a chat run or a non-mission task run to a canClone-only worker', async () => {
+    const task = await createTask();
+    const owner = await t.prisma.user.findFirstOrThrow();
+    await sendMessage(t.prisma, t.config.messageLimits, {
+      projectId, type: 'question', body: 'Status?', senderUserId: owner.id, recipientAgentIds: [agentId],
+    });
+    const w = await worker({ allowedRoots: [], canClone: true, capacity: 2 });
+    await t.app.scheduler.tick();
+    await sleep(100);
+    expect(assigns(w)).toBe(0);
+    expect((await getTask(task.id)).status).toBe('ready');
+    expect(await t.prisma.taskRun.count()).toBe(0);
+  });
+
+  it('prefers a local worker over a remote one', async () => {
+    await missionTask();
+    const remote = await worker({ allowedRoots: [], canClone: true });
+    const local = await worker();
+    const spec = await assign(local);
+    expect(spec.git?.repoPath).toBe('/tmp/office-ws/p1');
+    expect(assigns(remote)).toBe(0);
+  });
+
+  it('skips workers missing a required tag', async () => {
+    const task = await createTask();
+    await t.prisma.project.update({ where: { id: projectId }, data: { settings: { requiredWorkerTags: ['gpu'] } } });
+    const plain = await worker();
+    await t.app.scheduler.tick();
+    await sleep(100);
+    expect(assigns(plain)).toBe(0);
+    expect((await getTask(task.id)).status).toBe('ready');
+    const gpu = await worker({ tags: ['gpu', 'linux'] });
+    expect((await assign(gpu)).prompt).toContain('Fix the bug');
   });
 
   it('respects worker capacity', async () => {

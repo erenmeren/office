@@ -11,11 +11,17 @@ const PUBLIC = {
   status: true,
   capacity: true,
   allowedRoots: true,
+  tags: true,
+  canClone: true,
   lastHeartbeatAt: true,
 } as const;
 
 export async function workerRoutes(app: FastifyInstance) {
-  app.get('/workers', async () => app.prisma.worker.findMany({ select: PUBLIC, orderBy: { createdAt: 'asc' } }));
+  app.get('/workers', async () => {
+    const online = new Map(app.gateway.onlineWorkers().map((w) => [w.workerId, w.activeRuns]));
+    const workers = await app.prisma.worker.findMany({ select: PUBLIC, orderBy: { createdAt: 'asc' } });
+    return workers.map((w) => ({ ...w, online: online.has(w.id), activeRuns: online.get(w.id) ?? 0 }));
+  });
 
   app.post('/workers', async (req, reply) => {
     const { name } = z.object({ name: z.string().min(1) }).parse(req.body);

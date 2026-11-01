@@ -1,14 +1,11 @@
-import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
 import type { FastifyBaseLogger } from 'fastify';
 import type { PrismaClient } from '@office/db';
-import type { RunSpec } from '@office/shared';
+import { ProjectSettingsSchema, type RunSpec } from '@office/shared';
 import type { Config } from '../config.js';
-import { isUnderRoot } from '../lib/paths.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 import type { EventHub } from './event-hub.js';
 import { pendingWakeDeliveries } from './message-service.js';
-import { abandonRun, createRun, createRunForTask, expireLeases, resumeRun } from './run-service.js';
+import { abandonRun, createRun, createRunForTask, expireLeases, failWaitingRun, resumeRun } from './run-service.js';
 import { summaryPrompt } from './summary-prompt.js';
 import { startPlanRun, startReviewRun } from './mission-service.js';
 import { gate, requestBudgetApproval } from './budget-service.js';
@@ -17,15 +14,7 @@ import { expireApprovals } from './approval-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
-
-// worker roots are real paths, so compare the repo's real path too (resolve only if it does not exist here)
-function realOrResolved(path: string) {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
-}
+const PARKED_LOG_MS = 60_000;
 
 export class Scheduler {
   private timer?: NodeJS.Timeout;
@@ -35,6 +24,8 @@ export class Scheduler {
   private warnedNoSummarizer = false;
   // ready tasks already logged as blocked, with the reason logged
   private loggedBlocked = new Map<string, string>();
+  // waiting_reply runs parked for their pinned worker, with when that was last logged
+  private loggedParked = new Map<string, number>();
 
   constructor(
     private prisma: PrismaClient,
@@ -132,7 +123,8 @@ export class Scheduler {
           continue;
         }
         this.loggedBlocked.delete(task.id);
-        const worker = this.pickWorker(task.project.repoPath);
+        // only a mission run carries git, so only it can go to a worker that clones
+        const worker = this.pickWorker(task.project, { needsRepoAccess: task.missionId ? 'any' : 'local' });
         if (!worker) {
           if (!this.warnedNoWorker.has(task.id)) {
             this.warnedNoWorker.add(task.id);
@@ -158,7 +150,7 @@ export class Scheduler {
     });
     for (const mission of missions) {
       try {
-        const worker = this.pickWorker(mission.project.repoPath);
+        const worker = this.pickWorker(mission.project, { needsRepoAccess: 'any' });
         if (!worker) continue;
         const { spec } = await startReviewRun(this.prisma, this.hub, this.config, mission, worker);
         await this.assign(worker.workerId, spec);
@@ -177,7 +169,7 @@ export class Scheduler {
     });
     for (const mission of missions) {
       try {
-        const worker = this.pickWorker(mission.project.repoPath);
+        const worker = this.pickWorker(mission.project, { needsRepoAccess: 'any' });
         if (!worker) continue;
         const { spec } = await startPlanRun(this.prisma, this.hub, this.config, mission, worker);
         await this.assign(worker.workerId, spec);
@@ -187,12 +179,22 @@ export class Scheduler {
     }
   }
 
-  /** A worker with a free slot whose allowedRoots cover the repo. */
-  private pickWorker(repoPath: string) {
-    const real = realOrResolved(repoPath);
+  /**
+   * A worker with a free slot, every required tag, and repo access: allowedRoots covering the repo (local), or
+   * for `needsRepoAccess: 'any'` (mission runs with git) one that clones. Local first, then fewest active runs.
+   */
+  private pickWorker(project: { repoPath: string; settings: unknown }, opts: { needsRepoAccess: 'local' | 'any' }) {
+    const { requiredWorkerTags } = ProjectSettingsSchema.parse(project.settings ?? {});
     return this.gateway
       .onlineWorkers()
-      .find((w) => w.capacity - w.activeRuns > 0 && w.allowedRoots.some((r) => isUnderRoot(real, r)));
+      .map((w) => ({ w, local: w.local(project.repoPath) }))
+      .filter(
+        ({ w, local }) =>
+          w.capacity - w.activeRuns > 0 &&
+          requiredWorkerTags.every((t) => w.tags.includes(t)) &&
+          (local || (opts.needsRepoAccess === 'any' && w.canClone)),
+      )
+      .sort((a, b) => Number(b.local) - Number(a.local) || a.w.activeRuns - b.w.activeRuns)[0]?.w;
   }
 
   private async assign(workerId: string, spec: RunSpec) {
@@ -202,10 +204,15 @@ export class Scheduler {
     return false;
   }
 
-  /** waiting_reply runs whose reply arrived or whose wait timed out go back to a worker. */
+  /**
+   * waiting_reply runs whose reply arrived or whose wait timed out go back to their own worker (the SDK session
+   * lives there). Without a free slot on it they stay parked; with it offline at the timeout they fail.
+   */
   private async resumeWaiting() {
     const cutoff = new Date(Date.now() - this.config.replyTimeoutMinutes * 60_000);
-    const waiting = await this.prisma.taskRun.findMany({ where: { status: 'waiting_reply' }, include: { project: true } });
+    const waiting = await this.prisma.taskRun.findMany({ where: { status: 'waiting_reply' } });
+    const ids = new Set(waiting.map((r) => r.id));
+    for (const id of this.loggedParked.keys()) if (!ids.has(id)) this.loggedParked.delete(id);
     for (const run of waiting) {
       try {
         const reply = run.waitingForMessageId
@@ -214,9 +221,21 @@ export class Scheduler {
               orderBy: { createdAt: 'asc' },
             })
           : null;
-        if (!reply && !(run.waitingSince && run.waitingSince < cutoff)) continue;
-        const worker = this.pickWorker(run.project.repoPath);
-        if (!worker) continue;
+        const timedOut = !!run.waitingSince && run.waitingSince < cutoff;
+        if (!reply && !timedOut) continue;
+        const pinned = this.gateway.onlineWorkers().find((w) => w.workerId === run.workerId);
+        if (!pinned && timedOut) {
+          await failWaitingRun(this.prisma, this.hub, run.id, 'pinned worker offline at resume');
+          continue;
+        }
+        if (!pinned || pinned.capacity - pinned.activeRuns <= 0) {
+          if (Date.now() - (this.loggedParked.get(run.id) ?? 0) >= PARKED_LOG_MS) {
+            this.loggedParked.set(run.id, Date.now());
+            this.log.debug({ runId: run.id, workerId: run.workerId }, 'waiting run parked until its worker has a free slot');
+          }
+          continue;
+        }
+        const worker = pinned;
         let sender = 'owner';
         if (reply?.senderAgentId) {
           sender = (await this.prisma.agent.findUnique({ where: { id: reply.senderAgentId } }))?.slug ?? 'unknown';
@@ -276,7 +295,7 @@ export class Scheduler {
           this.prisma.project.findUniqueOrThrow({ where: { id: wake.projectId } }),
           this.prisma.conversation.findUniqueOrThrow({ where: { id: next.d.conversationId } }),
         ]);
-        const worker = this.pickWorker(project.repoPath);
+        const worker = this.pickWorker(project, { needsRepoAccess: 'local' });
         if (!worker) continue;
         const { spec } = await createRun(this.prisma, this.hub, this.config, {
           kind: next.human ? 'chat' : 'inbox',
@@ -312,7 +331,7 @@ export class Scheduler {
     }
     for (const run of due) {
       try {
-        const worker = this.pickWorker(run.project.repoPath);
+        const worker = this.pickWorker(run.project, { needsRepoAccess: 'local' });
         if (!worker) continue;
         // claim first so a concurrent scheduler cannot enqueue a second summary
         const { count } = await this.prisma.taskRun.updateMany({
