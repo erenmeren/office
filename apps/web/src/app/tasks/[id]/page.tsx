@@ -1,10 +1,10 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { canTransitionTask, type OfficeEvent, type RunStatus } from '@office/shared';
-import { EventLog, type LogRow } from '@/components/event-log';
+import { canTransitionTask, type RunStatus } from '@office/shared';
+import { RunEvents } from '@/components/run-events';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,32 +12,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { post } from '@/lib/api';
 import { useAgents, useRunSubagents, useTask } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
-
-function RunEvents({ runId, onStatus }: { runId: string; onStatus: (runId: string) => void }) {
-  const [events, setEvents] = useState(new Map<number, OfficeEvent>());
-  const [replayAt, setReplayAt] = useState<number>();
-
-  useEffect(
-    () =>
-      uiSocket().subscribe(`run:${runId}`, 0, (m) => {
-        if (m.type === 'event') {
-          setEvents((prev) => (prev.has(m.event.seq) ? prev : new Map(prev).set(m.event.seq, m.event)));
-        } else if (m.type === 'replay.done') {
-          setReplayAt((prev) => prev ?? m.lastSeq); // a reconnect replays again; keep the first divider
-        } else if (m.type === 'run.status.changed') {
-          onStatus(runId);
-        }
-      }),
-    [runId, onStatus],
-  );
-
-  const rows: LogRow[] = [...events.values()].sort((a, b) => a.seq - b.seq).map((event) => ({ kind: 'event', event }));
-  if (replayAt !== undefined) {
-    const at = rows.findIndex((r) => r.kind === 'event' && r.event.seq > replayAt);
-    rows.splice(at === -1 ? rows.length : at, 0, { kind: 'replay.done', lastSeq: replayAt });
-  }
-  return <EventLog rows={rows} />;
-}
 
 const ACTIVE_RUN: RunStatus[] = ['queued', 'running', 'waiting_reply', 'waiting_approval'];
 const time = (s: string | null) => s && new Date(s).toLocaleTimeString();

@@ -105,7 +105,8 @@ export const useProjects = () => useQuery({ queryKey: ['projects'], queryFn: () 
 export const useAgents = () => useQuery({ queryKey: ['agents'], queryFn: () => api<Agent[]>('/agents') });
 export const useAgent = (id: string) =>
   useQuery({ queryKey: ['agent', id], queryFn: () => api<Agent & { versions: AgentVersionView[] }>(`/agents/${id}`) });
-export const useTasks = () => useQuery({ queryKey: ['tasks'], queryFn: () => api<Task[]>('/tasks') });
+export const useTasks = (refetchInterval?: number) =>
+  useQuery({ queryKey: ['tasks'], queryFn: () => api<Task[]>('/tasks'), refetchInterval });
 export const useWorkers = () => useQuery({ queryKey: ['workers'], queryFn: () => api<Worker[]>('/workers') });
 export const useTask = (id: string) =>
   useQuery({
