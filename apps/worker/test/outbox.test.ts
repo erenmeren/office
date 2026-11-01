@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import type { WorkerToApi } from '@office/shared';
 import { Outbox } from '../src/outbox.js';
@@ -22,7 +22,7 @@ it('persists and reloads a result with mode 0600 and deletes it', async () => {
     expect(existsSync(join(dir, 'r1.json'))).toBe(false);
     expect((await box.load()).size).toBe(0);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(dir), { recursive: true, force: true });
   }
 });
 
@@ -37,6 +37,6 @@ it('skips a corrupt entry instead of throwing', async () => {
     expect(await box.load((f) => skipped.push(f))).toEqual(new Map([['ok', msg]]));
     expect(skipped).toEqual(['bad.json']);
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dirname(dir), { recursive: true, force: true });
   }
 });
