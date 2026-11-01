@@ -19,7 +19,7 @@ import {
 import { getSettings } from './project-service.js';
 import { storeArtifact } from './artifact-store.js';
 import { queueMessageCreated, sendMessage, toMessageView } from './message-service.js';
-import { expireRunApprovals } from './approval-service.js';
+import { expireRunApprovals, lockRun } from './approval-service.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 
 export class LeaseError extends Error {
@@ -469,10 +469,12 @@ export async function completeRun(
   const check = await prisma.$transaction(async (tx) => {
     // run.accepted never reached us (e.g. socket dropped): accept implicitly so the result is not lost
     if (run.status === 'queued') await acceptRunInTx(tx, outbox, runId, workerId, now);
-    // the run ended while asking: its open requests expire and the task leaves waiting_approval
-    if (run.status === 'waiting_approval') {
+    // locked so a concurrent approval request cannot leave a pending row on the finished run
+    if ((await lockRun(tx, runId)) === 'waiting_approval') {
+      // the run ended while asking: its open requests expire and the task leaves waiting_approval
       await expireRunApprovals(tx, outbox, [runId], 'run finished');
-      if (run.kind === 'task' && run.task?.status === 'waiting_approval') await setTaskStatus(tx, outbox, run.task.id, 'running');
+      const task = run.kind === 'task' && run.taskId ? await tx.task.findUniqueOrThrow({ where: { id: run.taskId } }) : null;
+      if (task?.status === 'waiting_approval') await setTaskStatus(tx, outbox, task.id, 'running');
     }
     // guarded again here so a lease expiring between the check and the write still loses
     const { count } = await tx.taskRun.updateMany({

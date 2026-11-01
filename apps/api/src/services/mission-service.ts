@@ -49,6 +49,7 @@ export function toApprovalView(a: Approval) {
     createdAt: a.createdAt.toISOString(),
     decidedAt: a.decidedAt?.toISOString() ?? null,
     expiresAt: a.expiresAt?.toISOString() ?? null,
+    deliveredAt: a.deliveredAt?.toISOString() ?? null,
   };
 }
 

@@ -83,6 +83,7 @@ export const ApprovalViewSchema = z.object({
   createdAt: z.iso.datetime(),
   decidedAt: z.iso.datetime().nullable(),
   expiresAt: z.iso.datetime().nullable(),
+  deliveredAt: z.iso.datetime().nullable(),
 });
 export type ApprovalView = z.infer<typeof ApprovalViewSchema>;
 

@@ -193,6 +193,46 @@ describe('tool approvals', () => {
     await until(async () => (await s.run(spec.runId)).status === 'running', 'run running');
   });
 
+  it('two requests: first delivered, second decided offline -> delivered on reconnect, run running', async () => {
+    s = await setup();
+    const { w, spec } = await s.running();
+    const r1 = await s.ask(w, spec, { command: 'rm -rf a' });
+    const r2 = await s.ask(w, spec, { command: 'rm -rf b' });
+    const [a1, a2] = await s.t.prisma.approval.findMany({ where: { runId: spec.runId }, orderBy: { createdAt: 'asc' } });
+    expect((await s.req('POST', `/approvals/${a1!.id}/approve`, {})).json()).toMatchObject({ delivered: true });
+    expect((await w.waitFor('approval.result')).decision.requestId).toBe(r1.requestId);
+    expect((await s.run(spec.runId)).status).toBe('waiting_approval');
+    await w.close();
+    await until(async () => (await s.t.prisma.worker.findUniqueOrThrow({ where: { id: w.workerId! } })).status === 'offline', 'offline');
+    const res = await s.req('POST', `/approvals/${a2!.id}/approve`, {});
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ delivered: false, deliveredAt: null });
+
+    const w2 = await s.connect({ credential: w.credential, activeRunIds: [spec.runId] });
+    expect((await w2.waitFor('approval.result')).decision.requestId).toBe(r2.requestId);
+    await until(async () => (await s.run(spec.runId)).status === 'running', 'run running');
+    const rows = await s.t.prisma.approval.findMany({ where: { runId: spec.runId } });
+    expect(rows.every((x) => x.deliveredAt)).toBe(true);
+    expect(w2.received.filter((m) => m.type === 'approval.result')).toHaveLength(1);
+  });
+
+  it('two pending requests decided concurrently -> both delivered, no 409', async () => {
+    s = await setup();
+    const { w, spec } = await s.running();
+    await s.ask(w, spec, { command: 'rm -rf a' });
+    await s.ask(w, spec, { command: 'rm -rf b' });
+    const [a1, a2] = await s.pending(spec.runId);
+    const res = await Promise.all([
+      s.req('POST', `/approvals/${a1!.id}/approve`, {}),
+      s.req('POST', `/approvals/${a2!.id}/deny`, {}),
+    ]);
+    expect(res.map((r) => r.statusCode)).toEqual([200, 200]);
+    await w.waitFor('approval.result');
+    await w.waitFor('approval.result');
+    expect((await s.t.prisma.approval.findMany({ where: { runId: spec.runId } })).every((x) => x.deliveredAt)).toBe(true);
+    expect((await s.run(spec.runId)).status).toBe('running');
+  });
+
   it("a waiting run's lease is renewed by heartbeat; when it expires the run is lost and the approval expired", async () => {
     s = await setup();
     const { w, spec, taskId } = await s.running();

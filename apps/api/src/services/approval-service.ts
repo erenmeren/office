@@ -76,7 +76,7 @@ export async function requestApproval(
 }
 
 /** Row lock on the run, so requests and resumes of one run serialize; returns its status. */
-async function lockRun(tx: Prisma.TransactionClient, runId: string) {
+export async function lockRun(tx: Prisma.TransactionClient, runId: string) {
   const rows = await tx.$queryRaw<Array<{ status: string }>>`SELECT status::text FROM "TaskRun" WHERE id = ${runId} FOR UPDATE`;
   return rows[0]?.status;
 }
@@ -99,31 +99,28 @@ async function moveRun(
 }
 
 /**
- * Resumes the run (once no other request of it is pending), then sends the decided approval to its worker.
- * Resuming first means the worker's next request finds the run running. 'ended' when the run no longer waits;
- * 'offline' when the worker is not connected: the run waits again and the worker's next hello re-sends it.
+ * Sends a decided, undelivered approval to its live run's worker and records `deliveredAt`; then the run
+ * (and task) resume once nothing of it is pending or undelivered. 'ended' when the run is no longer live;
+ * 'offline' when the worker is not connected: nothing changes and the worker's next hello re-sends it.
  */
 async function deliver(prisma: PrismaClient, hub: EventHub, gateway: Gateway, a: Approval) {
   const run = a.runId ? await prisma.taskRun.findUnique({ where: { id: a.runId } }) : null;
-  if (!run || run.status !== 'waiting_approval' || !run.workerId) return 'ended';
-  const outbox: Outbox = [];
-  const resumed = await prisma.$transaction(async (tx) => {
-    if ((await lockRun(tx, run.id)) !== 'waiting_approval') return null;
-    if (await tx.approval.count({ where: { runId: run.id, status: 'pending' } })) return false;
-    return moveRun(tx, outbox, run.id, 'waiting_approval', 'running');
-  });
-  if (resumed === null) return 'ended';
-  hub.publishAll(outbox);
-  if (gateway.send(run.workerId, { type: 'approval.result', runId: run.id, decision: decisionOf(a) })) return 'sent';
-  if (resumed) {
-    const back: Outbox = [];
-    await prisma.$transaction(async (tx) => {
-      await lockRun(tx, run.id);
-      await moveRun(tx, back, run.id, 'running', 'waiting_approval');
-    });
-    hub.publishAll(back);
+  const live = run && (run.status === 'running' || run.status === 'waiting_approval') && run.leaseExpiresAt && run.leaseExpiresAt > new Date();
+  if (!run || !live || !run.workerId) return 'ended';
+  if (!a.deliveredAt) {
+    if (!gateway.send(run.workerId, { type: 'approval.result', runId: run.id, decision: decisionOf(a) })) return 'offline';
+    await prisma.approval.updateMany({ where: { id: a.id, deliveredAt: null }, data: { deliveredAt: new Date() } });
   }
-  return 'offline';
+  const outbox: Outbox = [];
+  await prisma.$transaction(async (tx) => {
+    if ((await lockRun(tx, run.id)) !== 'waiting_approval') return;
+    const open = await tx.approval.count({
+      where: { runId: run.id, OR: [{ status: 'pending' }, { deliveredAt: null }] },
+    });
+    if (open === 0) await moveRun(tx, outbox, run.id, 'waiting_approval', 'running');
+  });
+  hub.publishAll(outbox);
+  return 'sent';
 }
 
 /** Owner decision on any approval: plan and budget approvals keep their own flow. */
@@ -169,8 +166,11 @@ export async function decideApproval(
     return a;
   });
   hub.publishAll(outbox);
-  if (approval.runId && (await deliver(prisma, hub, gateway, approval)) === 'ended') throw new HttpError(409, 'run_ended');
-  return toApprovalView(approval);
+  if (!approval.runId) return { ...toApprovalView(approval), delivered: false };
+  const result = await deliver(prisma, hub, gateway, approval);
+  if (result === 'ended') throw new HttpError(409, 'run_ended');
+  const fresh = await prisma.approval.findUniqueOrThrow({ where: { id: approvalId } });
+  return { ...toApprovalView(fresh), delivered: result === 'sent' };
 }
 
 /** Scheduler phase: pending tool approvals past expiresAt are denied by policy. */
@@ -195,11 +195,15 @@ export async function expireApprovals(prisma: PrismaClient, hub: EventHub, gatew
   }
 }
 
-/** On a worker's hello: re-sends decisions its waiting runs never received. */
+/** On a worker's hello: sends every decision its live runs have not received, oldest first. */
 export async function resendDecisions(prisma: PrismaClient, hub: EventHub, gateway: Gateway, workerId: string) {
-  // shortcut: a run with several requests also gets decisions it already received again; the worker ignores unknown requestIds
   const decided = await prisma.approval.findMany({
-    where: { status: { not: 'pending' }, requestId: { not: null }, run: { workerId, status: 'waiting_approval' } },
+    where: {
+      status: { not: 'pending' },
+      deliveredAt: null,
+      requestId: { not: null },
+      run: { workerId, status: { in: ['running', 'waiting_approval'] } },
+    },
     orderBy: { createdAt: 'asc' },
   });
   for (const a of decided) await deliver(prisma, hub, gateway, a);
