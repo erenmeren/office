@@ -10,6 +10,7 @@ import { appendEvent } from '../services/event-store.js';
 import { completeRun, findLeasedRun, markRunning, renewLeases } from '../services/run-service.js';
 import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
+import { requestApproval, resendDecisions } from '../services/approval-service.js';
 
 interface Connection {
   socket: WebSocket;
@@ -155,6 +156,9 @@ export class WorkerGateway {
     this.conns.set(worker.id, { socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, activeRuns });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
     this.cancelUnleased(worker.id, msg.activeRunIds, activeRuns);
+    await resendDecisions(this.prisma, this.hub, this, worker.id).catch((err: unknown) =>
+      this.log.error({ err, workerId: worker.id }, 're-sending approval decisions failed'),
+    );
     return worker.id;
   }
 
@@ -166,7 +170,7 @@ export class WorkerGateway {
   /** Every run the DB says this worker holds; the worker's own report is not trusted for capacity. */
   private async leasedRuns(workerId: string) {
     const owned = await this.prisma.taskRun.findMany({
-      where: { workerId, status: { in: ['queued', 'running'] } },
+      where: { workerId, status: { in: ['queued', 'running', 'waiting_approval'] } },
       select: { id: true },
     });
     return new Set(owned.map((r) => r.id));
@@ -230,6 +234,15 @@ export class WorkerGateway {
           this.log.error({ err, runId: msg.runId, tool: msg.name }, 'tool call failed');
           return reply({ ok: false, code: 'internal_error', error: 'internal error' });
         }
+      }
+      case 'approval.request': {
+        const run = await findLeasedRun(this.prisma, msg.runId, workerId);
+        if (!run?.session || run.session.id !== msg.sessionId) {
+          return this.send(workerId, { type: 'error', message: 'this worker holds no live lease on that run' });
+        }
+        const decision = await requestApproval(this.prisma, this.hub, { run, session: run.session, request: msg.request });
+        if (decision) this.send(workerId, { type: 'approval.result', runId: run.id, decision });
+        return;
       }
       case 'run.result':
         await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);

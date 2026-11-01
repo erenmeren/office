@@ -13,6 +13,7 @@ import { summaryPrompt } from './summary-prompt.js';
 import { startPlanRun, startReviewRun } from './mission-service.js';
 import { gate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
+import { expireApprovals } from './approval-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
@@ -97,6 +98,11 @@ export class Scheduler {
       await this.summarize();
     } catch (err) {
       this.log.error({ err }, 'enqueuing summary runs failed');
+    }
+    try {
+      await expireApprovals(this.prisma, this.hub, this.gateway);
+    } catch (err) {
+      this.log.error({ err }, 'expiring approvals failed');
     }
     try {
       await this.reviewMissions();
@@ -244,7 +250,7 @@ export class Scheduler {
         if (!agent || agent.isSystem || !agent.isActive) continue;
         const scope = { agentId: wake.agentId, projectId: wake.projectId };
         const busy = await this.prisma.taskRun.count({
-          where: { ...scope, status: { in: ['queued', 'running', 'waiting_reply'] } },
+          where: { ...scope, status: { in: ['queued', 'running', 'waiting_reply', 'waiting_approval'] } },
         });
         if (busy) continue;
         // shortcut: one count per pending delivery; fine for small inboxes, batch it if inboxes grow large

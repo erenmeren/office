@@ -1,16 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ApprovalStatusSchema, PlanSchema } from '@office/shared';
+import { PlanSchema } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
-import {
-  approvePlan,
-  cancelMission,
-  createMission,
-  editPlan,
-  rejectPlan,
-  replan,
-} from '../services/mission-service.js';
+import { cancelMission, createMission, editPlan, replan } from '../services/mission-service.js';
 
 const CreateMission = z.object({
   projectId: z.string().min(1),
@@ -106,22 +99,5 @@ export async function missionRoutes(app: FastifyInstance) {
   app.post('/missions/:id/cancel', async (req) => {
     const { id } = req.params as { id: string };
     return cancelMission(app.prisma, app.hub, app.gateway, id, req.user!.id, app.log);
-  });
-
-  app.get('/approvals', async (req) => {
-    const { projectId, status } = z
-      .object({ projectId: z.string().optional(), status: ApprovalStatusSchema.optional() })
-      .parse(req.query);
-    return app.prisma.approval.findMany({ where: { projectId, status }, orderBy: { createdAt: 'desc' } });
-  });
-
-  app.post('/approvals/:id/approve', async (req) => {
-    const { id } = req.params as { id: string };
-    return approvePlan(app.prisma, app.hub, id, req.user!.id);
-  });
-
-  app.post('/approvals/:id/reject', async (req) => {
-    const { id } = req.params as { id: string };
-    return rejectPlan(app.prisma, app.hub, id, req.user!.id);
   });
 }

@@ -5,6 +5,7 @@ import type { WorkerGateway } from '../ws/worker-gateway.js';
 import { HttpError } from '../lib/errors.js';
 import { audit } from './audit-service.js';
 import { onTaskStatusChanged } from './mission-service.js';
+import { expireRunApprovals } from './approval-service.js';
 
 export type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -37,7 +38,7 @@ export async function setTaskStatus(db: Db, outbox: Outbox, taskId: string, to: 
   return task;
 }
 
-const LIVE_RUN = ['queued', 'running', 'waiting_reply'] as const;
+const LIVE_RUN = ['queued', 'running', 'waiting_reply', 'waiting_approval'] as const;
 
 /** Cancels the live runs matching `where` (guarded, so a run finishing concurrently keeps its result). */
 export async function cancelLiveRuns(tx: Prisma.TransactionClient, outbox: Outbox, where: Prisma.TaskRunWhereInput) {
@@ -54,6 +55,7 @@ export async function cancelLiveRuns(tx: Prisma.TransactionClient, outbox: Outbo
     outbox.push({ topic: `run:${run.id}`, message: { type: 'run.status.changed', runId: run.id, status: 'cancelled' } });
     cancelled.push(run);
   }
+  await expireRunApprovals(tx, outbox, cancelled.map((r) => r.id), 'run cancelled');
   return cancelled;
 }
 

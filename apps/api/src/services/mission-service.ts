@@ -33,27 +33,29 @@ export function queueMissionStatus(outbox: Outbox, mission: Mission) {
   outbox.push({ topic: `mission:${mission.id}`, message }, { topic: 'global', message });
 }
 
-export function queueApproval(outbox: Outbox, a: Approval) {
-  const message = {
-    type: 'approval.changed' as const,
-    approval: {
-      id: a.id,
-      projectId: a.projectId,
-      missionId: a.missionId,
-      taskId: a.taskId,
-      runId: a.runId,
-      type: a.type,
-      status: a.status,
-      scope: a.scope,
-      toolName: a.toolName,
-      input: a.input,
-      reason: a.reason,
-      createdAt: a.createdAt.toISOString(),
-      decidedAt: a.decidedAt?.toISOString() ?? null,
-      expiresAt: a.expiresAt?.toISOString() ?? null,
-    },
+export function toApprovalView(a: Approval) {
+  return {
+    id: a.id,
+    projectId: a.projectId,
+    missionId: a.missionId,
+    taskId: a.taskId,
+    runId: a.runId,
+    type: a.type,
+    status: a.status,
+    scope: a.scope,
+    toolName: a.toolName,
+    input: a.input,
+    reason: a.reason,
+    createdAt: a.createdAt.toISOString(),
+    decidedAt: a.decidedAt?.toISOString() ?? null,
+    expiresAt: a.expiresAt?.toISOString() ?? null,
   };
+}
+
+export function queueApproval(outbox: Outbox, a: Approval) {
+  const message = { type: 'approval.changed' as const, approval: toApprovalView(a) };
   if (a.missionId) outbox.push({ topic: `mission:${a.missionId}`, message });
+  if (a.runId) outbox.push({ topic: `run:${a.runId}`, message });
   outbox.push({ topic: 'global', message });
 }
 
@@ -304,7 +306,7 @@ async function pendingPlanApproval(db: Db, approvalId: string) {
   const approval = await db.approval.findUnique({ where: { id: approvalId } });
   if (!approval) throw new HttpError(404, 'not_found');
   if (approval.type !== 'plan') throw new HttpError(409, 'unsupported_approval_type');
-  if (approval.status !== 'pending' || !approval.missionId) throw new HttpError(409, 'approval_decided');
+  if (approval.status !== 'pending' || !approval.missionId) throw new HttpError(409, 'already_decided');
   return approval as Approval & { missionId: string };
 }
 
@@ -313,7 +315,7 @@ async function decide(db: Db, outbox: Outbox, approvalId: string, status: 'appro
     where: { id: approvalId, status: 'pending' },
     data: { status, decidedAt: new Date(), decidedByUserId: userId },
   });
-  if (count === 0) throw new HttpError(409, 'approval_decided');
+  if (count === 0) throw new HttpError(409, 'already_decided');
   queueApproval(outbox, await db.approval.findUniqueOrThrow({ where: { id: approvalId } }));
 }
 

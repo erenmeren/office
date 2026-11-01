@@ -90,7 +90,7 @@ export async function approveBudget(prisma: PrismaClient, hub: EventHub, approva
       where: { id: approvalId, status: 'pending' },
       data: { status: 'approved', decidedAt: new Date(), decidedByUserId: userId },
     });
-    if (count === 0) throw new HttpError(409, 'approval_decided');
+    if (count === 0) throw new HttpError(409, 'already_decided');
     await audit(tx, { userId, action: 'budget.approved', targetType: 'mission', targetId: a.missionId, detail: { approvalId } });
     const decided = await tx.approval.findUniqueOrThrow({ where: { id: approvalId } });
     queueApproval(outbox, decided);

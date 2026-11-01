@@ -17,6 +17,7 @@ import { agentRoutes } from './routes/agents.js';
 import { skillRoutes } from './routes/skills.js';
 import { taskRoutes } from './routes/tasks.js';
 import { missionRoutes } from './routes/missions.js';
+import { approvalRoutes } from './routes/approvals.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { memoryRoutes } from './routes/memory.js';
 import { auditRoutes } from './routes/audit.js';
@@ -90,6 +91,7 @@ export async function buildApp(
   new UiGateway(app.prisma, hub, app.log).register(app, config.webOrigin);
   await app.register(taskRoutes);
   await app.register(missionRoutes);
+  await app.register(approvalRoutes);
   await app.register(conversationRoutes, { config });
   await app.register(memoryRoutes);
   await app.register(auditRoutes);

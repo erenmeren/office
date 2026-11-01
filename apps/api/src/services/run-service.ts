@@ -19,6 +19,7 @@ import {
 import { getSettings } from './project-service.js';
 import { storeArtifact } from './artifact-store.js';
 import { queueMessageCreated, sendMessage, toMessageView } from './message-service.js';
+import { expireRunApprovals } from './approval-service.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 
 export class LeaseError extends Error {
@@ -28,7 +29,8 @@ export class LeaseError extends Error {
   }
 }
 
-const LEASED = ['queued', 'running'] as const;
+// a waiting_approval run keeps its lease and worker slot; the worker keeps heartbeating it
+const LEASED = ['queued', 'running', 'waiting_approval'] as const;
 const leaseUntil = (config: Config) => new Date(Date.now() + config.leaseSeconds * 1000);
 
 function queueRunStatus(outbox: Outbox, runId: string, status: RunStatusChanged['status']) {
@@ -467,6 +469,11 @@ export async function completeRun(
   const check = await prisma.$transaction(async (tx) => {
     // run.accepted never reached us (e.g. socket dropped): accept implicitly so the result is not lost
     if (run.status === 'queued') await acceptRunInTx(tx, outbox, runId, workerId, now);
+    // the run ended while asking: its open requests expire and the task leaves waiting_approval
+    if (run.status === 'waiting_approval') {
+      await expireRunApprovals(tx, outbox, [runId], 'run finished');
+      if (run.kind === 'task' && run.task?.status === 'waiting_approval') await setTaskStatus(tx, outbox, run.task.id, 'running');
+    }
     // guarded again here so a lease expiring between the check and the write still loses
     const { count } = await tx.taskRun.updateMany({
       where: { id: runId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: now } },
@@ -660,10 +667,11 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
       if (run.session) {
         await tx.agentSession.update({ where: { id: run.session.id }, data: { status: 'lost', endedAt: now } });
       }
+      await expireRunApprovals(tx, outbox, [run.id], 'lease lost');
       if (run.kind === 'task' && run.taskId) {
         const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
-        // a resumed run lost before accept: its task is still waiting_reply, which cannot go to ready
-        if (task.status === 'waiting_reply') await setTaskStatus(tx, outbox, task.id, 'running');
+        // a resumed run lost before accept (waiting_reply) or a run lost while asking: neither can go to ready
+        if (task.status === 'waiting_reply' || task.status === 'waiting_approval') await setTaskStatus(tx, outbox, task.id, 'running');
         await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
       }
       if (run.kind === 'plan') await onPlanRunLost(tx, outbox, run);
