@@ -111,6 +111,21 @@ Workers are local or remote per project. A worker is local for a project when it
 
 The Workers page shows each worker's mode (local, remote or none), the first 8 characters of its machine id, tags, active runs against capacity and last heartbeat; Settings edits `requiredWorkerTags`.
 
+## Observability and hardening (Phase 6)
+
+Read models (`services/observability-service.ts`, `routes/observability.ts`) build every screen from stored records only: `SessionEvent`, `SubagentRun`, `UsageRecord`, `AuditLog`, `TaskRun` and `Approval`. No agent-written text decides a status.
+
+- **Costs.** `GET /projects/:id/costs?days&groupBy=day|agent|mission|task` sums `UsageRecord.costUsd` per UTC day or per agent, mission or task. `GET /projects/:id/overview` returns the Dashboard KPIs (agents available, running sessions, pending tasks, approvals waiting, cost today against `dailyBudgetUsd`), the team rows (status, current work, worker, cost today) and the attention list (pending approvals, skills to review).
+- **Activity.** `GET /projects/:id/activity` pages stored events of the project newest first (`SessionEvent (ts, id)` index); each row carries `key = sessionId:seq`. Every stored event is also published on the live-only UI topic `project:<projectId>`, and the Dashboard merges both by that key.
+- **Sessions.** `GET /sessions?projectId&status=live|all` lists runs with agent, worker, task, cost and command and file counts; `GET /sessions/:runId` is the Agent Inspector's record (commands, files, subagents, skills snapshot, usage, `maxBudgetUsd`, pending approval); `GET /agents/:id/runs` is an agent's task-run history. The Inspector follows the run on the `run:` topic with replay.
+- **Owner run cancel.** `POST /runs/:id/cancel` (`cancelRun` in `services/run-service.ts`) sends `run.cancel`, marks the run `cancelled` and writes `run.cancelled`. A mission task run's task returns to `ready` without consuming an attempt (`?task=true` cancels the task; a task of a cancelled or finished mission goes `cancelled`); a cancelled plan run cancels the mission; a cancelled review run leaves the mission in `review` with its `reviewRunId` (the owner decides through the overrides); a cancelled summary run resets the parent's `summarizedAt` so it is summarized again.
+- **Audit.** `GET /audit` filters by `action`, `targetType`, `targetId`, `since` and pages with `before`; the Audit page renders it. Worker enrollment (`worker.enrolled`, in `ws/worker-gateway.ts`) and revocation (`worker.revoked`) are audited.
+- **Result acknowledgement and integration under lease.** The API answers every applied `run.result` (and an idempotent resend of one) with `run.result.ack`, and the worker's outbox (`apps/worker/src/outbox.ts`) keeps the result until then. Before any fast-forward or push of a mission branch the worker asks `integration.check`; the API answers `ok` only under the worker's live lease (`docs/worker-protocol.md`). A corrupt outbox file is renamed to `.corrupt`.
+- **Hardening.** `OFFICE_MACHINE_ID` overrides `/etc/machine-id` on both sides; the git endpoint kills `git http-backend` after `OFFICE_GIT_TIMEOUT_SECONDS` (600) and forwards `Git-Protocol` (v2); `TaskRun.maxBudgetUsd` is stored at creation; a waiting run that fails at resume writes a session event.
+- **Web.** Dashboard `apps/web/src/app/page.tsx` (`components/dashboard-*.tsx`), Live Sessions `apps/web/src/app/sessions` (`session-list.tsx`, `session-detail.tsx`), Agent Inspector `apps/web/src/app/sessions/[runId]` (`inspector-*.tsx`), Audit `apps/web/src/app/audit` (`audit-table.tsx`).
+
+Not built in Phase 6 (the owner may request them): the interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages reach an agent at its next run boundary), messages addressed to a subagent, and a project switcher (the screens show the first project).
+
 ## Where each spec entity lives today
 
 Built in Phase 1 (Prisma schema in `packages/db/prisma/schema.prisma`, logic in `apps/api/src`):
@@ -161,8 +176,16 @@ Built in Phase 5:
 - The remote worker container: `infra/docker/worker.Dockerfile`, `infra/docker/worker-entrypoint.sh`, the `worker-remote` service in `infra/compose.yaml`, `infra/compose.hostnet.yaml`.
 - Workers page and the Settings field for `requiredWorkerTags`: `apps/web/src/app/workers`, `apps/web/src/app/settings`.
 
+Built in Phase 6:
+
+- Read models: `services/observability-service.ts`, `routes/observability.ts`; the `project:` topic in `services/event-store.ts` and `ws/ui-gateway.ts`.
+- `AuditLog` additions: `run.cancelled` (`services/run-service.ts` `cancelRun`, `routes/runs.ts`), `worker.enrolled` (`ws/worker-gateway.ts`), `worker.revoked` (`routes/workers.ts`); filters in `routes/audit.ts`.
+- `TaskRun.maxBudgetUsd` (migration `phase6_run_budget`) and the `SessionEvent (ts, id)` index.
+- `run.result.ack`, `integration.check` and `integration.allowed`: `packages/shared/src/protocol.ts`, `ws/worker-gateway.ts`, `apps/worker/src/connection.ts`, `apps/worker/src/executor.ts`, `apps/worker/src/outbox.ts`.
+- Dashboard, Live Sessions, Agent Inspector and Audit pages: `apps/web/src/app/page.tsx`, `apps/web/src/app/sessions`, `apps/web/src/app/audit`.
+
 Not built yet:
 
 - Phase 3 leftovers: a `MemoryRevision` table (a revision is a new `MemoryEntry` row that supersedes the old one), streaming delivery into a live session, semantic memory search, the memory purge.
 - Phase 4 leftovers: the greenfield path (a mission on a project without a repository), push and PR creation (an approval request only), worktree confinement for chat, inbox and non-mission task runs (they are gated by the approval policy but work in the project repository).
-- Phase 6: an audit UI, `ProjectMember`, Agent Inspector, cost views, the interactive shell.
+- Phase 6 leftovers: `ProjectMember`, the interactive PTY shell, session Pause, interrupt delivery, messages to a subagent, a project switcher, worktree confinement.

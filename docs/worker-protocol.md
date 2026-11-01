@@ -8,6 +8,8 @@ The worker connects outbound. The endpoint is not behind the owner's cookie; the
 
 Messages on one socket are handled strictly in order.
 
+While the socket is down the worker keeps only `run.result` (outbox), unsent `approval.request`s and a pending `integration.check`; `tool.call`s fail at once, and `run.event`s produced while disconnected are dropped. A run that keeps executing across an API restart therefore has a gap in its stored `seq`s for that window (seen in the Phase 6 acceptance; see `docs/progress.md`). Events sent after the reconnect continue the run's numbering.
+
 ### Worker to API (`WorkerToApiSchema`)
 
 - `hello { enrollToken? | credential?, name, capacity, allowedRoots, activeRunIds, tags, canClone, machineId? }`: authenticates the worker, either with a one-time enrollment token (first start) or with its saved credential, and reports its capacity, allowed workspace roots and the runs still executing locally (or finished with a result not delivered yet). Phase 5: `tags` (default `[]`; each `^[a-z0-9][a-z0-9-]{0,31}$`, from `OFFICE_WORKER_TAGS`) and `canClone` (default `false`, from `OFFICE_WORKER_CAN_CLONE`: the worker can clone projects from the API's git endpoint). The API stores both on the `Worker` row. Task 10b: `machineId` (1–128 characters; `/etc/machine-id` trimmed, else a random id persisted 0600 at `<OFFICE_WORKER_HOME>/machine-id`), stored as `Worker.machineId`. A worker is local only when it equals the API's own machine id; a worker that omits it is never local unless the API runs with `OFFICE_TRUST_UNIDENTIFIED_WORKERS=true`.
@@ -36,7 +38,7 @@ Messages on one socket are handled strictly in order.
 - `tool.result { callId, result }` (Phase 3): the answer to a `tool.call`. `result` is `{ ok: true, result, suspend? }` or `{ ok: false, code, error }`. Codes include `unknown_tool`, `invalid_args`, `not_found`, `limit_exceeded`, `no_lease` and `internal_error`. `suspend: true` tells the adapter to end the session after this result (the call had `awaitReply`).
 - `approval.result { runId, decision: { requestId, decision: allow|deny, message? } }` (Phase 4): the owner's decision, a task-scoped match, or the timeout deny. Before sending, the API moves a run whose requests are all decided back to `running`, and records `Approval.deliveredAt` once the worker has it; undelivered decisions are re-sent on the worker's next `hello`. The worker ignores decisions for unknown or already resolved `requestId`s, and denies on its own `approvalTimeoutMinutes + 5` minutes after a request (backstop). The worker reads `approvalTimeoutMinutes` from the run spec at run start; the API reads it from the project settings when the request arrives (`expiresAt`), so a settings change during a run moves only the API's expiry.
 - `run.result.ack { runId }` (Phase 6): the `run.result` was applied, or is a resend of a result already applied (see rejection rule 1). The worker deletes the result from its outbox only now.
-- `integration.allowed { runId, ok, reason? }` (Phase 6): the answer to `integration.check`. `ok` is true only while this worker holds a live lease on the run (`findLeasedRun`); otherwise `ok: false, reason: 'lease lost'`.
+- `integration.allowed { runId, ok, reason? }` (Phase 6): the answer to `integration.check`. `ok` is true only while this worker holds a live lease on the run (`findLeasedRun`); otherwise `ok: false, reason: 'lease lost'`. The worker's own reasons are `lease check timed out` (no answer within 30 s) and `run cancelled` (a cancel during the wait).
 - `error { message }`: the previous message was invalid or rejected (for example a `run.result` without a live lease).
 
 ### Office tool calls (Phase 3)
@@ -90,14 +92,14 @@ The owner creates a worker (`POST /workers`), which stores only the SHA-256 hash
 ### Rejection rules
 
 1. **No live lease, no effect.** A `run.event` or `run.result` for a run that this worker does not hold with a live lease (expired, lost, reassigned after reconnect, or owned by another worker) is rejected and does not change run or task state. An event is dropped and logged; a result is answered with `error` (`No live lease for run <id> on this worker`). The lease is checked again inside the transaction that writes the result, so a lease that expires between the check and the write still loses. Exception (Phase 6): a `run.result` for a run whose `workerId` is this worker and which is already final (`succeeded`, `failed` or `cancelled`) with the same status as the result is a resend after a lost ack; it is answered with `run.result.ack` and applied no second time. Likewise a `suspended` result for a run of this worker that is `queued` again (resumed) whose session already holds the result's `sdkSessionId` is stale: it is acked and not applied. A different status, or a run this worker never owned or that was reassigned or lost, still gets the `error`.
-3. **Integration needs a live lease.** `integration.check` is answered `ok: true` only while the run's lease is live and held by this worker; the worker fast-forwards only after `ok: true`.
 2. **Duplicate events are idempotent.** An event whose `(sessionId, seq)` is already persisted (a worker re-sending after reconnect) is stored once; the duplicate is ignored silently, not published again, and no error reaches the worker.
+3. **Integration needs a live lease.** `integration.check` is answered `ok: true` only while the run's lease is live and held by this worker; the worker fast-forwards only after `ok: true`.
 
 A `run.result` for a run still `queued` (its `run.accepted` was lost) is accepted implicitly, provided the lease is live, so a finished result is not lost.
 
 ## UI connection: `/ws/ui`
 
-Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. Topics are `global`, `task:<taskId>`, `run:<runId>`, `conversation:<conversationId>` (Phase 3) and `mission:<missionId>` (Phase 4).
+Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. Topics are `global`, `task:<taskId>`, `run:<runId>`, `conversation:<conversationId>` (Phase 3), `mission:<missionId>` (Phase 4) and `project:<projectId>` (Phase 6). Every stored run event is published on both `run:<runId>` and `project:<projectId>`; the `project:` topic is live only (no replay, `afterSeq` is ignored) and feeds the Dashboard's live activity, which loads the stored history over HTTP (`GET /projects/:id/activity`, rows keyed `sessionId:seq`) and merges the live rows by the same key.
 
 ### UI to API (`UiClientMessageSchema`)
 
@@ -106,7 +108,7 @@ Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. T
 
 ### API to UI (`UiServerMessageSchema`)
 
-- `event { topic, event }`: one `OfficeEvent` of a run, replayed or live.
+- `event { topic, event }`: one `OfficeEvent` of a run, replayed or live (on `project:` topics live only).
 - `task.status.changed { topic, task: { id, status, updatedAt } }`: a task changed status; published to `task:<id>` and `global`.
 - `run.status.changed { topic, runId, status }`: a run changed status; published to `run:<id>`.
 - `message.created { topic, message }` (Phase 3): a message was stored; published to `conversation:<id>` and `global`. `message` is the same view `GET /conversations/:id` returns.
