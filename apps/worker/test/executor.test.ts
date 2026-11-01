@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FakeAdapter, type RuntimeAdapter } from '@office/runtime';
-import type { RunSpec, WorkerToApi } from '@office/shared';
+import { ApprovalPolicySchema, type RunSpec, type WorkerToApi } from '@office/shared';
 import { RunExecutor } from '../src/executor.js';
+import { sweepWorktrees } from '../src/git.js';
 
 async function until(fn: () => boolean, what: string) {
   const deadline = Date.now() + 5000;
@@ -225,6 +227,139 @@ describe('RunExecutor', () => {
       ex.resolveTool(toolCalls()[0]!.callId, { ok: true, result: { entryId: 'e1', proposalIds: [] } });
       await until(done, 'result');
       expect(seen[0]!.skillsDir).toBeUndefined();
+    });
+  });
+
+  describe('approvals and cancel', () => {
+    const policy = ApprovalPolicySchema.parse({});
+    const approvals = () => sent.flatMap((m) => (m.type === 'approval.request' ? [m] : []));
+    const eventsOf = () => sent.flatMap((m) => (m.type === 'run.event' ? [m.event] : []));
+
+    it('relays DANGER through approval.request and resumes on resolveApproval; repeats and unknown ids are ignored', async () => {
+      executor.accept(spec({ prompt: 'DANGER:rm -rf x', approvalPolicy: policy }));
+      await until(() => approvals().length === 1, 'approval.request');
+      const req = approvals()[0]!;
+      expect(req).toMatchObject({ runId: 'run-1', sessionId: 'sess-1', request: { toolName: 'Bash', input: { command: 'rm -rf x' } } });
+      executor.resolveApproval('run-1', { requestId: 'unknown', decision: 'deny' });
+      executor.resolveApproval('run-1', { requestId: req.request.requestId, decision: 'allow' });
+      executor.resolveApproval('run-1', { requestId: req.request.requestId, decision: 'deny' });
+      await until(done, 'result');
+      expect(sent.at(-1)).toMatchObject({ result: { status: 'succeeded' } });
+      expect(eventsOf().find((e) => e.type === 'agent.approval.resolved')?.payload).toMatchObject({ decision: 'allow' });
+      expect(eventsOf().some((e) => e.type === 'agent.command.executed')).toBe(true);
+    });
+
+    it('cancel denies a pending approval', async () => {
+      executor.accept(spec({ prompt: 'DANGER:rm -rf x', approvalPolicy: policy }));
+      await until(() => approvals().length === 1, 'approval.request');
+      executor.cancel('run-1');
+      await until(done, 'result');
+      expect(eventsOf().find((e) => e.type === 'agent.approval.resolved')?.payload).toMatchObject({ decision: 'deny', message: 'run cancelled' });
+      expect(sent.at(-1)).toMatchObject({ result: { status: 'cancelled' } });
+    });
+
+    it('cancel settles a pending tool call with cancelled', async () => {
+      executor.accept(spec({ prompt: 'SEND:qa:hello' }));
+      await until(() => sent.some((m) => m.type === 'tool.call'), 'tool.call');
+      executor.cancel('run-1');
+      await until(done, 'result');
+      expect(eventsOf().find((e) => e.type === 'agent.tool.failed')?.payload).toMatchObject({ output: 'cancelled' });
+      expect(sent.at(-1)).toMatchObject({ result: { status: 'cancelled' } });
+    });
+  });
+
+  describe('git worktrees', () => {
+    const ID = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid'];
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', [...ID, ...args], { cwd, encoding: 'utf8' }).trim();
+    const TEST = "COMMIT:sum.test.js:import test from 'node:test'; import assert from 'node:assert'; test('sum', () => assert.equal(1 + 1, 2));";
+    let repo: string;
+    const gitSpec = (over: Partial<RunSpec> = {}) =>
+      spec({
+        cwd: repo,
+        prompt: TEST,
+        taskKind: 'code',
+        checkCommand: 'node --test',
+        checkTimeoutSeconds: 60,
+        env: { file: '.env.local', vars: [{ name: 'API_URL', value: 'http://dummy' }] },
+        git: {
+          repoPath: repo, defaultBranch: 'main', missionBranch: 'office/t', taskSlug: 'a',
+          committerName: 'Office', committerEmail: 'o@example.invalid', agentName: 'developer',
+        },
+        ...over,
+      } as Partial<RunSpec>);
+    const result = () => (sent.at(-1) as Extract<WorkerToApi, { type: 'run.result' }>).result;
+
+    beforeEach(() => {
+      repo = join(root, 'repo');
+      execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+      writeFileSync(join(repo, 'README.md'), 'hi\n');
+      git(repo, 'add', '-A');
+      git(repo, 'commit', '-q', '-m', 'init');
+    });
+
+    it('commits in a worktree, passes the check, fast-forwards the mission branch and removes the worktree', async () => {
+      const seen: RunSpec[] = [];
+      const inner = new FakeAdapter();
+      const rec: RuntimeAdapter = { name: 'fake', run: (s, sink, sig, t) => (seen.push(s), inner.run(s, sink, sig, t)) };
+      new RunExecutor(rec, (m) => sent.push(m), [root], runsDir).accept(gitSpec());
+      await until(done, 'result');
+      const r = result();
+      expect(r.status).toBe('succeeded');
+      expect(seen[0]!.cwd).toBe(join(root, 'worktrees', 'run-1'));
+      expect(r.git).toMatchObject({ integration: 'fast_forwarded', filesChanged: 1 });
+      expect(r.git!.commits).toHaveLength(1);
+      expect(r.git!.branch).toMatch(/^office\/t-runs\/a-run-1/);
+      expect(r.check).toMatchObject({ command: 'node --test', status: 'passed', exitCode: 0 });
+      expect(git(repo, 'rev-parse', 'office/t')).toBe(r.git!.headCommit);
+      expect(git(repo, 'log', '-1', '--format=%B', 'office/t')).toContain('Office-Agent: developer run-1');
+      // the env template never reaches a commit
+      expect(git(repo, 'show', '--name-only', '--format=', 'office/t')).toBe('sum.test.js');
+      expect(existsSync(join(root, 'worktrees', 'run-1'))).toBe(false);
+    });
+
+    it('a failed check leaves the mission branch alone and keeps the worktree until it is swept', async () => {
+      executor.accept(gitSpec({ checkCommand: 'exit 1' }));
+      await until(done, 'result');
+      const r = result();
+      expect(r.check).toMatchObject({ status: 'failed', exitCode: 1 });
+      expect(r.git).toMatchObject({ integration: 'none' });
+      expect(r.git!.commits).toHaveLength(1);
+      expect(git(repo, 'rev-parse', 'office/t')).toBe(r.git!.baseCommit);
+      const wt = join(root, 'worktrees', 'run-1');
+      expect(r.git!.worktreePath).toBe(wt);
+      expect(existsSync(wt)).toBe(true);
+      expect(statSync(join(wt, '.env.local')).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(wt, '.env.local'), 'utf8')).toBe('API_URL=http://dummy\n');
+      const old = new Date(Date.now() - 8 * 86_400_000);
+      utimesSync(wt, old, old);
+      await sweepWorktrees(repo, join(root, 'worktrees'), []);
+      expect(existsSync(wt)).toBe(false);
+    });
+
+    it('keeps the worktree of a suspended run and reuses it when the run resumes', async () => {
+      executor.accept(gitSpec({ prompt: 'COMMIT:a.txt:x\nASK:qa:ok?', checkCommand: 'true' }));
+      await until(() => sent.some((m) => m.type === 'tool.call'), 'tool.call');
+      const call = sent.find((m) => m.type === 'tool.call') as Extract<WorkerToApi, { type: 'tool.call' }>;
+      executor.resolveTool(call.callId, { ok: true, result: { messageId: 'm1' }, suspend: true });
+      await until(done, 'suspended');
+      expect(result().status).toBe('suspended');
+      const wt = join(root, 'worktrees', 'run-1');
+      expect(existsSync(wt)).toBe(true);
+      sent.length = 0;
+      await until(() => executor.activeRunIds().length === 0, 'idle');
+      executor.accept(gitSpec({ prompt: 'Reply from qa:\nyes', resumeSdkSessionId: 'fake-sess-1', checkCommand: 'true' }));
+      await until(done, 'resumed result');
+      const r = result();
+      expect(r).toMatchObject({ status: 'succeeded', git: { integration: 'fast_forwarded' }, check: { status: 'passed' } });
+      expect(r.git!.commits.map((c) => c.subject)).toEqual(['fake: a.txt']);
+      expect(existsSync(wt)).toBe(false);
+    });
+
+    it('fails the run when the setup command fails', async () => {
+      executor.accept(gitSpec({ setupCommand: 'echo broken; exit 2' }));
+      await until(done, 'result');
+      expect(result()).toMatchObject({ status: 'failed', error: expect.stringMatching(/^setup failed: /) });
+      expect(result().check).toBeUndefined();
     });
   });
 });

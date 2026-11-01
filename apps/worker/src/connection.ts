@@ -157,6 +157,9 @@ export class WorkerConnection {
       case 'tool.result':
         this.executor.resolveTool(msg.callId, msg.result);
         return;
+      case 'approval.result':
+        this.executor.resolveApproval(msg.runId, msg.decision);
+        return;
       case 'run.cancel':
         this.log.info({ runId: msg.runId }, 'run cancelled by API');
         this.executor.cancel(msg.runId);
@@ -191,6 +194,11 @@ export class WorkerConnection {
     // tool calls are not buffered: a call made while disconnected fails at once
     if (msg.type === 'tool.call' && !open) {
       this.executor.resolveTool(msg.callId, DISCONNECTED);
+      return;
+    }
+    // an unsent request would never be answered; one already sent stays pending across a reconnect
+    if (msg.type === 'approval.request' && !open) {
+      this.executor.resolveApproval(msg.runId, { requestId: msg.request.requestId, decision: 'deny', message: 'worker disconnected' });
       return;
     }
     if (open) this.socket!.send(JSON.stringify(msg));

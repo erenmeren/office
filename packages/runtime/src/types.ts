@@ -6,8 +6,7 @@ export interface EventSink {
 
 export interface ToolBridge {
   call(name: OfficeToolName, args: Record<string, unknown>): Promise<ToolCallResult>;
-  // optional until the worker implements it (Task 8); without it an `ask` verdict is denied
-  askApproval?(request: ApprovalRequest): Promise<ApprovalDecision>;
+  askApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
 }
 
 export interface RuntimeAdapter {
