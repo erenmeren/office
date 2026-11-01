@@ -42,9 +42,9 @@ const spec: RunSpec = {
 const init = { type: 'system', subtype: 'init', model: 'm', tools: [], session_id: 'sess-9', apiKeySource: 'none' };
 const base = { is_error: false, total_cost_usd: 0.01, num_turns: 1, duration_ms: 5, usage: { input_tokens: 1, output_tokens: 2 }, session_id: 'sess-9' };
 
-async function run() {
+async function run(patch: Partial<RunSpec> = {}) {
   const events: EventBody[] = [];
-  const res = await new ClaudeAdapter().run(spec, { emit: (e) => void events.push(e) }, new AbortController().signal);
+  const res = await new ClaudeAdapter().run({ ...spec, ...patch }, { emit: (e) => void events.push(e) }, new AbortController().signal);
   return { events, res };
 }
 
@@ -86,6 +86,16 @@ describe('ClaudeAdapter', () => {
     expect(options.disallowedTools).toEqual(
       expect.arrayContaining(['ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool']),
     );
+  });
+
+  it('passes maxBudgetUsd only when positive (0 is no cap)', async () => {
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+    await run();
+    expect((h.calls[0] as { options: Record<string, unknown> }).options.maxBudgetUsd).toBe(0.01);
+    h.calls.length = 0;
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+    await run({ maxBudgetUsd: 0 });
+    expect((h.calls[0] as { options: Record<string, unknown> }).options).not.toHaveProperty('maxBudgetUsd');
   });
 
   it('passes skills, skillsDir and subagents and grants Skill and Agent', async () => {

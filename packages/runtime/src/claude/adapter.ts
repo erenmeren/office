@@ -1,5 +1,5 @@
 import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk';
-import { MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
+import { BUILTIN_TOOLS, MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
 import { gateToolCall } from '../gate.js';
 import { redactSecrets } from '../redact.js';
 import type { EventSink, RuntimeAdapter, ToolBridge } from '../types.js';
@@ -7,23 +7,6 @@ import { buildChildEnv } from './env.js';
 import { normalizeSdkMessage } from './normalize.js';
 
 const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, costUsd: 0, numTurns: 0, durationMs: 0 };
-const BUILTIN_TOOLS = [
-  'Bash',
-  'Edit',
-  'Write',
-  'MultiEdit',
-  'NotebookEdit',
-  'WebFetch',
-  'WebSearch',
-  'Agent',
-  'Task',
-  'KillShell',
-  'TodoWrite',
-  'Skill',
-  'ListMcpResourcesTool',
-  'ReadMcpResourceTool',
-  'ReadMcpResourceDirTool',
-];
 // tools the gate must see: never auto-allowed while a policy or read-only checkout applies
 const GATED_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 
@@ -127,7 +110,8 @@ export function buildQueryOptions(
     strictMcpConfig: true,
     permissionMode: 'default',
     maxTurns: spec.maxTurns,
-    maxBudgetUsd: spec.maxBudgetUsd,
+    // 0 means no cap: leave the SDK option unset
+    ...(spec.maxBudgetUsd > 0 && { maxBudgetUsd: spec.maxBudgetUsd }),
     // Project settings are trusted workspace content (owner-controlled repos); deny rules still cap the tool surface. See docs/security.md.
     // Their allow rules cannot skip the gate: the PreToolUse hook below runs before allow rules.
     settingSources: ['project'],

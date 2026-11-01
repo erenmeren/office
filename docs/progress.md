@@ -118,6 +118,13 @@ Phase 6 (observability and hardening):
 - Not built (the owner may request them): interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send", messages addressed to a subagent, project switcher. Worktree confinement (Phase 4 Outstanding) is not built either.
 - Acceptance data note: three `throwaway-6` worker rows exist, all `revoked`: `22a41a24` (enrolled, then revoked) and `73fb16e6`, `301e5eb4` (created while the implementer's start command failed; their enroll tokens were never used, revoked unused).
 
+## Owner follow-ups after Phase 6 (2026-11-01)
+
+- An agent version's `maxBudgetUsd` is `nonnegative`, default 0 = no agent cap (the owner runs Office on a Claude subscription, where the SDK's cost is an estimate, not a bill). `minBudget` (`packages/shared/src/agent-config.ts`) picks the lowest positive cap among the agent's, the task's (`defaultTaskBudgetUsd` or the plan's `budgetUsd`) and the inbox limit (0.25); the adapter leaves the SDK's `maxBudgetUsd` unset at 0. `maxTurns` stays positive. Existing agent versions keep their stored 2 USD until saved again. The Inspector and the task page hide the cap when it is 0.
+- `BUILTIN_TOOLS` and `ALWAYS_ON_TOOLS` (`Read`, `Glob`, `Grep`) moved to `packages/shared`; the adapter imports them. The agent form picks allowed tools from that list (`ToolPicker`, always-on tools locked) instead of a comma-separated field; subagent tools use the same picker (empty = inherit); subagent model and the skill pin mode/version are house `Select`s (the native `<select>` popups were unreadable on a light GTK theme).
+- Agents page: the list is `AgentsTable` (glass card, avatar, status pill, model badge, skill tags). Thin translucent scrollbars in `globals.css`.
+- The remote worker container now reaches the API through the Docker bridge after `sudo ufw allow from 172.16.0.0/12 to any port 4000 proto tcp`; `infra/compose.hostnet.yaml` is no longer needed on this host.
+
 ## Phase 6 decisions
 
 - Observability reads records only (`SessionEvent`, `SubagentRun`, `UsageRecord`, `AuditLog`, `TaskRun`, `Approval`); no agent text drives a status chip. Read models in `services/observability-service.ts`: `GET /projects/:id/costs`, `/overview`, `/activity`, `GET /sessions`, `GET /sessions/:runId`, `GET /agents/:id/runs`.

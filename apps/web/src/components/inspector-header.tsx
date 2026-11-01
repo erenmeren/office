@@ -67,7 +67,7 @@ export function InspectorHeader({ detail: d, onCancelled }: { detail: SessionDet
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-3">
         <KpiCard label="Tokens" value={kTokens(inT + outT)} sub={`${kTokens(inT)} in · ${kTokens(outT)} out`} />
-        <KpiCard label="Session cost" value={usd(d.costUsd)} sub={d.maxBudgetUsd === null ? undefined : `cap ${usd(d.maxBudgetUsd)}`} />
+        <KpiCard label="Session cost" value={usd(d.costUsd)} sub={d.maxBudgetUsd ? `cap ${usd(d.maxBudgetUsd)}` : undefined} />
         <KpiCard
           label={live ? 'Running for' : 'Ran for'}
           value={ran === undefined ? '—' : elapsed(ran)}

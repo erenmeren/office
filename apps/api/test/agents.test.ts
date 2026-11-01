@@ -19,7 +19,7 @@ describe('agents', () => {
     expect(created.statusCode).toBe(201);
     const agent = created.json();
     expect(agent.currentVersion.version).toBe(1);
-    expect(agent.currentVersion.config).toMatchObject({ maxTurns: 50, maxBudgetUsd: 2 });
+    expect(agent.currentVersion.config).toMatchObject({ maxTurns: 50, maxBudgetUsd: 0 });
 
     const put = await req('PUT', `/agents/${agent.id}`, { config: { ...config, systemPrompt: 'y' } });
     expect(put.json().currentVersion.version).toBe(2);

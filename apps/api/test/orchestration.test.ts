@@ -144,7 +144,7 @@ describe('orchestration', () => {
     expect(spec.readOnlyCheckout).toBe(false);
     expect(spec.checkCommand).toBe('pnpm test');
     expect(spec.env).toEqual({ file: '.env.local', vars: [] });
-    expect(spec.maxBudgetUsd).toBe(2);
+    expect(spec.maxBudgetUsd).toBe(5); // agent cap 0 (none): the project's defaultTaskBudgetUsd applies
     expect(spec.cwd).toBe('/tmp/office-ws/m1');
     expect((await s.mission(m.id))).toMatchObject({ status: 'running', branch: spec.git!.missionBranch });
 
@@ -488,7 +488,7 @@ describe('orchestration', () => {
     });
     const resumed = await s.assign(w);
     expect(resumed.runId).toBe(spec.runId);
-    expect(resumed).toMatchObject({ taskKind: 'code', readOnlyCheckout: false, checkCommand: 'pnpm test', git: spec.git, maxBudgetUsd: 2 });
+    expect(resumed).toMatchObject({ taskKind: 'code', readOnlyCheckout: false, checkCommand: 'pnpm test', git: spec.git, maxBudgetUsd: 5 });
   });
 
   it('mission budget: spend across the mission at the cap holds its tasks and raises no approval', async () => {

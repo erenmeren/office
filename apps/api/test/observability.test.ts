@@ -156,7 +156,7 @@ describe('observability read models', () => {
       runId: r1.runId, projectId: expect.any(String), finishedAt: null, model: 'sonnet', agentVersion: 1, usage: { inputTokens: 300, outputTokens: 30 }, skills: [],
       approval: { id: approvalId, status: 'pending' },
     });
-    expect(body.maxBudgetUsd).toBeGreaterThan(0);
+    expect(body.maxBudgetUsd).toBe(0); // stored at creation; the agent's default cap is 0 (none)
     expect(body.commands.map((c: { command: string }) => c.command)).toEqual(['ls', 'pnpm test']);
     expect(body.commands.map((c: { bySubagent?: string }) => c.bySubagent)).toEqual([undefined, 'tu-1']);
     expect(body.files).toEqual([{ path: 'a.ts' }, { path: 'b.ts', bySubagent: 'tu-1' }]);

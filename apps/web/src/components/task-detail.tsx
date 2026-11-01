@@ -160,7 +160,7 @@ export function TaskDetail({ taskId }: { taskId: string }) {
   const latest = t.runs.at(-1);
   const worker = workers.data?.find((w) => w.id === latest?.workerId);
   const cost = t.runs.reduce((sum, r) => sum + r.costUsd, 0);
-  const cap = t.budgetUsd ?? agent?.currentVersion?.config.maxBudgetUsd;
+  const cap = (t.budgetUsd ?? agent?.currentVersion?.config.maxBudgetUsd) || undefined; // 0 = no cap
   const act = (path: string) => async () => {
     setBusy(true);
     setError('');
