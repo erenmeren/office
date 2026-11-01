@@ -265,6 +265,26 @@ describe('worker gateway', () => {
     await w.close();
   });
 
+  it('acks a stale suspended result for a run resumed on this worker without applying it', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    const { run, session } = await leasedChatRun(id);
+    const suspended = {
+      type: 'run.result', runId: run.id, sessionId: session.id, result: { status: 'suspended', sdkSessionId: 'sdk-1', usage },
+    } as const;
+    w.send(suspended);
+    expect(await w.waitFor('run.result.ack')).toEqual({ type: 'run.result.ack', runId: run.id });
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('waiting_reply');
+
+    // the reply resumed it here (queued, leased) before the lost-ack resend arrived
+    await t.prisma.taskRun.update({ where: { id: run.id }, data: { status: 'queued', leaseExpiresAt: new Date(Date.now() + 60_000) } });
+    w.send(suspended);
+    expect(await w.waitFor('run.result.ack')).toEqual({ type: 'run.result.ack', runId: run.id });
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('queued');
+    expect(await t.prisma.usageRecord.count({ where: { runId: run.id } })).toBe(1);
+    await w.close();
+  });
+
   it('answers integration.check ok only while the lease is live', async () => {
     const { id, enrollToken } = await enroll();
     const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });

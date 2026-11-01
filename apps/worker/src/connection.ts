@@ -166,12 +166,18 @@ export class WorkerConnection {
         this.started?.resolve();
         this.started = undefined;
         return;
-      case 'run.assign':
+      case 'run.assign': {
         this.log.info({ runId: msg.spec.runId }, 'run assigned');
-        // a resumed run: the API has applied its previous (suspended) result, so a stale copy must not be re-sent
-        if (this.unsentResults.delete(msg.spec.runId)) await this.outbox.delete(msg.spec.runId);
+        // a resumed run: the API has applied its previous (suspended) result, so a stale copy must not be re-sent;
+        // any other stored result is still owed to the API
+        const stored = this.unsentResults.get(msg.spec.runId);
+        if (stored?.type === 'run.result' && stored.result.status === 'suspended') {
+          this.unsentResults.delete(msg.spec.runId);
+          await this.outbox.delete(msg.spec.runId);
+        }
         this.executor.accept(msg.spec);
         return;
+      }
       case 'tool.result':
         this.executor.resolveTool(msg.callId, msg.result);
         return;

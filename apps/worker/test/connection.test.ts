@@ -149,3 +149,27 @@ it('deletes the outbox entry on ack', async () => {
   await until(() => !existsSync(join(home, 'outbox', 'r6.json')), 'outbox entry not removed after ack');
   expect((conn as unknown as { unsentResults: Map<string, unknown> }).unsentResults.size).toBe(0);
 });
+
+it('run.assign drops only a stored suspended result for that run', async () => {
+  const { home, make } = harness();
+  const conn = make();
+  await conn.start();
+  const internals = conn as unknown as { executor: { accept(): void }; onMessage(raw: string): Promise<void>; unsentResults: Map<string, unknown> };
+  internals.executor.accept = () => {};
+  const suspended: WorkerToApi = {
+    type: 'run.result', runId: 'r5', sessionId: 's1',
+    result: { status: 'suspended', sdkSessionId: 'sdk', usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, numTurns: 0, durationMs: 0 } },
+  };
+  send(conn, suspended);
+  send(conn, result('r4'));
+  await until(() => existsSync(join(home, 'outbox', 'r5.json')) && existsSync(join(home, 'outbox', 'r4.json')), 'outbox files not written');
+  const spec = {
+    sessionId: 's1', agentId: 'a1', projectId: 'p1', cwd: home, prompt: 'p', systemPrompt: 's', model: 'sonnet', allowedTools: [],
+    maxTurns: 1, maxBudgetUsd: 1, maxConcurrentSubagents: 1, maxSubagentDepth: 1, skills: [], subagents: [],
+    readOnlyCheckout: false, checkTimeoutSeconds: 1, approvalTimeoutMinutes: 1,
+  };
+  for (const runId of ['r5', 'r4']) await internals.onMessage(JSON.stringify({ type: 'run.assign', spec: { ...spec, runId } }));
+  expect(existsSync(join(home, 'outbox', 'r5.json'))).toBe(false);
+  expect(existsSync(join(home, 'outbox', 'r4.json'))).toBe(true);
+  expect([...internals.unsentResults.keys()]).toEqual(['r4']);
+});

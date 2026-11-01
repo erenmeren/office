@@ -291,9 +291,19 @@ export class WorkerGateway {
         return;
       }
       case 'run.result': {
-        const prior = await this.prisma.taskRun.findUnique({ where: { id: msg.runId }, select: { workerId: true, status: true } });
+        const prior = await this.prisma.taskRun.findUnique({
+          where: { id: msg.runId },
+          select: { workerId: true, status: true, session: { select: { sdkSessionId: true } } },
+        });
+        const mine = prior?.workerId === workerId;
+        // a stale suspended result: applied, then the run resumed (queued again here) on the same SDK session
+        const sdk = msg.result.sdkSessionId;
+        if (mine && msg.result.status === 'suspended' && prior.status === 'queued' && sdk && prior.session?.sdkSessionId === sdk) {
+          this.send(workerId, { type: 'run.result.ack', runId: msg.runId });
+          return;
+        }
         // a resend after a lost ack: already final on this worker with the same outcome, so ack without applying it again
-        const resend = prior?.workerId === workerId && FINAL_RUN.has(prior.status) && prior.status === msg.result.status;
+        const resend = mine && FINAL_RUN.has(prior.status) && prior.status === msg.result.status;
         if (!resend) await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
         this.releaseRun(workerId, msg.runId);
         this.send(workerId, { type: 'run.result.ack', runId: msg.runId });
