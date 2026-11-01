@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { MessageLimitsSchema, type MessageLimits } from '@office/shared';
 
 const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -14,6 +15,12 @@ const EnvSchema = z.object({
   OFFICE_HEARTBEAT_SECONDS: z.coerce.number().int().positive().default(10),
   OFFICE_SCHEDULER_INTERVAL_MS: z.coerce.number().int().nonnegative().default(2000),
   OFFICE_SKILL_IMPORT_ROOTS: z.string().optional(),
+  OFFICE_MSG_PER_SESSION: z.coerce.number().int().positive().optional(),
+  OFFICE_MSG_PER_TASK: z.coerce.number().int().positive().optional(),
+  OFFICE_ESCALATION_DEPTH: z.coerce.number().int().positive().optional(),
+  OFFICE_HANDOFF_CHAIN: z.coerce.number().int().positive().optional(),
+  OFFICE_REPLY_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(60),
+  OFFICE_CONTEXT_PACK_MAX_CHARS: z.coerce.number().int().positive().default(12000),
 });
 
 export interface Config {
@@ -28,6 +35,9 @@ export interface Config {
   schedulerIntervalMs: number;
   cookieSecure: boolean;
   skillImportRoots: string[];
+  messageLimits: MessageLimits;
+  replyTimeoutMinutes: number;
+  contextPackMaxChars: number;
 }
 
 const defaultSkillRoot = resolve(fileURLToPath(new URL('../../../templates/skills', import.meta.url)));
@@ -57,6 +67,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     leaseSeconds: e.OFFICE_LEASE_SECONDS,
     heartbeatSeconds: e.OFFICE_HEARTBEAT_SECONDS,
     schedulerIntervalMs: e.OFFICE_SCHEDULER_INTERVAL_MS,
+    messageLimits: MessageLimitsSchema.parse({
+      perSession: e.OFFICE_MSG_PER_SESSION,
+      perTask: e.OFFICE_MSG_PER_TASK,
+      escalationDepth: e.OFFICE_ESCALATION_DEPTH,
+      handoffChain: e.OFFICE_HANDOFF_CHAIN,
+    }),
+    replyTimeoutMinutes: e.OFFICE_REPLY_TIMEOUT_MINUTES,
+    contextPackMaxChars: e.OFFICE_CONTEXT_PACK_MAX_CHARS,
     cookieSecure: env.NODE_ENV === 'production',
     skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot]).map(realOrGiven),
   };

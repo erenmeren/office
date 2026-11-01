@@ -1,4 +1,4 @@
-import type { OfficeEvent, RunStatus, TaskStatus } from '@office/shared';
+import type { OfficeEvent, RunStatus, TaskStatus, UiServerMessage } from '@office/shared';
 
 // Hub message shapes; Task 7 moves the UI-facing schemas into @office/shared.
 export type RunStatusChanged = { type: 'run.status.changed'; runId: string; status: RunStatus };
@@ -6,7 +6,9 @@ export type TaskStatusChanged = {
   type: 'task.status.changed';
   task: { id: string; status: TaskStatus; updatedAt: string };
 };
-export type HubMessage = OfficeEvent | RunStatusChanged | TaskStatusChanged;
+export type MessageCreated = Extract<UiServerMessage, { type: 'message.created' }>;
+export type MemoryChanged = Extract<UiServerMessage, { type: 'memory.changed' }>;
+export type HubMessage = OfficeEvent | RunStatusChanged | TaskStatusChanged | MessageCreated | MemoryChanged;
 
 /** Messages collected inside a transaction; publish them with `hub.publishAll` only after it commits. */
 export type Outbox = Array<{ topic: string; message: HubMessage }>;
