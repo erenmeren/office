@@ -160,11 +160,33 @@ describe('observability read models', () => {
   });
 
   it('agents/:id/runs lists past runs with cost and head commit', async () => {
+    const mission = await t.prisma.mission.create({ data: { projectId: q, title: 'M', request: 'r', status: 'running' } });
+    const agent = await t.prisma.agent.findUniqueOrThrow({ where: { id: agentId } });
+    await t.prisma.taskRun.create({
+      data: { kind: 'plan', agentId, projectId: q, missionId: mission.id, agentVersionId: agent.currentVersionId!, status: 'succeeded' },
+    });
     const rows = (await get(`/agents/${agentId}/runs?limit=20`)).json();
     expect(rows).toHaveLength(2);
     expect(rows.find((r: { runId: string }) => r.runId === r2.runId)).toEqual({
       runId: r2.runId, taskKey: null, taskTitle: 'Other', status: 'succeeded', durationMs: expect.any(Number), costUsd: 10, headCommit: 'abc123',
     });
+  });
+
+  it('sessions/:runId reports the budget stored on the run at creation', async () => {
+    const r = (await req('POST', '/projects', { name: 'R', slug: 'r', repoPath: '/tmp/office-ws/r' })).json().id;
+    expect((await t.app.inject({ method: 'PUT', url: `/projects/${r}/settings`, headers: { cookie }, payload: { defaultTaskBudgetUsd: 2 } })).statusCode).toBe(200);
+    const big = (
+      await req('POST', '/agents', {
+        name: 'Big', slug: 'big', role: 'dev', config: { systemPrompt: 'x', model: 'sonnet', allowedTools: ['Read'], maxBudgetUsd: 10 },
+      })
+    ).json().id;
+    const workerId = (await t.prisma.worker.findFirstOrThrow()).id;
+    const mission = await t.prisma.mission.create({ data: { projectId: r, title: 'M', request: 'r', status: 'running' } });
+    const task = await t.prisma.task.create({ data: { projectId: r, agentId: big, missionId: mission.id, key: 'T1', title: 'code it', kind: 'code' } });
+    const config = loadConfig({ ...process.env, DATABASE_URL: process.env.DATABASE_URL_TEST });
+    const run = (await createRunForTask(t.prisma, t.app.hub, task, { workerId, local: () => true }, config)).spec;
+    expect(run.maxBudgetUsd).toBe(2);
+    expect((await get(`/sessions/${run.runId}`)).json()).toMatchObject({ maxBudgetUsd: 2, taskKey: 'T1' });
   });
 
   it('audit filters by action and since and pages with before', async () => {

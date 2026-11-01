@@ -25,7 +25,7 @@ export async function observabilityRoutes(app: FastifyInstance) {
   app.get('/projects/:id/activity', async (req) => {
     const { id } = Id.parse(req.params);
     const q = z
-      .object({ limit: z.coerce.number().int().min(1).max(500).default(50), beforeSeqId: z.string().min(1).optional() })
+      .object({ limit: z.coerce.number().int().min(1).max(200).default(50), beforeSeqId: z.string().min(1).optional() })
       .parse(req.query);
     return projectActivity(app.prisma, id, q.limit, q.beforeSeqId);
   });

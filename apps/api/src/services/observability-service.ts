@@ -1,5 +1,5 @@
 import type { Prisma } from '@office/db';
-import { AgentConfigSchema, summarizeEvent, type OfficeEvent } from '@office/shared';
+import { summarizeEvent, type OfficeEvent } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { dailyLimit, runningCount, spentToday, utcMidnight } from './budget-service.js';
 import { getSettings, projectAgents } from './project-service.js';
@@ -139,7 +139,7 @@ export async function projectActivity(db: Db, projectId: string, limit: number, 
 const runInclude = {
   session: { include: { subagentRuns: { orderBy: { startedAt: 'asc' } } } },
   agent: { select: { name: true } },
-  task: { select: { key: true, title: true, budgetUsd: true } },
+  task: { select: { key: true, title: true } },
   worker: { select: { name: true } },
 } satisfies Prisma.TaskRunInclude;
 type RunRow = Prisma.TaskRunGetPayload<{ include: typeof runInclude }>;
@@ -190,12 +190,13 @@ export async function listSessions(db: Db, projectId: string, status: 'live' | '
     take: 100,
     include: runInclude,
   });
+  // shortcut: loads every command/file event of up to 100 sessions to count them; move counts to SQL if status=all gets slow
   const events = await activityEvents(db, runs.map((r) => r.session!.id));
   return runs.map((r) => sessionItem(r, events));
 }
 
 export async function sessionDetail(db: Db, runId: string) {
-  const run = await db.taskRun.findUnique({ where: { id: runId }, include: { ...runInclude, agentVersion: true } });
+  const run = await db.taskRun.findUnique({ where: { id: runId }, include: { ...runInclude, agentVersion: { select: { version: true } } } });
   if (!run) throw new HttpError(404, 'not_found');
   const [events, usage, approval] = await Promise.all([
     run.session ? activityEvents(db, [run.session.id]) : Promise.resolve([]),
@@ -214,15 +215,12 @@ export async function sessionDetail(db: Db, runId: string) {
     if (parent && !f.bySubagent) f.bySubagent = parent;
     files.set(path, f);
   }
-  // the spec's budget is not stored; recompute the caps buildBase/createRun apply (agent version, inbox, task budget)
-  const cfg = AgentConfigSchema.safeParse(run.agentVersion.config);
-  const base = cfg.success ? cfg.data.maxBudgetUsd : null;
-  const maxBudgetUsd = base === null ? null : Math.min(base, run.kind === 'inbox' ? 0.25 : Infinity, run.task?.budgetUsd ?? Infinity);
   return {
     ...sessionItem(run, events),
     model: run.session?.model ?? null,
     agentVersion: run.agentVersion.version,
-    maxBudgetUsd,
+    // runs created before phase 6 did not store their budget
+    maxBudgetUsd: run.maxBudgetUsd,
     usage: { inputTokens: usage._sum.inputTokens ?? 0, outputTokens: usage._sum.outputTokens ?? 0 },
     commands: events
       .filter((e) => e.type === COMMAND)
@@ -236,11 +234,11 @@ export async function sessionDetail(db: Db, runId: string) {
   };
 }
 
-/** An agent's task and mission runs across projects, newest first. */
+/** An agent's task runs (mission tasks included) across projects, newest first; plan, review, inbox and chat runs are left out. */
 export async function agentRuns(db: Db, agentId: string, limit: number) {
   if (!(await db.agent.findUnique({ where: { id: agentId }, select: { id: true } }))) throw new HttpError(404, 'not_found');
   const runs = await db.taskRun.findMany({
-    where: { agentId, OR: [{ kind: 'task' }, { missionId: { not: null } }] },
+    where: { agentId, kind: 'task' },
     orderBy: { createdAt: 'desc' },
     take: limit,
     include: { task: { select: { key: true, title: true } } },

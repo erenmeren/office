@@ -444,6 +444,7 @@ model TaskRun {
   resultText          String?
   error               String?
   costUsd             Float             @default(0)
+  maxBudgetUsd        Float?
   worktreePath        String?
   branch              String?
   baseCommit          String?
@@ -509,6 +510,7 @@ model SessionEvent {
   session   AgentSession @relation(fields: [sessionId], references: [id])
 
   @@unique([sessionId, seq])
+  @@index([ts, id])
   @@index([sessionId, seq])
 }
 

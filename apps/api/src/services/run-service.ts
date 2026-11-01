@@ -164,6 +164,8 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
     kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt,
   });
 
+  const maxBudgetUsd =
+    input.taskBudgetUsd !== undefined ? Math.min(base.spec.maxBudgetUsd, input.taskBudgetUsd) : base.spec.maxBudgetUsd;
   const outbox: Outbox = [];
   const created = await prisma.$transaction(async (tx) => {
     const run = await tx.taskRun.create({
@@ -179,6 +181,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
         agentVersionId: base.version.id,
         workerId: input.worker.workerId,
         status: 'queued',
+        maxBudgetUsd,
         leaseExpiresAt: leaseUntil(config),
       },
     });
@@ -211,7 +214,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
       ...base.spec,
       ...input.spec,
       ...remoteCwd(input.spec?.git),
-      ...(input.taskBudgetUsd !== undefined && { maxBudgetUsd: Math.min(base.spec.maxBudgetUsd, input.taskBudgetUsd) }),
+      maxBudgetUsd,
       ...(input.allowedToolsOverride && { allowedTools: input.allowedToolsOverride }),
       outputFormat: input.outputFormat,
       readOnlyCheckout: input.readOnlyCheckout,
