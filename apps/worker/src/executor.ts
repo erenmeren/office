@@ -255,7 +255,9 @@ export class RunExecutor {
         }
       }
     } finally {
-      if (worktree && !keepWorktree) await removeWorktree(spec.git!.repoPath, worktree.path);
+      if (worktree && !keepWorktree) {
+        await removeWorktree(spec.git!.repoPath, worktree.path, { run: worktree.branch, mission: spec.git!.missionBranch });
+      }
     }
     this.send({ type: 'run.result', runId: spec.runId, sessionId: spec.sessionId, result });
   }

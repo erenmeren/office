@@ -41,8 +41,9 @@ export async function evidenceFor(db: Db, taskId: string) {
 }
 
 /**
- * §8.2: code -> the succeeded runs committed changes, all of them integrated into the mission branch,
- * and the latest check among them passed (a reopened task's rerun may change nothing);
+ * §8.2: code -> at least one succeeded run's commits were fast-forwarded into the mission branch, no committed
+ * run after the last fast-forwarded one is unintegrated (earlier failed-check or needs_integration runs were
+ * superseded by the retry), and the latest check passed (a reopened task's rerun may change nothing);
  * analysis -> an artifact or a memory entry for the task; review -> a `review` artifact.
  */
 export function evidenceRule(e: Pick<Evidence, 'task' | 'runs' | 'artifacts' | 'memoryCount'>): { ok: boolean; reason?: string } {
@@ -52,9 +53,11 @@ export function evidenceRule(e: Pick<Evidence, 'task' | 'runs' | 'artifacts' | '
     // shortcut: filesChanged is not stored; a head commit past the base stands for it
     const committed = ok.filter((r) => r.git && r.git.headCommit !== r.git.baseCommit);
     if (!committed.length) return { ok: false, reason: 'no succeeded run changed files' };
-    if (committed.some((r) => r.git!.integration !== 'fast_forwarded')) return { ok: false, reason: 'commits not integrated' };
+    // a failed check integrates nothing, so it is the reason to report first
     const check = ok.filter((r) => r.check).at(-1)?.check;
     if (check?.status !== 'passed') return { ok: false, reason: `check ${check?.status ?? 'missing'} on the latest checked run` };
+    // the last committed run must be the integrated one; it supersedes earlier unintegrated attempts
+    if (committed.at(-1)!.git!.integration !== 'fast_forwarded') return { ok: false, reason: 'commits not integrated' };
     return { ok: true };
   }
   if (e.task.kind === 'analysis') {

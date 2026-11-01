@@ -40,10 +40,16 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${body}$`);
 }
 
-// git calls that create or rewrite commits without `git commit`: they need the same approval
-const COMMIT_EQUIVALENT = /\bgit(?:\s+-[Cc]\s+\S+)*\s+(worktree\s+add|cherry-pick|rebase|merge|am|apply|stash)(?![\w-])/i;
+/** Global git options skipped before the subcommand: `-C dir`, `-c k=v`, `--no-pager`, `--git-dir=…`. */
+export const GIT_OPTIONS = String.raw`(?:\s+(?:-[Cc]\s+\S+|--no-pager|--git-dir=\S+))*`;
 
-const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read']);
+// git calls that create or rewrite commits without `git commit`: they need the same approval
+const COMMIT_EQUIVALENT = new RegExp(
+  String.raw`\bgit${GIT_OPTIONS}\s+(worktree\s+add|cherry-pick|rebase|merge|am|apply|stash)(?![\w-])`,
+  'i',
+);
+
+const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read', 'Grep']);
 
 function decide(policy: ApprovalPolicy, type: ApprovalType, reason: string): PolicyVerdict {
   const mode = policy[type];
@@ -66,12 +72,12 @@ export function evaluateToolCall(
     return { verdict: 'allow' };
   }
   if (FILE_TOOLS.has(toolName)) {
-    const raw = [input.file_path, input.notebook_path, input.path].find((v) => typeof v === 'string') as
-      | string
-      | undefined;
-    const base = raw?.split(/[\\/]/).pop();
-    if (base) {
-      const hit = policy.sensitivePaths.find((g) => globToRegExp(g).test(base));
+    // Grep's `glob` names files too: `.env*` or `**/.env.local` reach the same secrets as `path`
+    for (const raw of [input.file_path, input.notebook_path, input.path, input.glob]) {
+      const base = typeof raw === 'string' ? raw.split(/[\\/]/).pop() : undefined;
+      if (!base) continue;
+      // a `glob` input is itself a pattern: `.env*` reaches `.env` although no sensitive glob matches the text `.env*`
+      const hit = policy.sensitivePaths.find((g) => globToRegExp(g).test(base) || (raw === input.glob && globToRegExp(base).test(g)));
       if (hit) return decide(policy, 'sensitive_path', `${toolName} touches sensitive path ${base} (matches "${hit}")`);
     }
   }

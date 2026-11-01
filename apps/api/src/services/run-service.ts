@@ -522,7 +522,10 @@ export async function completeRun(
         // the Chief's review (or the owner) decides done
         await setTaskStatus(tx, outbox, task.id, 'review');
       } else if (status === 'failed') {
-        await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
+        // a mission cancelled while the run was live gets no retry
+        const mission = await tx.mission.findUniqueOrThrow({ where: { id: run.missionId } });
+        const next = mission.status === 'cancelled' ? 'cancelled' : task.attempts < task.maxAttempts ? 'ready' : 'failed';
+        await setTaskStatus(tx, outbox, task.id, next);
       } else {
         await setTaskStatus(tx, outbox, task.id, status);
       }

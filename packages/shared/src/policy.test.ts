@@ -44,6 +44,15 @@ describe('evaluateToolCall', () => {
     expect(evaluateToolCall(policy, 'Read', { file_path: '/w/certs/server.pem' })).toMatchObject({ type: 'sensitive_path' });
     expect(evaluateToolCall(policy, 'NotebookEdit', { notebook_path: '/w/id_rsa' })).toMatchObject({ type: 'sensitive_path' });
   });
+  it('asks for Grep on a sensitive path or glob', () => {
+    expect(evaluateToolCall(policy, 'Grep', { pattern: 'KEY', path: '/w/.env.local' })).toMatchObject({
+      verdict: 'ask',
+      type: 'sensitive_path',
+    });
+    expect(evaluateToolCall(policy, 'Grep', { pattern: 'KEY', path: '/w', glob: '.env*' })).toMatchObject({ type: 'sensitive_path' });
+    expect(evaluateToolCall(policy, 'Grep', { pattern: 'KEY', glob: '**/.env.local' })).toMatchObject({ type: 'sensitive_path' });
+    expect(evaluateToolCall(policy, 'Grep', { pattern: 'KEY', glob: '*.ts' })).toEqual({ verdict: 'allow' });
+  });
   it('allows ordinary calls', () => {
     expect(evaluateToolCall(policy, 'Read', { file_path: '/w/README.md' })).toEqual({ verdict: 'allow' });
     expect(evaluateToolCall(policy, 'Bash', { command: 'ls' })).toEqual({ verdict: 'allow' });

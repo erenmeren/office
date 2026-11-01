@@ -82,6 +82,24 @@ describe('git worktrees', () => {
     expect(git(repo, 'rev-parse', 'office/m')).toBe(before);
   });
 
+  it('removing a worktree deletes its run branch when fast-forwarded or empty, keeps it when it needs integration', async () => {
+    await ensureMissionBranch(repo, 'office/m', 'main');
+    const branches = () => git(repo, 'branch', '--list', '--format=%(refname:short)').split('\n');
+    const empty = await createWorktree(repo, wtDir, 'run-e', 'office/m', 'office/m-runs/e');
+    const ff = await createWorktree(repo, wtDir, 'run-f', 'office/m', 'office/m-runs/f');
+    const late = await createWorktree(repo, wtDir, 'run-l', 'office/m', 'office/m-runs/l');
+    commitFile(ff.path, 'f.txt', 'f', 'f change');
+    expect(await fastForward(repo, 'office/m', git(ff.path, 'rev-parse', 'HEAD'))).toBe('fast_forwarded');
+    commitFile(late.path, 'l.txt', 'l', 'l change');
+    expect(await fastForward(repo, 'office/m', git(late.path, 'rev-parse', 'HEAD'))).toBe('needs_integration');
+    for (const [wt, b] of [[empty, 'e'], [ff, 'f'], [late, 'l']] as const) {
+      await removeWorktree(repo, wt.path, { run: `office/m-runs/${b}`, mission: 'office/m' });
+    }
+    expect(branches()).not.toContain('office/m-runs/e');
+    expect(branches()).not.toContain('office/m-runs/f');
+    expect(branches()).toContain('office/m-runs/l');
+  });
+
   it('removes a worktree, and sweeps only inactive worktrees older than 7 days', async () => {
     await ensureMissionBranch(repo, 'office/m', 'main');
     const a = await createWorktree(repo, wtDir, 'run-a', 'office/m', 'office/m-runs/a');

@@ -33,6 +33,8 @@ const git = (filesChanged: number) => ({
   integration: 'fast_forwarded',
   worktreePath: '/tmp/office-worker/runs/x/repo',
 });
+/** The worker integrates nothing when the check fails (executor finishWorktree). */
+const failedGit = (filesChanged: number) => ({ ...git(filesChanged), integration: 'none' as const });
 const check = (status: 'passed' | 'failed') => ({
   command: 'pnpm test',
   status,
@@ -111,7 +113,7 @@ async function setup() {
   const toReview = async (w: FakeWorker, k: Record<string, string>, aCheck: 'passed' | 'failed') => {
     const a = await assign(w);
     expect(a.taskKind).toBe('code');
-    await finish(w, a, { status: 'succeeded', git: git(2), check: check(aCheck) });
+    await finish(w, a, { status: 'succeeded', git: aCheck === 'passed' ? git(2) : failedGit(2), check: check(aCheck) });
     const c = await assign(w);
     expect(c.taskKind).toBe('analysis');
     await finish(w, c, { status: 'succeeded', resultText: 'The rules live in src/mapping.ts.', git: { ...git(0), integration: 'none' } });
@@ -185,6 +187,18 @@ describe('orchestration', () => {
     const spec = await s.assign(w);
     await s.finish(w, spec, { status: 'succeeded', git: { ...git(1), integration: 'needs_integration' }, check: check('passed') });
     expect(await s.task(k.a)).toMatchObject({ status: 'review', reviewNote: 'needs integration' });
+  });
+
+  it('owner failed override: review -> failed with the note, audited, dependent blocked', async () => {
+    s = await setup();
+    const { w, k } = await s.approved();
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('passed') });
+    const res = await s.req('POST', `/tasks/${k.a}/failed`, { note: 'wrong approach' });
+    expect(res.statusCode).toBe(200);
+    expect(await s.task(k.a)).toMatchObject({ status: 'failed', reviewNote: 'wrong approach' });
+    expect((await s.task(k.b)).status).toBe('blocked');
+    const audit = await s.t.prisma.auditLog.findFirstOrThrow({ where: { action: 'task.override', targetId: k.a } });
+    expect(audit.detail).toMatchObject({ decision: 'failed', by: 'owner' });
   });
 
   it('a failed twice -> a failed, b blocked; owner retry -> ready', async () => {
@@ -315,6 +329,10 @@ describe('orchestration', () => {
     expect(review.kind).toBe('review');
     await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'all good', tasks: [{ taskId: k.a, decision: 'done' }] } });
     expect(await s.mission(m.id)).toMatchObject({ status: 'done', summary: 'all good' });
+    // the verdict links to its evidence: the review run and its mission-review.md
+    const view = (await s.req('GET', `/missions/${m.id}`)).json();
+    const artifact = await s.t.prisma.artifact.findFirstOrThrow({ where: { runId: review.runId, name: 'mission-review.md' } });
+    expect(view).toMatchObject({ status: 'done', summary: 'all good', reviewRunId: review.runId, reviewArtifactId: artifact.id, spentUsd: expect.any(Number) });
   });
 
   it('a mission with an undecided review task stays in review; the owner closing it finishes the mission', async () => {
@@ -433,7 +451,7 @@ describe('orchestration', () => {
     expect(resumed).toMatchObject({ taskKind: 'code', readOnlyCheckout: false, checkCommand: 'pnpm test', git: spec.git, maxBudgetUsd: 2 });
   });
 
-  it('mission budget: spend across the mission at the cap holds its tasks and raises budget_exceeded', async () => {
+  it('mission budget: spend across the mission at the cap holds its tasks and raises no approval', async () => {
     s = await setup();
     // the plan run alone costs 0.5
     const { w, m, k } = await s.approved(2, testPlan(), 0.4);
@@ -444,7 +462,37 @@ describe('orchestration', () => {
     expect((await s.task(k.a)).status).toBe('ready');
     const line = info.mock.calls.find(([o]) => (o as { taskId?: string }).taskId === k.a);
     expect((line![0] as { reason: string }).reason).toBe('mission budget exhausted');
-    expect(await s.t.prisma.approval.count({ where: { missionId: m.id, type: 'budget_exceeded', status: 'pending' } })).toBe(1);
+    expect(await s.t.prisma.approval.count({ where: { missionId: m.id } })).toBe(0);
+  });
+
+  it('an approved legacy mission-cap approval does not raise the project daily budget', async () => {
+    s = await setup();
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 1 });
+    const { m } = await s.approved(2);
+    await s.t.prisma.approval.create({
+      data: {
+        projectId: s.projectId, missionId: m.id, type: 'budget_exceeded', status: 'approved', decidedAt: new Date(),
+        reason: 'mission budget exhausted; approve to continue',
+      },
+    });
+    expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 0.5, dailyBudgetUsd: 1 });
+  });
+
+  it('a mission cancelled while its run is live: the failed result cancels the task and nothing is scheduled again', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, m, k } = await s.approved(1, plan);
+    const spec = await s.assign(w);
+    // the window in cancelMission between the mission moving to cancelled and its live tasks being cancelled
+    await s.t.prisma.mission.update({ where: { id: m.id }, data: { status: 'cancelled' } });
+    await s.finish(w, spec, { status: 'failed', error: 'interrupted' });
+    expect((await s.task(k.a)).status).toBe('cancelled');
+    // a ready task of a cancelled mission is held back too
+    await s.t.prisma.task.update({ where: { id: k.a }, data: { status: 'ready' } });
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect(await s.t.prisma.taskRun.count({ where: { taskId: k.a } })).toBe(1);
   });
 
   it('a late review run does not re-apply a decision it made through review_task', async () => {
@@ -453,7 +501,7 @@ describe('orchestration', () => {
     plan.tasks = plan.tasks.filter((x) => x.key === 'a');
     const { w, m, k } = await s.approved(2, plan);
     const first = await s.assign(w);
-    await s.finish(w, first, { status: 'succeeded', git: git(1), check: check('failed') });
+    await s.finish(w, first, { status: 'succeeded', git: failedGit(1), check: check('failed') });
     const review = await s.assign(w);
     expect(review.kind).toBe('review');
     expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'reopen', note: 'fix it' })).toMatchObject({ ok: true });
@@ -505,9 +553,7 @@ describe('orchestration', () => {
     });
     await s.t.app.scheduler.tick();
     expect((await s.task(k.a)).status).toBe('ready');
-    expect(await s.t.prisma.approval.findMany({ where: { missionId: m.id, type: 'budget_exceeded' } })).toEqual([
-      expect.objectContaining({ status: 'pending', reason: 'mission budget exhausted; approve to continue' }),
-    ]);
+    expect(await s.t.prisma.approval.count({ where: { missionId: m.id, type: 'budget_exceeded' } })).toBe(0);
     const res = await s.req('PUT', `/missions/${m.id}`, { budgetUsd: 10 });
     expect(res.statusCode).toBe(200);
     expect(res.json().budgetUsd).toBe(10);
@@ -576,12 +622,56 @@ describe('orchestration', () => {
     });
   });
 
+  it('a failed check integrates nothing; after a reopen the fast-forwarded rerun with a passing check is done', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, k } = await s.approved(1, plan);
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: failedGit(1), check: check('failed') });
+    const r1 = await s.assign(w);
+    expect(await s.tool(w, r1, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: false, code: 'evidence_missing' });
+    expect(await s.tool(w, r1, 'review_task', { taskId: k.a, decision: 'reopen', note: 'fix the tests' })).toMatchObject({ ok: true });
+    await s.finish(w, r1, { status: 'succeeded', structuredOutput: { summary: 's', tasks: [] } });
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('passed') });
+    const r2 = await s.assign(w);
+    expect(r2.kind).toBe('review');
+    expect(await s.tool(w, r2, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: true, result: { status: 'done' } });
+  });
+
+  it('parallel code tasks: the later one needs integration, its fast-forwarded retry is done', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a' || x.key === 'b').map((x) => ({ ...x, dependsOn: [] }));
+    const { w, k } = await s.approved(1, plan);
+    const first = await s.assign(w);
+    await s.finish(w, first, { status: 'succeeded', git: git(1), check: check('passed') });
+    const second = await s.assign(w);
+    const ks = k as Record<string, string>;
+    const done = ks[first.git!.taskSlug]!;
+    const later = ks[second.git!.taskSlug]!;
+    expect(later).not.toBe(done);
+    await s.finish(w, second, { status: 'succeeded', git: { ...git(1), integration: 'needs_integration' }, check: check('passed') });
+    const r1 = await s.assign(w);
+    expect(r1.kind).toBe('review');
+    expect(await s.tool(w, r1, 'review_task', { taskId: done, decision: 'done' })).toMatchObject({ ok: true });
+    expect(await s.tool(w, r1, 'review_task', { taskId: later, decision: 'done' })).toMatchObject({
+      ok: false, code: 'evidence_missing', error: 'commits not integrated',
+    });
+    expect(await s.tool(w, r1, 'review_task', { taskId: later, decision: 'reopen', note: 'rebase' })).toMatchObject({ ok: true });
+    await s.finish(w, r1, { status: 'succeeded', structuredOutput: { summary: 's', tasks: [] } });
+    const retry = await s.assign(w);
+    expect(retry.git?.taskSlug).toBe(second.git!.taskSlug);
+    await s.finish(w, retry, { status: 'succeeded', git: git(1), check: check('passed') });
+    const r2 = await s.assign(w);
+    expect(await s.tool(w, r2, 'review_task', { taskId: later, decision: 'done' })).toMatchObject({ ok: true, result: { status: 'done' } });
+  });
+
   it('code evidence spans runs: a rerun that changes nothing but passes the check after integrated commits is done', async () => {
     s = await setup();
     const plan = testPlan();
     plan.tasks = plan.tasks.filter((x) => x.key === 'a');
     const { w, k } = await s.approved(1, plan);
-    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('failed') });
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('passed') });
     const r1 = await s.assign(w);
     expect(await s.tool(w, r1, 'review_task', { taskId: k.a, decision: 'reopen', note: 'fix the tests' })).toMatchObject({ ok: true });
     await s.finish(w, r1, { status: 'succeeded', structuredOutput: { summary: 's', tasks: [] } });
@@ -602,11 +692,11 @@ describe('orchestration', () => {
     const plan = testPlan();
     plan.tasks = plan.tasks.filter((x) => x.key === 'a');
     const { w, k } = await s.approved(1, plan);
-    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('failed') });
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: failedGit(1), check: check('failed') });
     const r1 = await s.assign(w);
     expect(await s.tool(w, r1, 'review_task', { taskId: k.a, decision: 'reopen', note: 'again' })).toMatchObject({ ok: true });
     await s.finish(w, r1, { status: 'succeeded', structuredOutput: { summary: 's', tasks: [] } });
-    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('failed') });
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: failedGit(1), check: check('failed') });
     expect(await s.task(k.a)).toMatchObject({ status: 'review', attempts: 2, maxAttempts: 2 });
     const r2 = await s.assign(w);
     const warn = vi.spyOn((s.t.app.gateway as unknown as { log: { warn: (...a: unknown[]) => void } }).log, 'warn');

@@ -88,9 +88,16 @@ export async function fastForward(repoPath: string, missionBranch: string, headC
   return (await succeeds(repoPath, 'update-ref', ref, headCommit, current)) ? 'fast_forwarded' : 'needs_integration';
 }
 
-export async function removeWorktree(repoPath: string, path: string): Promise<void> {
+/**
+ * Removes the worktree; with `branches`, also deletes the run branch when the mission branch contains it
+ * (fast-forwarded, or no commits of its own). A needs_integration branch is kept for manual integration.
+ */
+export async function removeWorktree(repoPath: string, path: string, branches?: { run: string; mission: string }): Promise<void> {
   await git(repoPath, 'worktree', 'remove', '--force', path).catch(() => {});
   await git(repoPath, 'worktree', 'prune').catch(() => {});
+  if (branches && (await succeeds(repoPath, 'merge-base', '--is-ancestor', `refs/heads/${branches.run}`, `refs/heads/${branches.mission}`))) {
+    await git(repoPath, 'branch', '-D', branches.run).catch(() => {});
+  }
 }
 
 /** Removes this repo's worktrees under `worktreesDir` that belong to no active run and are older than 7 days. */

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_DESTRUCTIVE_PATTERNS, evaluateToolCall, type ApprovalDecision, type RunSpec } from '@office/shared';
+import { DEFAULT_DESTRUCTIVE_PATTERNS, GIT_OPTIONS, evaluateToolCall, type ApprovalDecision, type RunSpec } from '@office/shared';
 import type { EventSink, ToolBridge } from './types.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -9,13 +9,15 @@ const READ_ONLY_GIT = [
   'status', 'log', 'diff', 'show', 'blame', 'grep', 'ls-files', 'rev-parse', 'branch --list',
   'worktree list', 'remote -v', 'describe', 'cat-file',
 ];
-// every `git [-C dir | -c k=v ...] <sub> <args>` in a command line, up to the next shell separator
-const GIT_CALL = /(?:^|[\s;&|(`])git(?:\s+(?:-[Cc]\s+\S+|--no-pager))*\s+([^;&|\n)`]*)/g;
+// every `git [-C dir | -c k=v ...] <sub> <args>` in a command line, up to the next shell separator or quote;
+// `git` may follow a quote (`sh -c "git …"`) or a path (`/usr/bin/git`, `\git`)
+const GIT_CALL = new RegExp(String.raw`(?:^|[\s;&|(\`"'/\\])git(${GIT_OPTIONS})\s+([^;&|\n)\`"']*)`, 'g');
 
-/** The first git call in `command` that is not on the read-only list. */
+/** The first git call in `command` that is not on the read-only list; any `-c k=v` (config override) counts. */
 function writingGitCall(command: string): string | undefined {
   for (const m of command.matchAll(GIT_CALL)) {
-    const call = m[1]!.trim().replace(/\s+/g, ' ');
+    const call = m[2]!.trim().replace(/\s+/g, ' ');
+    if (/(?:^|\s)-c\s/.test(m[1]!)) return `${m[1]!.trim().replace(/\s+/g, ' ')} ${call}`;
     if (!READ_ONLY_GIT.some((r) => call === r || call.startsWith(`${r} `))) return call;
   }
   return undefined;

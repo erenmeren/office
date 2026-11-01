@@ -175,9 +175,24 @@ export async function startPlanRun(
     readOnlyCheckout: true,
     outputFormat: { type: 'json_schema', schema: PLAN_JSON_SCHEMA },
     allowedToolsOverride: PLAN_TOOLS,
+    // a read-only worktree, never the real repo: untracked secrets such as .env.local are not in a checkout
+    spec: {
+      git: {
+        repoPath: mission.project.repoPath,
+        defaultBranch: mission.project.defaultBranch,
+        missionBranch: missionBranch(mission),
+        taskSlug: 'plan',
+        committerName: settings.committerName,
+        committerEmail: settings.committerEmail,
+        agentName: chief.name,
+      },
+    },
     worker,
   });
-  await prisma.mission.update({ where: { id: mission.id }, data: { planRunId: created.run.id } });
+  await prisma.mission.update({
+    where: { id: mission.id },
+    data: { planRunId: created.run.id, ...(!mission.branch && { branch: missionBranch(mission) }) },
+  });
   return created;
 }
 

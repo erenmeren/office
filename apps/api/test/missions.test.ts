@@ -92,6 +92,10 @@ describe('missions', () => {
     const run = await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
     expect(run).toMatchObject({ kind: 'plan', taskId: null, missionId: m.id });
     expect((await s.mission(m.id)).planRunId).toBe(spec.runId);
+    // the plan reads a read-only worktree of the mission branch, never the real repo
+    const mission = await s.mission(m.id);
+    expect(spec.git).toMatchObject({ missionBranch: mission.branch, taskSlug: 'plan' });
+    expect(mission.branch).toMatch(/^office\//);
 
     // a second tick does not plan the same mission again
     await s.t.app.scheduler.tick();

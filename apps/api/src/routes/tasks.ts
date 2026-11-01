@@ -58,7 +58,7 @@ export async function taskRoutes(app: FastifyInstance) {
   });
 
   // owner overrides: done skips the evidence rule and consultations
-  for (const decision of ['done', 'reopen'] as const) {
+  for (const decision of ['done', 'reopen', 'failed'] as const) {
     app.post(`/tasks/:id/${decision}`, async (req) => {
       const { id } = req.params as { id: string };
       const { note } = Note.parse(req.body ?? {});

@@ -1,5 +1,5 @@
 import type { Agent, PrismaClient, Task } from '@office/db';
-import type { ProjectSettings } from '@office/shared';
+import type { MissionStatus, ProjectSettings } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from './audit-service.js';
 import type { EventHub, Outbox } from './event-hub.js';
@@ -8,6 +8,8 @@ import { agentAllowed } from './project-service.js';
 import type { Db } from './task-service.js';
 
 const LIVE_RUN = ['queued', 'running', 'waiting_reply', 'waiting_approval'] as const;
+// a task of a mission in any other status (cancelled, failed, done, ...) never starts
+const SCHEDULABLE_MISSION: MissionStatus[] = ['approved', 'running', 'review'];
 
 export const utcMidnight = (now = new Date()) =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
@@ -24,10 +26,21 @@ export async function missionSpent(db: Db, missionId: string) {
   return r._sum.costUsd ?? 0;
 }
 
-/** The project's daily budget, raised by one more daily budget per budget_exceeded approval decided today. */
+const DAILY_BUDGET_SPENT = 'project daily budget spent';
+
+/**
+ * The project's daily budget, raised by one more daily budget per daily-budget approval decided today.
+ * Approvals with another reason (legacy mission-cap rows) do not raise it: the mission cap is raised via PUT /missions/:id.
+ */
 export async function dailyLimit(db: Db, settings: ProjectSettings, projectId: string) {
   const approved = await db.approval.count({
-    where: { projectId, type: 'budget_exceeded', status: 'approved', decidedAt: { gte: utcMidnight() } },
+    where: {
+      projectId,
+      type: 'budget_exceeded',
+      status: 'approved',
+      decidedAt: { gte: utcMidnight() },
+      reason: { startsWith: DAILY_BUDGET_SPENT },
+    },
   });
   return settings.dailyBudgetUsd * (1 + approved);
 }
@@ -49,11 +62,13 @@ export async function gate(db: Db, settings: ProjectSettings, task: Task, agent:
     return { ok: false, reason: 'agent daily budget spent' };
   }
   const mission = task.missionId ? await db.mission.findUnique({ where: { id: task.missionId } }) : null;
+  if (mission && !SCHEDULABLE_MISSION.includes(mission.status)) return { ok: false, reason: `mission ${mission.status}` };
+  // no approval: the owner raises the cap with PUT /missions/:id
   if (mission?.budgetUsd != null && (await missionSpent(db, mission.id)) >= mission.budgetUsd) {
-    return { ok: false, reason: 'mission budget exhausted', budgetExceeded: true };
+    return { ok: false, reason: 'mission budget exhausted' };
   }
   if ((await spentToday(db, { projectId: task.projectId })) >= (await dailyLimit(db, settings, task.projectId))) {
-    return { ok: false, reason: 'project daily budget spent', budgetExceeded: true };
+    return { ok: false, reason: DAILY_BUDGET_SPENT, budgetExceeded: true };
   }
   if ((await runningCount(db, { projectId: task.projectId })) >= settings.maxConcurrentRuns) {
     return { ok: false, reason: 'project at maxConcurrentRuns' };

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { PlanSchema } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
+import { missionSpent } from '../services/budget-service.js';
 import { cancelMission, createMission, editPlan, replan } from '../services/mission-service.js';
 
 const CreateMission = z.object({
@@ -55,8 +56,16 @@ export async function missionRoutes(app: FastifyInstance) {
           select: { id: true, status: true, costUsd: true, error: true },
         })
       : null;
+    const [spentUsd, reviewArtifact] = await Promise.all([
+      missionSpent(app.prisma, id),
+      mission.reviewRunId
+        ? app.prisma.artifact.findFirst({ where: { runId: mission.reviewRunId, kind: 'review' }, select: { id: true } })
+        : null,
+    ]);
     return {
       ...mission,
+      spentUsd,
+      reviewArtifactId: reviewArtifact?.id ?? null,
       tasks: mission.tasks.map(({ dependencies, dependents, checkResults, ...t }) => ({
         ...t,
         checkResult: checkResults[0] ?? null,

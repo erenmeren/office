@@ -101,6 +101,7 @@ describe('gateToolCall', () => {
       'git status', 'git --no-pager log --oneline -5', 'git -C /w diff HEAD~1', 'git show HEAD', 'git blame a.ts',
       'git grep foo', 'git ls-files', 'git rev-parse HEAD', 'git branch --list', 'git worktree list', 'git remote -v',
       'git describe --tags', 'git cat-file -p HEAD', 'cd /w && git log | head -3',
+      'sh -c "git status"', "git log --format='%h %s'", '/usr/bin/git show HEAD',
     ]) {
       expect(await gateToolCall(ro, collect().sink, b.tools, 'Bash', { command })).toEqual({ allow: true });
     }
@@ -112,6 +113,12 @@ describe('gateToolCall', () => {
       ['git branch new', 'branch new'],
       ['git remote add o url', 'remote add o url'],
       ['cd /w; git commit -m x', 'commit -m x'],
+      ['sh -c "git worktree add /tmp/x HEAD"', 'worktree add /tmp/x HEAD'],
+      ["bash -c 'git checkout -b x'", 'checkout -b x'],
+      ['/usr/bin/git cherry-pick abc', 'cherry-pick abc'],
+      ['\\git checkout x', 'checkout x'],
+      ['git -c core.pager=cat log', '-c core.pager=cat log'],
+      ['git -C /w -c alias.l=!sh log', '-C /w -c alias.l=!sh log'],
     ] as const) {
       expect(await gateToolCall(ro, collect().sink, b.tools, 'Bash', { command })).toEqual({
         allow: false,
@@ -125,7 +132,8 @@ describe('gateToolCall', () => {
     const withCommit = { ...base, approvalPolicy: ApprovalPolicySchema.parse({ destructivePatterns: ['rm -rf', 'git commit'] }) };
     for (const command of [
       'git worktree add /tmp/x', 'git cherry-pick abc', 'git rebase main', 'git merge x', 'git am p.patch',
-      'git apply p.diff', 'git stash', 'git -C /w cherry-pick abc',
+      'git apply p.diff', 'git stash', 'git -C /w cherry-pick abc', 'git --no-pager cherry-pick x',
+      'git --git-dir=/w/.git rebase main', 'git -c user.name=x merge y',
     ]) {
       const b = bridge('deny');
       expect(await gateToolCall(withCommit, collect().sink, b.tools, 'Bash', { command })).toEqual({ allow: false, message: 'Denied by the owner' });
