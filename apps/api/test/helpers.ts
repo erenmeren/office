@@ -25,5 +25,5 @@ export async function makeApp() {
     await app.close();
     await prisma.$disconnect();
   };
-  return { app, prisma, login, close };
+  return { app, prisma, config, login, close };
 }

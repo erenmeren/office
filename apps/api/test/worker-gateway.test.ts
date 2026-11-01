@@ -88,4 +88,34 @@ describe('worker gateway', () => {
     expect(re.received[0]!.type).toBe('error');
     expect(await re.closed).toBe(4401);
   });
+  it('tool.call needs a live lease on the run; with one, list_agents answers', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    const project = await t.prisma.project.create({ data: { name: 'P', slug: 'p', repoPath: '/tmp/p' } });
+    const agent = await t.prisma.agent.create({ data: { name: 'dev', slug: 'dev', role: 'dev' } });
+    const version = await t.prisma.agentVersion.create({ data: { agentId: agent.id, version: 1, config: {} } });
+    const run = await t.prisma.taskRun.create({
+      data: { agentId: agent.id, projectId: project.id, agentVersionId: version.id, status: 'running', kind: 'chat' },
+    });
+    const session = await t.prisma.agentSession.create({
+      data: { runId: run.id, agentId: agent.id, projectId: project.id, model: 'sonnet', status: 'running', startedAt: new Date() },
+    });
+    const call = { type: 'tool.call', runId: run.id, sessionId: session.id, name: 'list_agents', args: {} } as const;
+
+    w.send({ ...call, callId: 'c1' });
+    expect(await w.waitFor('tool.result')).toMatchObject({ callId: 'c1', result: { ok: false, code: 'no_lease' } });
+
+    await t.prisma.taskRun.update({
+      where: { id: run.id },
+      data: { workerId: id, leaseExpiresAt: new Date(Date.now() + 60_000) },
+    });
+    w.send({ ...call, callId: 'c2' });
+    expect(await w.waitFor('tool.result')).toMatchObject({
+      callId: 'c2',
+      result: { ok: true, result: { agents: [expect.objectContaining({ slug: 'dev' })] } },
+    });
+    w.send({ ...call, callId: 'c3', sessionId: 'other' });
+    expect(await w.waitFor('tool.result')).toMatchObject({ callId: 'c3', result: { code: 'no_lease' } });
+    await w.close();
+  });
 });

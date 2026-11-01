@@ -1,13 +1,14 @@
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { PrismaClient } from '@office/db';
-import { WorkerToApiSchema, type ApiToWorker, type WorkerToApi } from '@office/shared';
+import { WorkerToApiSchema, type ApiToWorker, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
 import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
 import { appendEvent } from '../services/event-store.js';
 import { completeRun, findLeasedRun, markRunning, renewLeases } from '../services/run-service.js';
+import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
 
 interface Connection {
@@ -210,6 +211,19 @@ export class WorkerGateway {
           this.log.error({ err, runId: event.runId, seq: event.seq }, 'failed to record subagent event'),
         );
         return;
+      }
+      case 'tool.call': {
+        const run = await findLeasedRun(this.prisma, msg.runId, workerId);
+        const reply = (result: ToolCallResult) => this.send(workerId, { type: 'tool.result', callId: msg.callId, result });
+        if (!run?.session || run.session.id !== msg.sessionId) {
+          return reply({ ok: false, code: 'no_lease', error: 'this worker holds no live lease on that run' });
+        }
+        try {
+          return reply(await executeTool(this.prisma, this.hub, this.config, { run, session: run.session }, msg.name, msg.args));
+        } catch (err) {
+          this.log.error({ err, runId: msg.runId, tool: msg.name }, 'tool call failed');
+          return reply({ ok: false, code: 'internal_error', error: 'internal error' });
+        }
       }
       case 'run.result':
         await completeRun(this.prisma, this.hub, { runId: msg.runId, workerId, result: msg.result });
