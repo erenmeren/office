@@ -118,4 +118,18 @@ describe('worker gateway', () => {
     expect(await w.waitFor('tool.result')).toMatchObject({ callId: 'c3', result: { code: 'no_lease' } });
     await w.close();
   });
+
+  it('tool.call replies internal_error when the lease lookup throws', async () => {
+    const { enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    const orig = t.prisma.taskRun.findFirst;
+    t.prisma.taskRun.findFirst = (() => Promise.reject(new Error('db down'))) as typeof orig;
+    try {
+      w.send({ type: 'tool.call', runId: 'r', sessionId: 's', callId: 'c9', name: 'list_agents', args: {} });
+      expect(await w.waitFor('tool.result')).toMatchObject({ callId: 'c9', result: { ok: false, code: 'internal_error' } });
+    } finally {
+      t.prisma.taskRun.findFirst = orig;
+    }
+    await w.close();
+  });
 });

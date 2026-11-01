@@ -213,12 +213,12 @@ export class WorkerGateway {
         return;
       }
       case 'tool.call': {
-        const run = await findLeasedRun(this.prisma, msg.runId, workerId);
         const reply = (result: ToolCallResult) => this.send(workerId, { type: 'tool.result', callId: msg.callId, result });
-        if (!run?.session || run.session.id !== msg.sessionId) {
-          return reply({ ok: false, code: 'no_lease', error: 'this worker holds no live lease on that run' });
-        }
         try {
+          const run = await findLeasedRun(this.prisma, msg.runId, workerId);
+          if (!run?.session || run.session.id !== msg.sessionId) {
+            return reply({ ok: false, code: 'no_lease', error: 'this worker holds no live lease on that run' });
+          }
           return reply(await executeTool(this.prisma, this.hub, this.config, { run, session: run.session }, msg.name, msg.args));
         } catch (err) {
           this.log.error({ err, runId: msg.runId, tool: msg.name }, 'tool call failed');

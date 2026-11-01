@@ -117,6 +117,17 @@ describe('office tools', () => {
     expect(await call(c, 'read_memory', { id: mem.id })).toMatchObject({ ok: false, code: 'not_found' });
   });
 
+  it('read_memory hides rejected entries and other agents proposals', async () => {
+    const mk = (status: 'rejected' | 'proposed', authorAgentId: string) =>
+      t.prisma.memoryEntry.create({
+        data: { projectId, scope: 'project', type: 'decision', title: 'T', content: 'C', authorType: 'agent', authorAgentId, status },
+      });
+    const c = await ctx('task');
+    expect(await call(c, 'read_memory', { id: (await mk('rejected', b)).id })).toMatchObject({ code: 'not_found' });
+    expect(await call(c, 'read_memory', { id: (await mk('proposed', b)).id })).toMatchObject({ code: 'not_found' });
+    expect(await call(c, 'read_memory', { id: (await mk('proposed', a)).id })).toMatchObject({ ok: true });
+  });
+
   it('propose_memory writes a proposed entry with a run source', async () => {
     const c = await ctx('task');
     const r = (await call(c, 'propose_memory', {

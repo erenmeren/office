@@ -199,7 +199,7 @@ async function run(
       };
     case 'read_memory': {
       const e = await getEntry(prisma, args.id, projectId);
-      if (e.status === 'proposed' && e.authorAgentId !== agentId) throw new HttpError(404, 'not_found');
+      if (!(e.status === 'verified' || (e.status === 'proposed' && e.authorAgentId === agentId))) throw new HttpError(404, 'not_found');
       return { result: e };
     }
     case 'propose_memory': {
