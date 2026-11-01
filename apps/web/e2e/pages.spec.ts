@@ -201,6 +201,75 @@ authed.describe('every page renders without console noise', () => {
     expectQuiet(noise);
   });
 
+  authed('agent inspector: header metrics, live approval event, approval and skills in the rail, previous tasks', async ({ page, request: api, noise }) => {
+    const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string }[];
+    const [agent] = (await (await api.get(`${API}/agents`)).json()) as { id: string; name: string }[];
+    const at = (s: number) => new Date(Date.now() - 226_000 + s * 1000).toISOString();
+    const detail = {
+      runId: 'run-inspect', sessionId: 'ses8f2a91xx', projectId: project.id, agentId: agent.id, agentName: agent.name, kind: 'task', status: 'waiting_approval',
+      taskId: 'task-fixture', taskKey: 'T-104', taskTitle: 'Login form + validation', workerName: 'dev-laptop', startedAt: at(0), finishedAt: null,
+      costUsd: 3.31, model: 'claude-sonnet-5-5', agentVersion: 4, maxBudgetUsd: 5, usage: { inputTokens: 184_000, outputTokens: 21_000 },
+      commands: [], files: [],
+      subagents: [{ id: 'sub41cxx', toolUseId: 'tu-1', subagentType: 'Test Writer', description: 'Write tests for LoginForm validation', status: 'running', startedAt: at(95), endedAt: null, commands: 0, files: 0 }],
+      skills: [
+        { skillId: 's1', skillVersionId: 'sv1', name: 'test-driven-development', version: 2, checksum: 'x', mode: 'eager' },
+        { skillId: 's2', skillVersionId: 'sv2', name: 'debugging', version: 1, checksum: 'y', mode: 'on_demand' },
+      ],
+      approval: {
+        id: 'appr-fixture', projectId: project.id, missionId: null, taskId: 'task-fixture', runId: 'run-inspect', type: 'destructive_command', status: 'pending', scope: null,
+        toolName: 'Bash', input: { command: 'rm -rf .next node_modules' }, reason: 'destructive command', createdAt: at(222), decidedAt: null, expiresAt: null, deliveredAt: null,
+      },
+    };
+    await page.route(`${API}/sessions/run-inspect`, (route) => route.fulfill({ json: detail }));
+    await page.route(`${API}/agents/${agent.id}/runs?limit=20`, (route) =>
+      route.fulfill({ json: [{ runId: 'run-old', taskKey: 'T-088', taskTitle: 'Settings form validation', status: 'succeeded', durationMs: 720_000, costUsd: 2.1, headCommit: '3be91f0aa' }] }),
+    );
+    // the run's socket replay comes from the fixture; every other topic goes to the real API
+    await page.routeWebSocket(`${API.replace('http', 'ws')}/ws/ui`, (ws) => {
+      const server = ws.connectToServer();
+      ws.onMessage((raw) => {
+        const m = JSON.parse(String(raw)) as { type: string; topic: string };
+        if (m.topic !== 'run:run-inspect') return server.send(raw);
+        if (m.type !== 'subscribe') return;
+        const event = { type: 'agent.waiting_approval', seq: 48_213, ts: at(222), sessionId: detail.sessionId, runId: 'run-inspect', agentId: agent.id, projectId: project.id, payload: { tool: 'Bash' } };
+        ws.send(JSON.stringify({ type: 'event', topic: m.topic, event }));
+        ws.send(JSON.stringify({ type: 'replay.done', topic: m.topic, lastSeq: 48_213 }));
+      });
+    });
+
+    await page.goto('/sessions/run-inspect');
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { level: 1, name: 'Agent Inspector' })).toBeVisible();
+    await expect(page.getByText('205k', { exact: true })).toBeVisible();
+    await expect(page.getByText('184k in · 21k out')).toBeVisible();
+    await expect(page.getByText('$3.31', { exact: true })).toBeVisible();
+    await expect(page.getByText('cap $5.00')).toBeVisible();
+    await expect(page.getByText('Running for')).toBeVisible();
+    await expect(page.getByText('config v4')).toBeVisible();
+
+    await expect(page.getByText('agent.waiting_approval', { exact: true })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Following live · seq 48,213' })).toBeVisible();
+    await page.getByRole('button', { name: 'Pause following' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Paused · seq 48,213' })).toBeVisible();
+
+    await expect(page.getByText('Waiting for you')).toBeVisible();
+    await expect(page.getByText('rm -rf .next node_modules')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Approve once' })).toBeVisible();
+    const skills = page.getByRole('list', { name: 'Skills in this session' });
+    await expect(skills.getByText('Eager', { exact: true })).toBeVisible();
+    await expect(skills.getByText('On demand', { exact: true })).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Subagents of this session' }).getByText('Test Writer')).toBeVisible();
+    await expect(page.getByText('Depth 1 of 1', { exact: false })).toBeVisible();
+
+    await page.getByRole('radio', { name: 'History' }).click();
+    const row = page.getByRole('table', { name: 'Previous tasks' }).getByRole('row').filter({ hasText: 'T-088' });
+    await expect(row.getByText('Settings form validation')).toBeVisible();
+    await expect(row.getByText('12m 0s')).toBeVisible();
+    await expect(row.getByText('$2.10')).toBeVisible();
+    await expect(row.getByText('3be91f0', { exact: true })).toBeVisible();
+    expectQuiet(noise);
+  });
+
   authed('workers: a pending worker shows no mode; a remote worker shows its mode and tag', async ({ page, request: api, noise }) => {
     const name = `e2e-worker-${Date.now()}`;
     expect((await api.post(`${API}/workers`, { data: { name } })).ok()).toBe(true);

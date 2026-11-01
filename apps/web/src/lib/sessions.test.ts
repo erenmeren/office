@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OfficeEvent } from '@office/shared';
-import { commandRows, elapsed, fileRows, splitPath } from './sessions';
+import { commandRows, elapsed, fileRows, kTokens, splitPath } from './sessions';
 
 const ev = (seq: number, type: string, payload: Record<string, unknown>, s = seq): OfficeEvent =>
   ({ seq, type, payload, ts: new Date(Date.UTC(2026, 10, 1, 19, 0, s)).toISOString(), sessionId: 's', runId: 'r', agentId: 'a', projectId: 'p' }) as OfficeEvent;
@@ -39,4 +39,10 @@ it('elapsed', () => {
 
 it('splitPath', () => {
   expect([splitPath('apps/web/a.tsx'), splitPath('a.tsx')]).toEqual([['apps/web', 'a.tsx'], ['', 'a.tsx']]);
+});
+
+describe('kTokens', () => {
+  it('formats counts the way the inspector header shows them', () => {
+    expect([0, 950, 1499, 21_000, 184_400, 999_499, 999_600, 1_234_000].map(kTokens)).toEqual(['0', '950', '1k', '21k', '184k', '999k', '1.0M', '1.2M']);
+  });
 });

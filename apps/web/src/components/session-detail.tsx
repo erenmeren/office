@@ -15,8 +15,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { ApiError, post } from '@/lib/api';
 import { usd } from '@/lib/dashboard';
-import { useSession, type Conversation, type SessionDetail as Detail } from '@/lib/queries';
-import { clockTime, commandRows, elapsed, fileRows, isLive, splitPath } from '@/lib/sessions';
+import { useSession, type Conversation, type SessionDetail as Detail, type SessionFile } from '@/lib/queries';
+import { clockTime, commandRows, elapsed, fileRows, isLive, splitPath, type CommandRow } from '@/lib/sessions';
 import { statusTone } from '@/lib/status';
 import { uiSocket } from '@/lib/ws';
 
@@ -66,10 +66,6 @@ export function SessionDetail({
   // a finished subagent inside a live session has no running commands left
   const commands = commandRows(d.commands, all, sub ? sub.status === 'running' : live).filter((c) => (sub ? c.bySubagent === sub.toolUseId : !c.bySubagent));
   const files = fileRows(d.files, all).filter((f) => !sub || f.bySubagent === sub.toolUseId);
-  const authorOf = (bySubagent?: string) => {
-    const s = bySubagent && d.subagents.find((x) => x.toolUseId === bySubagent);
-    return s ? { name: subagentName(s), subagent: true } : { name: d.agentName, subagent: false };
-  };
   const startedAt = sub?.startedAt ?? d.startedAt;
   const endedAt = sub ? sub.endedAt : live ? null : undefined;
   const ran = startedAt && endedAt !== undefined ? (endedAt ? Date.parse(endedAt) : now) - Date.parse(startedAt) : undefined;
@@ -110,32 +106,7 @@ export function SessionDetail({
           {live && <CardAction><Badge variant="secondary">Streaming</Badge></CardAction>}
         </CardHeader>
         <CardContent>
-          {commands.length === 0 ? (
-            <p className="text-[13px] text-ink-3">No commands yet.</p>
-          ) : (
-            <Table aria-label={`Commands run by ${name}`}>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Time</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Command</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Exit</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {commands.map((c) => (
-                  <TableRow key={c.seq}>
-                    <TableCell className="font-mono text-xs text-ink-3">{clockTime(c.ts)}</TableCell>
-                    <TableCell>{c.status ? <span className="inline-flex items-center gap-1.5 text-xs"><StatusDot tone={statusTone(c.status)} />{c.status}</span> : '—'}</TableCell>
-                    <TableCell className="max-w-[420px] truncate font-mono text-xs text-ink" title={c.command ?? undefined}>{c.command ?? '(redacted)'}</TableCell>
-                    <TableCell className="font-mono text-xs">{c.durationMs === undefined ? '—' : elapsed(c.durationMs)}</TableCell>
-                    <TableCell className="font-mono text-xs">{c.exitCode ?? '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <CommandTable name={name} commands={commands} />
         </CardContent>
       </Card>
 
@@ -147,34 +118,7 @@ export function SessionDetail({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {files.length === 0 ? (
-            <p className="text-[13px] text-ink-3">No files changed yet.</p>
-          ) : (
-            <Table aria-label="Files changed">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>File</TableHead>
-                  <TableHead>Directory</TableHead>
-                  <TableHead>+/−</TableHead>
-                  <TableHead>Author</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {files.map((f) => {
-                  const [dir, file] = splitPath(f.path);
-                  const a = authorOf(f.bySubagent);
-                  return (
-                    <TableRow key={f.path}>
-                      <TableCell className="font-mono text-xs text-ink">{file}</TableCell>
-                      <TableCell className="font-mono text-xs text-ink-3">{dir || '—'}</TableCell>
-                      <TableCell className="font-mono text-xs">{f.adds === undefined && f.dels === undefined ? '—' : <><span className="text-mint">+{f.adds ?? 0}</span> <span className="text-rose">−{f.dels ?? 0}</span></>}</TableCell>
-                      <TableCell><span className="inline-flex items-center gap-1.5 text-xs" title={a.name}><AgentAvatar name={a.name} subagent={a.subagent} />{a.name}</span></TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
+          <FileTable files={files} detail={d} />
         </CardContent>
       </Card>
 
@@ -183,7 +127,73 @@ export function SessionDetail({
   );
 }
 
-function StopButton({ runId, name, subagent, onCancelled }: { runId: string; name: string; subagent: boolean; onCancelled: () => void }) {
+/** Commands with status, duration and exit code; `name` labels the table. */
+export function CommandTable({ name, commands }: { name: string; commands: CommandRow[] }) {
+  return commands.length === 0 ? (
+    <p className="text-[13px] text-ink-3">No commands yet.</p>
+  ) : (
+    <Table aria-label={`Commands run by ${name}`}>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Time</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Command</TableHead>
+          <TableHead>Duration</TableHead>
+          <TableHead>Exit</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {commands.map((c) => (
+          <TableRow key={c.seq}>
+            <TableCell className="font-mono text-xs text-ink-3">{clockTime(c.ts)}</TableCell>
+            <TableCell>{c.status ? <span className="inline-flex items-center gap-1.5 text-xs"><StatusDot tone={statusTone(c.status)} />{c.status}</span> : '—'}</TableCell>
+            <TableCell className="max-w-[420px] truncate font-mono text-xs text-ink" title={c.command ?? undefined}>{c.command ?? '(redacted)'}</TableCell>
+            <TableCell className="font-mono text-xs">{c.durationMs === undefined ? '—' : elapsed(c.durationMs)}</TableCell>
+            <TableCell className="font-mono text-xs">{c.exitCode ?? '—'}</TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+/** Changed files, each attributed to the agent or subagent that changed it. */
+export function FileTable({ files, detail: d }: { files: SessionFile[]; detail: Detail }) {
+  const authorOf = (bySubagent?: string) => {
+    const s = bySubagent && d.subagents.find((x) => x.toolUseId === bySubagent);
+    return s ? { name: subagentName(s), subagent: true } : { name: d.agentName, subagent: false };
+  };
+  return files.length === 0 ? (
+    <p className="text-[13px] text-ink-3">No files changed yet.</p>
+  ) : (
+    <Table aria-label="Files changed">
+      <TableHeader>
+        <TableRow>
+          <TableHead>File</TableHead>
+          <TableHead>Directory</TableHead>
+          <TableHead>+/−</TableHead>
+          <TableHead>Author</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {files.map((f) => {
+          const [dir, file] = splitPath(f.path);
+          const a = authorOf(f.bySubagent);
+          return (
+            <TableRow key={f.path}>
+              <TableCell className="font-mono text-xs text-ink">{file}</TableCell>
+              <TableCell className="font-mono text-xs text-ink-3">{dir || '—'}</TableCell>
+              <TableCell className="font-mono text-xs">{f.adds === undefined && f.dels === undefined ? '—' : <><span className="text-mint">+{f.adds ?? 0}</span> <span className="text-rose">−{f.dels ?? 0}</span></>}</TableCell>
+              <TableCell><span className="inline-flex items-center gap-1.5 text-xs" title={a.name}><AgentAvatar name={a.name} subagent={a.subagent} />{a.name}</span></TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
+}
+
+export function StopButton({ runId, name, subagent, onCancelled, label = 'Stop' }: { runId: string; name: string; subagent: boolean; onCancelled: () => void; label?: string }) {
   const [error, setError] = useState('');
   const stop = async () => {
     if (!window.confirm(subagent ? `Stop ${name}'s session? Its subagents end with it.` : `Stop ${name}'s session?`)) return;
@@ -202,7 +212,7 @@ function StopButton({ runId, name, subagent, onCancelled }: { runId: string; nam
     <span className="flex items-center gap-2">
       {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
       <Button variant="destructive" onClick={() => void stop()}>
-        Stop
+        {label}
       </Button>
     </span>
   );

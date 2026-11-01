@@ -219,6 +219,8 @@ export async function sessionDetail(db: Db, runId: string) {
   }
   return {
     ...sessionItem(run, events),
+    projectId: run.projectId,
+    finishedAt: run.finishedAt,
     model: run.session?.model ?? null,
     agentVersion: run.agentVersion.version,
     // runs created before phase 6 did not store their budget

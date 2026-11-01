@@ -397,12 +397,25 @@ export interface SessionFile {
   bySubagent?: string;
 }
 export interface SessionDetail extends Omit<LiveSession, 'commands' | 'files'> {
+  projectId: string;
+  finishedAt: string | null;
   model: string | null;
   agentVersion: number;
   maxBudgetUsd: number | null;
   usage: { inputTokens: number; outputTokens: number };
   commands: SessionCommand[];
   files: SessionFile[];
+  skills: SkillSnapshotEntry[];
+  approval: ApprovalView | null;
+}
+export interface AgentRunRow {
+  runId: string;
+  taskKey: string | null;
+  taskTitle: string | null;
+  status: RunStatus;
+  durationMs: number | null;
+  costUsd: number;
+  headCommit: string | null;
 }
 export const useOverview = (projectId: string | undefined) =>
   useQuery({
@@ -429,3 +442,5 @@ export const useLiveSessions = (projectId: string | undefined) =>
   });
 export const useSession = (runId: string | undefined) =>
   useQuery({ queryKey: ['session', runId], queryFn: () => api<SessionDetail>(`/sessions/${runId}`), enabled: !!runId, refetchInterval: 10_000 });
+export const useAgentRuns = (agentId: string | undefined) =>
+  useQuery({ queryKey: ['agent-runs', agentId], queryFn: () => api<AgentRunRow[]>(`/agents/${agentId}/runs?limit=20`), enabled: !!agentId });

@@ -62,6 +62,13 @@ export function elapsed(ms: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
+/** Token counts: "950", "21k", "1.2M". */
+export function kTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 999_500) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 const LIVE_STATUSES = ['running', 'waiting_reply', 'waiting_approval'];
 /** The run statuses the API lists as live sessions. */
 export const isLive = (status: string) => LIVE_STATUSES.includes(status);

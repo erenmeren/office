@@ -153,7 +153,7 @@ describe('observability read models', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body).toMatchObject({
-      runId: r1.runId, model: 'sonnet', agentVersion: 1, usage: { inputTokens: 300, outputTokens: 30 }, skills: [],
+      runId: r1.runId, projectId: expect.any(String), finishedAt: null, model: 'sonnet', agentVersion: 1, usage: { inputTokens: 300, outputTokens: 30 }, skills: [],
       approval: { id: approvalId, status: 'pending' },
     });
     expect(body.maxBudgetUsd).toBeGreaterThan(0);

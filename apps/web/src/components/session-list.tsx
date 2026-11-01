@@ -1,6 +1,8 @@
 'use client';
 
+import Link from 'next/link';
 import { cva } from 'class-variance-authority';
+import { ScanSearch } from 'lucide-react';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Segmented } from '@/components/ui/segmented';
@@ -63,17 +65,27 @@ export function SessionList({
           <ul aria-label="Sessions" className="flex flex-col gap-1">
             {shown.map((s) => (
               <li key={s.runId}>
-                <button type="button" aria-pressed={isActive(s.runId)} className={rowVariants({ active: isActive(s.runId) })} onClick={() => onSelect({ runId: s.runId })}>
-                  <AgentAvatar name={s.agentName} size="md" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-ink">{s.agentName}</span>
-                    <span className="block truncate font-mono text-xs text-ink-3">
-                      {(s.sessionId ?? s.runId).slice(0, 8)} · {s.taskKey ?? s.kind}
+                <div className="flex items-center gap-1">
+                  <button type="button" aria-pressed={isActive(s.runId)} className={rowVariants({ active: isActive(s.runId) })} onClick={() => onSelect({ runId: s.runId })}>
+                    <AgentAvatar name={s.agentName} size="md" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-ink">{s.agentName}</span>
+                      <span className="block truncate font-mono text-xs text-ink-3">
+                        {(s.sessionId ?? s.runId).slice(0, 8)} · {s.taskKey ?? s.kind}
+                      </span>
+                      <span className="block text-xs text-ink-2">{counts(s)}</span>
                     </span>
-                    <span className="block text-xs text-ink-2">{counts(s)}</span>
-                  </span>
-                  <StatusPill status={s.status} />
-                </button>
+                    <StatusPill status={s.status} />
+                  </button>
+                  <Link
+                    href={`/sessions/${s.runId}`}
+                    aria-label={`Inspect ${s.agentName}`}
+                    title="Open in the Agent Inspector"
+                    className="grid size-8 shrink-0 place-items-center rounded-lg text-ink-3 outline-none hover:bg-white/7 hover:text-ink focus-visible:ring-3 focus-visible:ring-ring/50"
+                  >
+                    <ScanSearch className="size-4" aria-hidden />
+                  </Link>
+                </div>
                 {s.subagents.length > 0 && (
                   <ul aria-label={`Subagents of ${s.agentName}`} className="ml-6 flex flex-col gap-1 border-l border-dashed border-white/15 pl-2">
                     {s.subagents.map((sub) => (
