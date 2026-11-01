@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ApprovalStatusSchema, PlanSchema } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
+import { audit } from '../services/audit-service.js';
 import {
   approvePlan,
   cancelMission,
@@ -71,6 +72,23 @@ export async function missionRoutes(app: FastifyInstance) {
       })),
       planRun,
     };
+  });
+
+  // owner cap on the mission's total spend; null removes it. The scheduler's gate re-reads it every tick.
+  app.put('/missions/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const { budgetUsd } = z.object({ budgetUsd: z.number().positive().nullable() }).parse(req.body);
+    const before = await app.prisma.mission.findUnique({ where: { id } });
+    if (!before) throw new HttpError(404, 'not_found');
+    const mission = await app.prisma.mission.update({ where: { id }, data: { budgetUsd } });
+    await audit(app.prisma, {
+      userId: req.user!.id,
+      action: 'mission.updated',
+      targetType: 'mission',
+      targetId: id,
+      detail: { budgetUsd: { from: before.budgetUsd, to: budgetUsd } },
+    });
+    return mission;
   });
 
   app.put('/missions/:id/plan', async (req) => {

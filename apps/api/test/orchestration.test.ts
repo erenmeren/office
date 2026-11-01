@@ -421,25 +421,52 @@ describe('orchestration', () => {
     expect((await s.mission(m.id)).status).toBe('review');
   });
 
-  it('a failure while applying the review unlinks the run; the next tick starts a new review', async () => {
+  it('a failure while applying the review counts as a failed review run: one retry, then the mission fails', async () => {
     s = await setup();
     const plan = testPlan();
     plan.tasks = plan.tasks.filter((x) => x.key === 'a');
     const { w, m } = await s.approved(1, plan);
-    const run = await s.assign(w);
-    await s.finish(w, run, { status: 'succeeded', git: git(1), check: check('passed') });
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('passed') });
     const review = await s.assign(w);
     const dir = s.t.config.artifactsDir;
-    s.t.config.artifactsDir = '/dev/null/artifacts'; // mkdir fails
+    s.t.config.artifactsDir = '/dev/null/artifacts'; // storeArtifact fails on every call
     try {
       await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'x', tasks: [] } });
+      expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: null });
+      expect((await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: review.runId } })).error).toMatch(/^review apply failed: /);
+      const next = await s.assign(w);
+      expect(next.kind).toBe('review');
+      expect(next.runId).not.toBe(review.runId);
+      await s.finish(w, next, { status: 'succeeded', structuredOutput: { summary: 'x', tasks: [] } });
+      const failed = await s.mission(m.id);
+      expect(failed.status).toBe('failed');
+      expect(failed.summary).toContain('review apply failed');
+      await s.t.app.scheduler.tick();
+      expect(await s.t.prisma.taskRun.count({ where: { kind: 'review' } })).toBe(2);
     } finally {
       s.t.config.artifactsDir = dir;
     }
-    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: null });
-    const next = await s.assign(w);
-    expect(next.kind).toBe('review');
-    expect(next.runId).not.toBe(review.runId);
+  });
+
+  it('PUT /missions/:id raises an exhausted mission cap; the next tick assigns', async () => {
+    s = await setup();
+    const { w, m, k, planSpec } = await s.approved(2, testPlan(), 0.01);
+    await s.t.prisma.usageRecord.create({
+      data: { runId: planSpec.runId, projectId: s.projectId, agentId: s.ids.chief, model: 'sonnet', inputTokens: 1, outputTokens: 1, costUsd: 0.02 },
+    });
+    await s.t.app.scheduler.tick();
+    expect((await s.task(k.a)).status).toBe('ready');
+    expect(await s.t.prisma.approval.findMany({ where: { missionId: m.id, type: 'budget_exceeded' } })).toEqual([
+      expect.objectContaining({ status: 'pending', reason: 'mission budget exhausted; approve to continue' }),
+    ]);
+    const res = await s.req('PUT', `/missions/${m.id}`, { budgetUsd: 10 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().budgetUsd).toBe(10);
+    const audit = await s.t.prisma.auditLog.findFirstOrThrow({ where: { action: 'mission.updated', targetId: m.id } });
+    expect(audit.detail).toEqual({ budgetUsd: { from: 0.01, to: 10 } });
+    const spec = await s.assign(w);
+    expect(spec.git?.taskSlug).toBe('a');
+    expect((await s.req('PUT', `/missions/${m.id}`, { budgetUsd: null })).json().budgetUsd).toBeNull();
   });
 
   it('failed task with nothing runnable -> review -> failed; owner retry -> running, blocked dependent re-readied, final review -> done', async () => {

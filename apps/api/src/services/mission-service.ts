@@ -568,11 +568,16 @@ export async function reviewRunFailed(db: Db, outbox: Outbox, run: TaskRun) {
   if (!run.reviewOfMissionId) return;
   const mission = await db.mission.findUnique({ where: { id: run.reviewOfMissionId } });
   if (mission?.status !== 'review' || mission.reviewRunId !== run.id) return;
+  // a succeeded run whose result could not be applied carries an error too
   const failed = await db.taskRun.count({
-    where: { reviewOfMissionId: mission.id, kind: 'review', status: { in: ['failed', 'lost', 'cancelled'] } },
+    where: {
+      reviewOfMissionId: mission.id,
+      kind: 'review',
+      OR: [{ status: { in: ['failed', 'lost', 'cancelled'] } }, { error: { not: null } }],
+    },
   });
   if (failed >= 2) {
-    await moveMission(db, outbox, mission.id, ['review'], { status: 'failed', summary: `review run ${run.status}: ${run.error ?? 'no result'}` });
+    await moveMission(db, outbox, mission.id, ['review'], { status: 'failed', summary: `review run failed twice; last: ${run.error ?? run.status}` });
   } else {
     await db.mission.update({ where: { id: mission.id }, data: { reviewRunId: null } });
   }

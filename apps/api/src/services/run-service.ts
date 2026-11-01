@@ -540,11 +540,15 @@ export async function completeRun(
     try {
       await onReviewRunFinished(prisma, hub, config, finished, log);
     } catch (err) {
-      // unlink the run so the scheduler starts another review instead of leaving the mission stuck
+      // counts as a failed review run: retried once, then the mission fails (never an unbounded loop of paid runs)
       log?.error({ err, runId }, 'applying the review run failed');
-      if (run.reviewOfMissionId) {
-        await prisma.mission.updateMany({ where: { id: run.reviewOfMissionId, reviewRunId: runId }, data: { reviewRunId: null } });
-      }
+      const error = `review apply failed: ${(err as Error).message}`;
+      const failOutbox: Outbox = [];
+      await prisma.$transaction(async (tx) => {
+        await tx.taskRun.update({ where: { id: runId }, data: { error } });
+        await reviewRunFailed(tx, failOutbox, { ...finished, error });
+      });
+      hub.publishAll(failOutbox);
     }
   }
   if (run.kind === 'task' && run.missionId && (status === 'succeeded' || status === 'failed')) {

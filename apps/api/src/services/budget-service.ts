@@ -61,13 +61,13 @@ export async function gate(db: Db, settings: ProjectSettings, task: Task, agent:
   return { ok: true };
 }
 
-/** One pending budget_exceeded approval per mission per UTC day (none when one was already raised today). */
+/** One budget_exceeded approval per mission, reason and UTC day (none when one was already raised today). */
 export async function requestBudgetApproval(prisma: PrismaClient, hub: EventHub, missionId: string, reason: string) {
   const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`budget:${missionId}`}))::text`;
     const exists = await tx.approval.count({
-      where: { missionId, type: 'budget_exceeded', status: { in: ['pending', 'approved'] }, createdAt: { gte: utcMidnight() } },
+      where: { missionId, reason, type: 'budget_exceeded', status: { in: ['pending', 'approved'] }, createdAt: { gte: utcMidnight() } },
     });
     if (exists) return;
     const mission = await tx.mission.findUniqueOrThrow({ where: { id: missionId } });
