@@ -22,9 +22,11 @@ function ConversationsView() {
   const [panel, setPanel] = useState<'human' | 'group'>();
   const list = useConversations(project?.id, filter === 'all' ? undefined : filter);
   const all = list.data ?? [];
+  const unfiltered = useConversations(project?.id).data ?? [];
 
   const byTask = params.get('taskId');
-  const selectedId = params.get('id') ?? (byTask ? all.find((c) => c.taskId === byTask)?.id : undefined) ?? all[0]?.id;
+  // A task link never falls back to an unrelated conversation.
+  const selectedId = params.get('id') ?? (byTask ? unfiltered.find((c) => c.taskId === byTask)?.id : all[0]?.id);
   const open = useConversation(selectedId);
   const select = (id: string) => router.replace(`/conversations?id=${id}`);
 
@@ -95,7 +97,7 @@ function ConversationsView() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-ink-3">{list.isPending ? 'Loading…' : 'Pick a conversation or start one.'}</p>
+              <p className="text-sm text-ink-3">{list.isPending ? 'Loading…' : byTask && !params.get('id') ? 'No conversation for this task yet.' : 'Pick a conversation or start one.'}</p>
             )}
           </div>
         </CardContent>

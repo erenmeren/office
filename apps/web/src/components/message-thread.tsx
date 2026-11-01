@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { useEffect, useRef } from 'react';
 import { AgentAvatar, OwnerAvatar } from '@/components/ui/agent-avatar';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { MessageBubble } from '@/components/ui/message-bubble';
@@ -33,6 +34,12 @@ function Bubble({ m, agents, conv }: { m: MessageView; agents: Agent[]; conv: Co
 
 export function MessageThread({ conversation, agents }: { conversation: Conversation & { messages: MessageView[] }; agents: Agent[] }) {
   const members = agents.filter((a) => conversation.agentIds.includes(a.id));
+  const scroller = useRef<HTMLDivElement>(null);
+  // Newest message last: stick to the bottom on mount, selection change and new messages.
+  useEffect(() => {
+    const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [conversation.id, conversation.messages.length]);
   return (
     <section className="flex min-w-0 flex-col gap-3" aria-label="Thread">
       <header className="flex flex-wrap items-center gap-3 border-b border-white/10 pb-3">
@@ -49,7 +56,7 @@ export function MessageThread({ conversation, agents }: { conversation: Conversa
           ))}
         </div>
       </header>
-      <div className="flex max-h-[520px] min-h-[240px] flex-col gap-4 overflow-y-auto pr-1">
+      <div ref={scroller} className="flex max-h-[520px] min-h-[240px] flex-col gap-4 overflow-y-auto pr-1">
         {groupByDay(conversation.messages).map((g) => (
           <div key={g.day} className="flex flex-col gap-3">
             <div className="text-center font-mono text-xs text-ink-3">{g.day}</div>
