@@ -4,7 +4,7 @@
 |-------|--------|
 | 1 | done |
 | 2 | done |
-| 3 | in progress (real-Claude acceptance: the Claude adapter emits no `agent.waiting_reply` event; see "Phase 3 evidence") |
+| 3 | in progress (real-Claude acceptance attempt 2: the developer did not write `docs/db-decision.md`, which was left over from attempt 1; see "Phase 3 evidence") |
 | 4 | not started |
 | 5 | not started |
 | 6 | not started |
@@ -29,8 +29,9 @@ Phase 2:
 Web UI (between Phase 2 and Phase 3, 2026-11-01): the web app follows the "Claude Agent Office — Web UI" design (Foundations and Mission Control artboards). Design tokens (colors, fonts, the `glass` and `aurora` utilities) live in `apps/web/src/app/globals.css`; every visual piece is a component under `apps/web/src/components/ui` in the shadcn pattern (`cva` variants, `cn`, `data-slot`), so a redesign changes tokens and components, not pages. New: `AppShell` (sidebar, header), `StatusPill`/`StatusDot`, `AgentAvatar`, `Progress`, `PageHeader`, `Kv`, `TaskNode`, `PlanGraph` (layered layout in `src/lib/plan-layout.ts`, tested), `ChiefComposer` (creates a task for the agent with slug `chief`), `TaskDetail`, and the `/mission-control` page. Not built, because their data arrives later: the approval card and the "send an instruction" box (Phase 3/4 messaging and approvals), plan versions and dependency edges (Phase 4 Chief planning; `PlanGraph` already draws `dependsOn` arrows), the budget-today bar in the header. Fonts (Bricolage Grotesque, Instrument Sans, JetBrains Mono; SIL OFL) are self-hosted variable woff2 files under `apps/web/src/app/fonts` via `next/font/local`; the UI makes no request outside localhost. A Playwright suite (`apps/web/e2e`) renders every page and fails on any console error or warning, any external request, or a broken Mission Control interaction; `/auth/me` answers 200 `{ setupRequired: false, anonymous: true }` when logged out so the login page produces no 401 in the console.
 
 Phase 3 (messaging and memory):
-- **Open acceptance defect.** `ClaudeAdapter` never emits `agent.waiting_reply` when a run suspends on `awaitReply`; only `FakeAdapter` does. The real developer run went from `agent.tool.completed` for `send_message` (seq 14) straight to `agent.resumed` (seq 15). The run did suspend and resume (the scheduler resumes only `waiting_reply` runs), but the event the spec and the UI expect is missing. Phase 3 stays `in progress` until the adapter emits it and the acceptance step is re-run.
-- **Open Playwright failure.** `e2e/pages.spec.ts` "owner messages an agent" fails (3 of 3 runs after the acceptance; 7 of 8 tests pass). The newest conversation (the real `Pick the database` task thread) is preselected; "Start conversation" then switches to the existing direct thread with the developer after the test has filled the composer, the composer is cleared, and the `Send` click waits on a disabled button until the 60 s timeout. Before the acceptance the direct thread was the newest one, so the switch did not happen and the suite passed 8 of 8.
+- **Open acceptance item.** In acceptance attempt 2 the developer did not write `docs/db-decision.md`: the file was left in the sandbox from attempt 1 and already matched the architect's answer. Every other expectation held, `agent.waiting_reply` included. A third attempt with the file removed first, or a ruling that attempt 1's write counts, closes it.
+- Fixed: `ClaudeAdapter` did not emit `agent.waiting_reply` in attempt 1; bd3d78a adds it, and attempt 2 recorded it (seq 14).
+- Fixed: the Playwright test "owner messages an agent" failed after attempt 1, because a thread switch cleared the composer after the test filled it. The test now waits for the `You and <agent>` thread heading before filling. The suite passes 8 of 8.
 - Delivery into a live session (streaming input) is not built. Messages reach a live session only through `read_inbox` or at the next run boundary.
 - Memory purge: deleting a memory entry is a hard delete; there is no soft delete and no 30-day purge.
 - Semantic search: memory search is Postgres full-text search only; the `pgvector` column exists and is unused.
@@ -46,7 +47,9 @@ Phase 3 (messaging and memory):
 - The pack header says entries are "facts verified by the owner", but task summaries from `office-summarizer` are stored `verified` without an owner action.
 - The sidebar's team list shows the hidden `office-summarizer` agent (`isSystem`).
 - Known wart: `apps/worker/test/e2e-phase3.test.ts` imports the seed from `packages/db/dist/seed.js` by relative path; `@office/db` should export it.
-- Shared dev database: the Playwright suite's memory test verifies the first `Needs review` entry it finds. In the acceptance it verified the agent-proposed entries `32f129b5` and `b244a807`, which no person had reviewed. Its `E2E decision` rows ("Use Postgres for everything.") also reached the developer's context pack and the summarizer's proposal.
+- The Playwright memory test no longer touches proposed entries. It opens the review filter and checks that `Needs review` entries are listed, but it never clicks `Verify`. It verifies only the entry it creates.
+- Data note for the owner: the dev database holds two agent proposals from acceptance attempt 1, `32f129b5` (decision) and `b244a807` (known issue). They are `verified` only because the earlier Playwright memory test verified them (07:25:25Z and 07:23:53Z); no person reviewed them. Re-check or reject them in Project Memory. The suite's `E2E decision` rows ("Use Postgres for everything.") are verified too and reach agents' context packs; delete them if they are not wanted.
+- The Project Memory detail pane labels a summarizer-written `task_summary` "Verified by you".
 
 Phase 4 (Chief and orchestration): per-run git worktrees and the mission branch, dummy env template, platform-side `checkCommand`, approvals (`canUseTool` gates, `approvalTimeoutMinutes`), scheduler budgets, `waiting_reply` / `waiting_approval` lifecycle, Chief planning and evidence-based review (Phase 1 auto-moves `review` to `done`), required consultations, Mission Control.
 
@@ -77,7 +80,7 @@ Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, p
 
 ### Phase 3 acceptance (real Claude)
 
-Date: 2026-11-01. Result: **failed on one expectation**. One attempt, no retry. Every other expectation held. The missing piece is the `agent.waiting_reply` event: the Claude adapter does not emit it (see Outstanding).
+Attempt 1. Date: 2026-11-01. Result: **failed on one expectation**. One attempt, no retry. Every other expectation held. The missing piece is the `agent.waiting_reply` event: the Claude adapter did not emit it (fixed in bd3d78a; see attempt 2).
 
 Setup: infra up; dev database migrated and seeded (`office-summarizer` `adc4a45f-ee71-4d86-9fa7-cd3592144769`, `developer` `15e9d1b8-65b4-4350-96ca-067db9315e9d`, `architect` `49ef7eac-1fc7-4469-a2e3-5d904dd883ca`). The API (`pnpm --filter @office/api dev`, tsx watch, at the branch head) and the web app (`pnpm --filter @office/web dev`) were already running. The worker (`pnpm --filter @office/worker dev`, `OFFICE_RUNTIME=claude`, worker `e973b79e-8611-4552-b949-b291d5fd493e`, saved credential, capacity 2) was started with the root `.env` exported and logged `connected to API` at 07:18:33Z. It used the machine's Claude Code login. Project `office-sandbox` `e844090c-2a16-4a62-a199-a251103a8736`, repository `/home/meren/projects/office-workspaces/office-sandbox`. No production credential, live database, push, merge or deploy was involved.
 
@@ -165,6 +168,68 @@ Cost: 0.37474849 USD for the acceptance task (developer, architect inbox, summar
 After the acceptance, the Playwright suite's memory test verified `b244a807` (07:23:53Z) and `32f129b5` (07:25:25Z) through its "Review now" flow. No person reviewed them.
 
 Worker log note: the SDK printed `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` for the developer's built-ins and the `mcp__office__*` tools. For the summary run it named only `mcp__office__submit_summary`. The office tools are auto-approved like other allowed tools (see `docs/security.md`).
+
+### Phase 3 acceptance, attempt 2 (real Claude)
+
+Date: 2026-11-01, after bd3d78a (`ClaudeAdapter` emits `agent.waiting_reply` on suspend). The runtime `dist` was rebuilt and the worker restarted by pid; it logged `connected to API` at 07:34:36Z. Setup, driver and task text are the same as in attempt 1. One attempt, no retry. Result: **one expectation not met**. `agent.waiting_reply` is now emitted and every other expectation held, but the developer did not write `docs/db-decision.md`. The file was still in the sandbox from attempt 1, because the implementer did not remove it before this attempt. The developer read it, found that it matched the architect's answer and left it unchanged (seq 21: "The file already matches the architect's answer, so I'll leave it unchanged and propose the memory."). Attempt 1 shows that the write path works with the same code (bd3d78a changes only the adapter's suspend event). Closing this expectation needs either a third attempt with the file removed first or a ruling that attempt 1's write counts.
+
+| Run | Kind | Agent | Run id | Session | Created | Finished | Cost (USD) |
+|---|---|---|---|---|---|---|---|
+| developer | `task` | developer (sonnet) | `da3afd0d-e67f-4578-9004-cded20b3d897` | `1a715d7d-f7b2-4175-857a-ee2bcc4b4d03` (SDK `720437b7-f585-4521-8fae-dcb20539a227`) | 07:35:18.267Z | 07:35:50.133Z | 0.1165953 |
+| architect inbox | `inbox` | architect (sonnet) | `631751a4-3f61-401b-9fc0-3067ee63c80b` | `52f9ebb4-cf98-4e44-9e8c-b030e9c69955` (SDK `d1ab921b-c038-4266-9b5f-d127a6568046`) | 07:35:28.284Z | 07:35:43.000Z | 0.0522342 |
+| summary | `summary` | office-summarizer (haiku) | `a9281ebc-5751-4cfb-baaf-30846c02232b` | `c2c0d264-b931-49ff-9d67-c4d5dc1568db` | 07:35:50.325Z | 07:36:02.468Z | 0.00314519 |
+
+Task `da45cbe0-4563-422c-a97b-940f230680c7`: created 07:35:18.027Z. Polling every 10 s showed `waiting_reply` at 07:35:28Z and 07:35:38Z, `running` at 07:35:48Z and `done` at 07:35:58Z (`updatedAt` 07:35:50.137Z, attempts 1). Conversation `1fca4082-3599-4df0-a9d8-43ecaf99ebae` (kind `task`). The worker log shows `run assigned` for the developer run at 07:35:18Z and again at 07:35:40Z, with the architect's inbox run at 07:35:28Z in between.
+
+Developer run events:
+
+```
+seq 10 agent.tool.started     07:35:25.276Z  mcp__office__list_agents
+seq 12 agent.tool.started     07:35:26.860Z  mcp__office__send_message {to: architect, type: question, awaitReply: true}
+seq 13 agent.message.sent     07:35:26.949Z  messageId 9bd4f5e8-e424-4d85-a80d-678073d86100, conversation 1fca4082-...
+seq 14 agent.waiting_reply    07:35:26.949Z  {to: architect, messageId: 9bd4f5e8-...}
+seq 15 agent.tool.completed   07:35:26.955Z  "Your turn ends now; ..."
+seq 16 agent.resumed          07:35:40.295Z  {reason: reply, messageId: 7dc67838-20be-4760-b368-f14567d06b9b}
+seq 17 agent.started          07:35:40.627Z
+seq 18 agent.tool.started     07:35:42.339Z  Bash: cat docs/db-decision.md; git status --short
+seq 21 agent.text             "The file already matches the architect's answer, so I'll leave it unchanged and propose the memory."
+seq 22 agent.tool.started     07:35:45.597Z  mcp__office__propose_memory {type: decision}
+seq 23 memory.proposed        07:35:45.627Z  entryId 729b7a3b-5246-4ac4-92c6-33a62de2cf74
+seq 26 agent.completed        07:35:49.600Z  costUsd 0.0713506 (this segment), numTurns 3
+```
+
+Architect inbox run: seq 7 `read_inbox` (07:35:32.820Z), seq 8 `agent.message.received {count: 1}` (07:35:32.837Z), seq 15 `reply_message`, seq 16 `agent.message.sent {type: reply, messageId: 7dc67838-...}` (07:35:39.992Z), seq 19 `agent.completed` (8 turns). Its context pack: `{chars: 1683, entryIds: [666ea1bc, 81c2059e], inboxCount: 1, summaryIds: [81c2059e, 666ea1bc]}`.
+
+Summary run: `submit_summary` (seq 6, 07:35:59.727Z) returned entry `f03b95b9-b8b4-439a-8192-32cb8a967e7b` and proposal `37c18e4c-9cfd-4652-981c-39f06d579f4c`.
+
+| Entry | Type | Status | Sources |
+|---|---|---|---|
+| `f03b95b9-b8b4-439a-8192-32cb8a967e7b` `Summary: Pick the database` | `task_summary` | `verified` | run `da3afd0d`, task `da45cbe0` |
+| `729b7a3b-5246-4ac4-92c6-33a62de2cf74` `Provisional database: SQLite, move to PostgreSQL on triggers` | `decision` | `proposed` | file `docs/db-decision.md`, message `9bd4f5e8`, run `da3afd0d` |
+| `37c18e4c-9cfd-4652-981c-39f06d579f4c` `Database decision conflicts with verified Postgres memory` | `known_issue` | `proposed` | run `da3afd0d` (twice), task `da45cbe0`, message `7dc67838` |
+
+Both proposals were still `proposed` after the fixed Playwright suite ran again (8 of 8).
+
+UI (headless Chromium, after the restart): `/conversations?taskId=da45cbe0-...` showed the thread with the architect's reply, the linked task `Done` and both participants. `/memory` listed 14 entries with "2 entries need review" (the two proposals above, with their sources).
+
+| Expectation | Result |
+|---|---|
+| developer run reaches `waiting_reply` with an `agent.waiting_reply` event | met (seq 14; task polled `waiting_reply`) |
+| inbox run for `architect`; `agent.message.received` / `agent.message.sent` | met (seq 8, seq 16) |
+| developer run resumes, writes the file, calls `propose_memory`, task `done` | **partly met**: resumed (seq 16), `propose_memory` (seq 22-23), task `done`; the file was not written because it already existed from attempt 1 |
+| summary run writes a verified `task_summary` with sources | met (`f03b95b9`, 2 sources) |
+| Conversations page shows the thread | met |
+| Project Memory lists the proposed decision with its sources | met (`729b7a3b`, 3 sources) |
+| after restarting the API and the worker, conversation and memory are returned | met (below) |
+| a second task shows the summary id in its `contextPack` | met (below) |
+
+Restart: at 07:36:47Z the API and the worker (pnpm, tsx watch and node processes) were killed by pid, and port 4000 closed. Both were started again; the worker logged `connected to API` at 07:36:59Z. `GET /conversations/1fca4082-...` returned both messages (`9bd4f5e8` question; `7dc67838` reply with `inReplyToId` `9bd4f5e8`). `GET /memory/f03b95b9-...` returned `verified` with 2 sources and `GET /memory/729b7a3b-...` returned `proposed` with 3 sources. The three sessions were `succeeded`, and the developer run's events still held `agent.waiting_reply` at seq 14.
+
+Second task: `Say hello` `325ba285-12e0-439d-aa91-e9965e55ccf8`, created 07:37:15.440Z. Run `ba38d571-bca3-419a-acc1-e300157efa13`, result `hello`, cost 0.035326, task `done`. Its session `0774efd7-24ee-4858-8fad-cc2f2a0b19b1` has `contextPack.summaryIds` `["f03b95b9-b8b4-439a-8192-32cb8a967e7b", "81c2059e-...", "666ea1bc-..."]` (chars 4328, inboxCount 7). Its summary run was `640e1977-d234-41b5-8c7a-fc3dc797f681` (cost 0.00186363).
+
+Cost: 0.17197469 USD for the attempt 2 chain (developer, architect inbox, summary), and 0.20916532 USD with the second task and its summary. Phase 3 acceptance total over both attempts: 0.61628532 USD.
+
+Observation: the Project Memory detail pane labels a summarizer-written `task_summary` "Verified by you", although no owner verified it.
 
 ## Phase 2 decisions
 

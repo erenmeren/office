@@ -43,7 +43,7 @@ After a successful call the worker records a derived event in the run's event st
 - `read_inbox`: `agent.message.received { count }`.
 - `propose_memory`: `memory.proposed { entryId }`.
 
-The adapter emits `agent.waiting_reply { messageId, to }` when a call with `awaitReply` suspends the run. (The fake adapter does; the Claude adapter does not yet, see `docs/progress.md`.) The API records `agent.resumed { reason, messageId? }` itself when it resumes the run. The worker skips skill materialization for `summary` runs.
+The adapter emits `agent.waiting_reply { messageId, to }` when a call with `awaitReply` suspends the run. The API records `agent.resumed { reason, messageId? }` itself when it resumes the run. The worker skips skill materialization for `summary` runs.
 
 ### Enrollment
 

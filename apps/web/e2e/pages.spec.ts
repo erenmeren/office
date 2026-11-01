@@ -61,7 +61,10 @@ authed.describe('every page renders without console noise', () => {
     await page.getByRole('button', { name: 'Message an agent' }).click();
     const select = page.getByLabel('Agent', { exact: true });
     await select.selectOption({ index: 0 });
+    const agentName = (await select.locator('option').first().textContent())?.trim();
     await page.getByRole('button', { name: 'Start conversation' }).click();
+    // the thread switch resets the composer; fill only once the new thread is shown
+    await expect(page.getByRole('heading', { name: `You and ${agentName}` })).toBeVisible();
     const body = `Hello from e2e ${Date.now()}`;
     await page.getByLabel('Message', { exact: true }).fill(body);
     await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -81,13 +84,11 @@ authed.describe('every page renders without console noise', () => {
     const row = page.getByRole('button').filter({ hasText: title }).first();
     await expect(row).toBeVisible();
     await expect(row.getByText('Verified', { exact: true })).toBeVisible();
-    // Proposed entries come from agents only; exercise the review flow when one exists.
+    // Proposed entries come from agents only and are real data: show them, never verify them.
     const review = page.getByRole('button', { name: 'Review now' });
     if (await review.isVisible()) {
       await review.click();
-      await page.getByRole('button').filter({ hasText: 'Needs review' }).first().click();
-      await page.getByRole('button', { name: 'Verify', exact: true }).click();
-      await expect(page.getByText('Verified by you')).toBeVisible();
+      await expect(page.getByRole('button').filter({ hasText: 'Needs review' }).first()).toBeVisible();
     }
     expectQuiet(noise);
   });
