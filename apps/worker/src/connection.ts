@@ -59,7 +59,7 @@ export class WorkerConnection {
   /** Connects and resolves once the API welcomes this worker. */
   async start(): Promise<void> {
     await sweepRunRoots(this.runsDir, []); // no runs are active at start
-    for (const [runId, msg] of await this.outbox.load()) this.unsentResults.set(runId, msg);
+    for (const [runId, msg] of await this.outbox.load((file, err) => this.log.warn({ file, err }, 'skipping unreadable outbox entry'))) this.unsentResults.set(runId, msg);
     this.credential = await loadCredential(this.config.home);
     if (!this.credential && !this.config.enrollToken) {
       throw new Error('No saved credential and no enroll token (OFFICE_ENROLL_TOKEN)');
@@ -175,7 +175,7 @@ export class WorkerConnection {
         this.log.info({ runId: msg.runId }, 'run cancelled by API');
         this.executor.cancel(msg.runId);
         return;
-      case 'error':
+      case 'error': {
         this.log.warn({ message: msg.message }, 'API reported an error');
         // the lease is gone: the API will retry the run, so the stored result is dead weight
         const lost = /^No live lease for run (\S+) on this worker/.exec(msg.message)?.[1];
@@ -184,6 +184,7 @@ export class WorkerConnection {
           await this.outbox.delete(lost);
         }
         return;
+      }
     }
   }
 

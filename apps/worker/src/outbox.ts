@@ -1,4 +1,5 @@
 import { chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { WorkerToApiSchema, type WorkerToApi } from '@office/shared';
 
@@ -10,7 +11,7 @@ export class Outbox {
 
   async put(runId: string, msg: WorkerToApi): Promise<void> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    const tmp = this.file(runId) + '.tmp'; // rename keeps a crash from leaving a half-written entry
+    const tmp = `${this.file(runId)}.${randomUUID()}.tmp`; // rename keeps a crash from leaving a half-written entry
     await writeFile(tmp, JSON.stringify(msg), { mode: 0o600 });
     await chmod(tmp, 0o600);
     await rename(tmp, this.file(runId));
@@ -20,7 +21,7 @@ export class Outbox {
     await rm(this.file(runId), { force: true });
   }
 
-  async load(): Promise<Map<string, WorkerToApi>> {
+  async load(onSkip: (file: string, err: unknown) => void = () => {}): Promise<Map<string, WorkerToApi>> {
     const out = new Map<string, WorkerToApi>();
     let names: string[];
     try {
@@ -30,8 +31,13 @@ export class Outbox {
       throw err;
     }
     for (const name of names.filter((n) => n.endsWith('.json'))) {
-      const parsed = WorkerToApiSchema.safeParse(JSON.parse(await readFile(join(this.dir, name), 'utf8')));
-      if (parsed.success) out.set(name.slice(0, -5), parsed.data);
+      try {
+        const parsed = WorkerToApiSchema.safeParse(JSON.parse(await readFile(join(this.dir, name), 'utf8')));
+        if (parsed.success) out.set(name.slice(0, -5), parsed.data);
+        else onSkip(name, parsed.error);
+      } catch (err) {
+        onSkip(name, err); // left in place; a corrupt entry must not stop the worker starting
+      }
     }
     return out;
   }

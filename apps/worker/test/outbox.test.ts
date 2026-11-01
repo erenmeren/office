@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -21,6 +21,21 @@ it('persists and reloads a result with mode 0600 and deletes it', async () => {
     await box.delete('r1');
     expect(existsSync(join(dir, 'r1.json'))).toBe(false);
     expect((await box.load()).size).toBe(0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('skips a corrupt entry instead of throwing', async () => {
+  const dir = join(mkdtempSync(join(tmpdir(), 'office-outbox-')), 'outbox');
+  try {
+    const box = new Outbox(dir);
+    const msg = { type: 'heartbeat', capacity: 1, activeRunIds: [] } as WorkerToApi;
+    await box.put('ok', msg);
+    writeFileSync(join(dir, 'bad.json'), '{');
+    const skipped: string[] = [];
+    expect(await box.load((f) => skipped.push(f))).toEqual(new Map([['ok', msg]]));
+    expect(skipped).toEqual(['bad.json']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
