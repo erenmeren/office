@@ -165,10 +165,13 @@ authed.describe('every page renders without console noise', () => {
         },
       }),
     );
-    let cancelled = false;
+    let cancels = 0;
     await page.route(`${API}/runs/run-fixture/cancel`, (route) => {
-      cancelled = route.request().method() === 'POST';
-      return route.fulfill({ json: { id: 'run-fixture', status: 'cancelled' } });
+      if (route.request().method() === 'POST') cancels++;
+      // first Stop: the run ended meanwhile (409); second: cancelled
+      return cancels === 1
+        ? route.fulfill({ status: 409, json: { error: 'run_not_live' } })
+        : route.fulfill({ json: { id: 'run-fixture', status: 'cancelled' } });
     });
     await page.goto('/sessions');
     await page.waitForLoadState('networkidle');
@@ -186,9 +189,15 @@ authed.describe('every page renders without console noise', () => {
     await expect(page.getByText('Delivered at the next run boundary')).toBeVisible();
     await expect(page.getByRole('radiogroup', { name: 'Recipient' }).getByRole('radio')).toHaveText([agent.name]);
 
-    page.once('dialog', (d) => void d.accept());
+    page.on('dialog', (d) => void d.accept());
+    const refetch = page.waitForRequest((r) => r.url() === `${API}/sessions/run-fixture`);
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
-    await expect.poll(() => cancelled).toBe(true);
+    await expect(page.getByRole('alert').filter({ hasText: 'Session already ended' })).toBeVisible();
+    await refetch;
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect.poll(() => cancels).toBe(2);
+    // the browser logs the stubbed 409 itself; anything else is noise
+    noise.console = noise.console.filter((m) => !m.includes('status of 409 (Conflict)'));
     expectQuiet(noise);
   });
 

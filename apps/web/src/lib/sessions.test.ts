@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OfficeEvent } from '@office/shared';
-import { commandRows, elapsed, fileRows } from './sessions';
+import { commandRows, elapsed, fileRows, splitPath } from './sessions';
 
 const ev = (seq: number, type: string, payload: Record<string, unknown>, s = seq): OfficeEvent =>
   ({ seq, type, payload, ts: new Date(Date.UTC(2026, 10, 1, 19, 0, s)).toISOString(), sessionId: 's', runId: 'r', agentId: 'a', projectId: 'p' }) as OfficeEvent;
@@ -35,4 +35,8 @@ it('fileRows adds live paths once', () => {
 
 it('elapsed', () => {
   expect([elapsed(8_000), elapsed(72_000), elapsed(7_380_000)]).toEqual(['8s', '1m 12s', '2h 3m']);
+});
+
+it('splitPath', () => {
+  expect([splitPath('apps/web/a.tsx'), splitPath('a.tsx')]).toEqual([['apps/web', 'a.tsx'], ['', 'a.tsx']]);
 });

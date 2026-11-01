@@ -61,3 +61,15 @@ export function elapsed(ms: number): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
+
+const LIVE_STATUSES = ['running', 'waiting_reply', 'waiting_approval'];
+/** The run statuses the API lists as live sessions. */
+export const isLive = (status: string) => LIVE_STATUSES.includes(status);
+
+export const clockTime = (ts: string) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+/** `[directory, file]`; the directory is '' for a bare file name. */
+export function splitPath(path: string): [string, string] {
+  const i = path.lastIndexOf('/');
+  return i === -1 ? ['', path] : [path.slice(0, i), path.slice(i + 1)];
+}

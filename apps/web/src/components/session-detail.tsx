@@ -13,19 +13,13 @@ import { Segmented } from '@/components/ui/segmented';
 import { StatusDot, StatusPill } from '@/components/ui/status-pill';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { post } from '@/lib/api';
+import { ApiError, post } from '@/lib/api';
 import { usd } from '@/lib/dashboard';
 import { useSession, type Conversation, type SessionDetail as Detail } from '@/lib/queries';
-import { commandRows, elapsed, fileRows } from '@/lib/sessions';
+import { clockTime, commandRows, elapsed, fileRows, isLive, splitPath } from '@/lib/sessions';
 import { statusTone } from '@/lib/status';
 import { uiSocket } from '@/lib/ws';
 
-const LIVE = ['running', 'waiting_reply', 'waiting_approval'];
-const time = (ts: string) => new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-const split = (path: string) => {
-  const i = path.lastIndexOf('/');
-  return i === -1 ? ['', path] : [path.slice(0, i), path.slice(i + 1)];
-};
 
 /** Commands, files and a way to talk to one session or one of its subagents. */
 export function SessionDetail({
@@ -46,7 +40,7 @@ export function SessionDetail({
   const [events, setEvents] = useState(new Map<number, OfficeEvent>());
   const [now, setNow] = useState(() => Date.now());
   const d = q.data;
-  const live = !!d && LIVE.includes(d.status);
+  const live = !!d && isLive(d.status);
 
   useEffect(
     () =>
@@ -69,7 +63,8 @@ export function SessionDetail({
   const name = sub ? subagentName(sub) : d.agentName;
   const status = sub?.status ?? d.status;
   const all = [...events.values()];
-  const commands = commandRows(d.commands, all, live).filter((c) => (sub ? c.bySubagent === sub.toolUseId : !c.bySubagent));
+  // a finished subagent inside a live session has no running commands left
+  const commands = commandRows(d.commands, all, sub ? sub.status === 'running' : live).filter((c) => (sub ? c.bySubagent === sub.toolUseId : !c.bySubagent));
   const files = fileRows(d.files, all).filter((f) => !sub || f.bySubagent === sub.toolUseId);
   const authorOf = (bySubagent?: string) => {
     const s = bySubagent && d.subagents.find((x) => x.toolUseId === bySubagent);
@@ -131,7 +126,7 @@ export function SessionDetail({
               <TableBody>
                 {commands.map((c) => (
                   <TableRow key={c.seq}>
-                    <TableCell className="font-mono text-xs text-ink-3">{time(c.ts)}</TableCell>
+                    <TableCell className="font-mono text-xs text-ink-3">{clockTime(c.ts)}</TableCell>
                     <TableCell>{c.status ? <span className="inline-flex items-center gap-1.5 text-xs"><StatusDot tone={statusTone(c.status)} />{c.status}</span> : '—'}</TableCell>
                     <TableCell className="max-w-[420px] truncate font-mono text-xs text-ink" title={c.command ?? undefined}>{c.command ?? '(redacted)'}</TableCell>
                     <TableCell className="font-mono text-xs">{c.durationMs === undefined ? '—' : elapsed(c.durationMs)}</TableCell>
@@ -166,7 +161,7 @@ export function SessionDetail({
               </TableHeader>
               <TableBody>
                 {files.map((f) => {
-                  const [dir, file] = split(f.path);
+                  const [dir, file] = splitPath(f.path);
                   const a = authorOf(f.bySubagent);
                   return (
                     <TableRow key={f.path}>
@@ -197,7 +192,10 @@ function StopButton({ runId, name, subagent, onCancelled }: { runId: string; nam
       await post(`/runs/${runId}/cancel`);
       onCancelled();
     } catch (err) {
-      setError(String(err));
+      if (!(err instanceof ApiError && err.status === 409)) return setError(String(err));
+      // run_not_live: it ended on its own meanwhile; refresh so the list and detail catch up
+      setError('Session already ended');
+      onCancelled();
     }
   };
   return (
@@ -251,7 +249,7 @@ function TalkTo({ detail, subagent, projectId, recipients }: { detail: Detail; s
             value={body}
             onChange={(e) => setBody(e.target.value)}
             placeholder={`Message to ${toName}`}
-            className="min-h-[64px] rounded-[10px] bg-[rgb(7_5_24/0.55)] px-3 py-2.5"
+            variant="well"
           />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Segmented
