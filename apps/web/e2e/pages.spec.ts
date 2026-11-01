@@ -62,9 +62,10 @@ authed.describe('every page renders without console noise', () => {
     const select = page.getByLabel('Agent', { exact: true });
     await select.selectOption({ index: 0 });
     await page.getByRole('button', { name: 'Start conversation' }).click();
-    await page.getByLabel('Message', { exact: true }).fill('Hello from e2e');
+    const body = `Hello from e2e ${Date.now()}`;
+    await page.getByLabel('Message', { exact: true }).fill(body);
     await page.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.getByRole('article').filter({ hasText: 'Hello from e2e' })).toBeVisible();
+    await expect(page.getByRole('article').filter({ hasText: body })).toBeVisible();
     await expect(page.getByText('Saved · delivers at the next session boundary').first()).toBeVisible();
     expectQuiet(noise);
   });
@@ -73,10 +74,11 @@ authed.describe('every page renders without console noise', () => {
     await page.goto('/memory');
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: 'Add memory' }).click();
-    await page.getByLabel('Title', { exact: true }).fill('E2E decision');
+    const title = `E2E decision ${Date.now()}`;
+    await page.getByLabel('Title', { exact: true }).fill(title);
     await page.getByLabel('Content', { exact: true }).fill('Use Postgres for everything.');
     await page.getByRole('button', { name: 'Save memory' }).click();
-    const row = page.getByRole('button').filter({ hasText: 'E2E decision' }).first();
+    const row = page.getByRole('button').filter({ hasText: title }).first();
     await expect(row).toBeVisible();
     await expect(row.getByText('Verified', { exact: true })).toBeVisible();
     // Proposed entries come from agents only; exercise the review flow when one exists.

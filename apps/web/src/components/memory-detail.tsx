@@ -95,7 +95,7 @@ export function MemoryDetail({
       <Kv>
         <KvLabel>Revisions</KvLabel>
         <ul className="flex flex-col gap-1">
-          {[{ id: e.id, version: e.version, title: e.title, createdAt: e.updatedAt }, ...e.revisions].map((r) => (
+          {[{ id: e.id, version: e.version, title: e.title, createdAt: e.updatedAt }, ...e.revisions.filter((r) => r.id !== e.id)].map((r) => (
             <li key={r.id} className="flex items-baseline justify-between gap-2 text-[13px]">
               <KvValue className="min-w-0 break-words">
                 v{r.version} · {r.title}

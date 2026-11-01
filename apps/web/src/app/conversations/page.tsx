@@ -9,10 +9,12 @@ import { NewConversation } from '@/components/new-conversation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
+import { useMounted } from '@/lib/use-mounted';
 import { uiSocket } from '@/lib/ws';
 import { useAgents, useConversation, useConversations, useProjects } from '@/lib/queries';
 
 function ConversationsView() {
+  const mounted = useMounted();
   const qc = useQueryClient();
   const router = useRouter();
   const params = useSearchParams();
@@ -41,6 +43,8 @@ function ConversationsView() {
     const offs = topics.map((t) => uiSocket().subscribe(t, 0, refresh));
     return () => offs.forEach((off) => off());
   }, [qc, selectedId]);
+
+  if (!mounted) return null;
 
   return (
     <div className="space-y-5">

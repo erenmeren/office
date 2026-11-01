@@ -11,9 +11,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { matchesType, type TypeFilter } from '@/lib/memory';
 import { useAgents, useMemory, useMemoryCounts, useProjects, type MemoryEntry } from '@/lib/queries';
+import { useMounted } from '@/lib/use-mounted';
 import { uiSocket } from '@/lib/ws';
 
 function MemoryView() {
+  const mounted = useMounted();
   const qc = useQueryClient();
   const router = useRouter();
   const params = useSearchParams();
@@ -37,6 +39,8 @@ function MemoryView() {
       }),
     [qc],
   );
+
+  if (!mounted) return null;
 
   return (
     <div className="space-y-5">
