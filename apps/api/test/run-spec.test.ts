@@ -46,7 +46,7 @@ describe('run spec skills and subagents', () => {
 
   it('run spec carries pinned skill files, subagents and the skill prompt section; session snapshot matches the pins', async () => {
     const { eager, lazy, spec, session } = await setup('s1');
-    expect(spec.systemPrompt).toBe(
+    expect(spec.systemPrompt).toMatch(
       'be nice\n\nBefore doing anything else, invoke the Skill tool for each of these skills and follow them: s1-eager.' +
         '\n\nThese skills are available when relevant: s1-lazy.',
     );

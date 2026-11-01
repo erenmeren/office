@@ -21,7 +21,7 @@ interface Connection {
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 
 // emitted by the API itself; a worker must not forge them
-const SERVER_ONLY_EVENTS = new Set(['run.lease.lost', 'run.status.changed', 'task.status.changed']);
+const SERVER_ONLY_EVENTS = new Set(['run.lease.lost', 'run.status.changed', 'task.status.changed', 'agent.resumed']);
 
 export class WorkerGateway {
   private conns = new Map<string, Connection>();

@@ -19,7 +19,7 @@ const EnvSchema = z.object({
   OFFICE_MSG_PER_TASK: z.coerce.number().int().positive().optional(),
   OFFICE_ESCALATION_DEPTH: z.coerce.number().int().positive().optional(),
   OFFICE_HANDOFF_CHAIN: z.coerce.number().int().positive().optional(),
-  OFFICE_REPLY_TIMEOUT_MINUTES: z.coerce.number().int().positive().default(60),
+  OFFICE_REPLY_TIMEOUT_MINUTES: z.coerce.number().int().nonnegative().default(60),
   OFFICE_CONTEXT_PACK_MAX_CHARS: z.coerce.number().int().positive().default(12000),
 });
 
