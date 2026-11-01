@@ -238,7 +238,12 @@ export class WorkerGateway {
       case 'approval.request': {
         const run = await findLeasedRun(this.prisma, msg.runId, workerId);
         if (!run?.session || run.session.id !== msg.sessionId) {
-          return this.send(workerId, { type: 'error', message: 'this worker holds no live lease on that run' });
+          // answered, so the worker's run does not wait for a decision that can never come
+          return this.send(workerId, {
+            type: 'approval.result',
+            runId: msg.runId,
+            decision: { requestId: msg.request.requestId, decision: 'deny', message: 'no live lease' },
+          });
         }
         const decision = await requestApproval(this.prisma, this.hub, { run, session: run.session, request: msg.request });
         if (decision) this.send(workerId, { type: 'approval.result', runId: run.id, decision });

@@ -62,7 +62,9 @@ export async function installTrailerHook(worktreePath: string, who: { agentName:
     `#!/bin/sh\ngrep -q '^Office-Agent:' "$1" || git interpret-trailers --in-place --trailer ${trailer} "$1"\n`,
   );
   await chmod(hook, 0o755);
-  await git(worktreePath, 'config', 'extensions.worktreeConfig', 'true');
+  // written to the shared repo config, so only when not already set
+  const enabled = await git(worktreePath, 'config', '--get', 'extensions.worktreeConfig').catch(() => '');
+  if (enabled !== 'true') await git(worktreePath, 'config', 'extensions.worktreeConfig', 'true');
   await git(worktreePath, 'config', '--worktree', 'core.hooksPath', hooksDir);
   await excludeFromGit(worktreePath, '/.office-hooks/');
 }

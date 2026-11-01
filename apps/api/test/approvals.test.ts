@@ -167,14 +167,16 @@ describe('tool approvals', () => {
     expect((await s.run(spec.runId)).status).toBe('running');
   });
 
-  it('a request for a run the worker does not lease -> error, no row', async () => {
+  it('a request for a run the worker does not lease -> denied, no row', async () => {
     s = await setup();
     const { w, spec } = await s.running();
     w.send({
       type: 'approval.request', runId: 'nope', sessionId: spec.sessionId,
       request: { requestId: 'x', toolName: 'Bash', input: { command: 'ls' }, type: 'destructive_command', reason: 'r' },
     });
-    expect((await w.waitFor('error')).message).toMatch(/lease/);
+    expect(await w.waitFor('approval.result')).toMatchObject({
+      runId: 'nope', decision: { requestId: 'x', decision: 'deny', message: 'no live lease' },
+    });
     expect(await s.t.prisma.approval.count()).toBe(0);
   });
 

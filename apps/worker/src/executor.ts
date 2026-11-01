@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { lstat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve } from 'node:path';
 import { runCheck } from './checks.js';
 import {
   collectResult,
@@ -61,15 +61,27 @@ interface Worktree {
   branch: string;
 }
 
-/** Writes the owner's dummy env template into the worktree, mode 0600, never over a tracked file. */
-async function writeEnvTemplate(worktree: string, env: NonNullable<RunSpec['env']>) {
+interface WarnLog {
+  warn(obj: object, msg: string): void;
+}
+
+/** Writes the owner's dummy env template into the worktree, mode 0600, never over a tracked file or through a symlink. */
+async function writeEnvTemplate(worktree: string, env: NonNullable<RunSpec['env']>, log: WarnLog) {
   const file = resolve(worktree, env.file);
   if (!isUnderRoot(file, worktree) || file === worktree) throw new Error(`env file outside the worktree: ${env.file}`);
-  const tracked = await git(worktree, 'ls-files', '--error-unmatch', env.file).then(() => true, () => false);
+  const rel = relative(worktree, file);
+  const tracked = await git(worktree, 'ls-files', '--error-unmatch', rel).then(() => true, () => false);
   if (tracked) return;
+  // a checked-out symlink could redirect the write outside the worktree
+  const isLink = await lstat(file).then((s) => s.isSymbolicLink(), () => false);
+  const parent = realCwd(dirname(file));
+  if (isLink || (parent && !isUnderRoot(parent, realpathSync(worktree)))) {
+    log.warn({ file: rel }, 'env template not written: the path resolves outside the worktree');
+    return;
+  }
   await writeFile(file, env.vars.map((v) => `${v.name}=${v.value}\n`).join(''), { mode: 0o600 });
   // never committed by an agent's `git add -A`
-  await excludeFromGit(worktree, '/' + env.file);
+  await excludeFromGit(worktree, '/' + rel);
 }
 
 const NO_USAGE: RunResult['usage'] = { inputTokens: 0, outputTokens: 0, costUsd: 0, numTurns: 0, durationMs: 0 };
@@ -92,8 +104,8 @@ function realCwd(cwd: string): string | null {
 export class RunExecutor {
   private active = new Map<string, AbortController>();
   private pendingTools = new Map<string, { runId: string; resolve: (r: ToolCallResult) => void; timer: NodeJS.Timeout }>();
-  // no worker-side timeout: the API's approval timeout answers with deny
-  private pendingApprovals = new Map<string, { runId: string; resolve: (d: ApprovalDecision) => void }>();
+  // the API's approval timeout answers first; the worker's own timer is a backstop for a lost answer
+  private pendingApprovals = new Map<string, { runId: string; resolve: (d: ApprovalDecision) => void; timer: NodeJS.Timeout }>();
   private worktreesDir: string;
 
   constructor(
@@ -102,6 +114,7 @@ export class RunExecutor {
     private workspaceRoots: string[],
     private runsDir: string,
     private toolTimeoutMs = TOOL_TIMEOUT_MS,
+    private log: WarnLog = { warn: () => {} },
   ) {
     // <home>/runs -> <home>/worktrees
     this.worktreesDir = join(dirname(runsDir), 'worktrees');
@@ -128,6 +141,7 @@ export class RunExecutor {
     const pending = this.pendingApprovals.get(decision.requestId);
     if (!pending || pending.runId !== runId) return;
     this.pendingApprovals.delete(decision.requestId);
+    clearTimeout(pending.timer);
     pending.resolve(decision);
   }
 
@@ -194,7 +208,17 @@ export class RunExecutor {
       },
       askApproval: (request) =>
         new Promise<ApprovalDecision>((resolve) => {
-          this.pendingApprovals.set(request.requestId, { runId: spec.runId, resolve });
+          const minutes = spec.approvalTimeoutMinutes + 5;
+          const timer = setTimeout(
+            () =>
+              this.resolveApproval(spec.runId, {
+                requestId: request.requestId,
+                decision: 'deny',
+                message: `No decision reached the worker within ${minutes} minutes`,
+              }),
+            minutes * 60_000,
+          );
+          this.pendingApprovals.set(request.requestId, { runId: spec.runId, resolve, timer });
           this.send({ type: 'approval.request', runId: spec.runId, sessionId: spec.sessionId, request });
         }),
     };
@@ -260,7 +284,7 @@ export class RunExecutor {
 
   private async prepareWorktree(spec: RunSpec, g: MissionGit, path: string) {
     await installTrailerHook(path, { agentName: g.agentName, runId: spec.runId });
-    if (spec.env) await writeEnvTemplate(path, spec.env);
+    if (spec.env) await writeEnvTemplate(path, spec.env, this.log);
     if (spec.setupCommand && !existsSync(join(path, 'node_modules'))) {
       const setup = await runCheck(path, spec.setupCommand, spec.checkTimeoutSeconds, buildChildEnv(process.env, spec));
       if (setup.status !== 'passed') throw new Error('setup failed: ' + setup.output.slice(0, 500));

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeAdapter, type RuntimeAdapter } from '@office/runtime';
 import { ApprovalPolicySchema, type RunSpec, type WorkerToApi } from '@office/shared';
 import { RunExecutor } from '../src/executor.js';
@@ -24,7 +24,8 @@ describe('RunExecutor', () => {
   const spec = (over: Partial<RunSpec> = {}): RunSpec => ({
     runId: 'run-1', sessionId: 'sess-1', agentId: 'agent-1', projectId: 'proj-1',
     cwd: join(root, 'repo'), prompt: 'do it', systemPrompt: 'sys', model: 'sonnet', allowedTools: [],
-    maxTurns: 5, maxBudgetUsd: 1, maxConcurrentSubagents: 4, maxSubagentDepth: 1, skills: [], subagents: [], ...over,
+    maxTurns: 5, maxBudgetUsd: 1, maxConcurrentSubagents: 4, maxSubagentDepth: 1, skills: [], subagents: [],
+    readOnlyCheckout: false, checkTimeoutSeconds: 900, approvalTimeoutMinutes: 30, ...over,
   });
   const done = () => sent.some((m) => m.type === 'run.result' || m.type === 'run.rejected');
 
@@ -249,6 +250,25 @@ describe('RunExecutor', () => {
       expect(eventsOf().some((e) => e.type === 'agent.command.executed')).toBe(true);
     });
 
+    it('denies an approval that gets no decision within approvalTimeoutMinutes + 5', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        executor.accept(spec({ prompt: 'DANGER:rm -rf x', approvalPolicy: policy, approvalTimeoutMinutes: 1 }));
+        for (let i = 0; i < 200 && approvals().length === 0; i++) await new Promise((r) => setImmediate(r));
+        expect(approvals()).toHaveLength(1);
+        await vi.advanceTimersByTimeAsync(6 * 60_000 - 1000);
+        expect(done()).toBe(false);
+        await vi.advanceTimersByTimeAsync(1000);
+        for (let i = 0; i < 200 && !done(); i++) await new Promise((r) => setImmediate(r));
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(eventsOf().find((e) => e.type === 'agent.approval.resolved')?.payload).toMatchObject({
+        decision: 'deny', message: 'No decision reached the worker within 6 minutes',
+      });
+      expect(sent.at(-1)).toMatchObject({ result: { status: 'succeeded' } });
+    });
+
     it('cancel denies a pending approval', async () => {
       executor.accept(spec({ prompt: 'DANGER:rm -rf x', approvalPolicy: policy }));
       await until(() => approvals().length === 1, 'approval.request');
@@ -353,6 +373,34 @@ describe('RunExecutor', () => {
       expect(r).toMatchObject({ status: 'succeeded', git: { integration: 'fast_forwarded' }, check: { status: 'passed' } });
       expect(r.git!.commits.map((c) => c.subject)).toEqual(['fake: a.txt']);
       expect(existsSync(wt)).toBe(false);
+    });
+
+    it('skips the env template when its directory resolves outside the worktree', async () => {
+      const outside = realpathSync(mkdtempSync(join(tmpdir(), 'office-envout-')));
+      try {
+        symlinkSync(outside, join(repo, 'cfg'));
+        git(repo, 'add', '-A');
+        git(repo, 'commit', '-q', '-m', 'cfg link');
+        const warnings: string[] = [];
+        const ex = new RunExecutor(new FakeAdapter(), (m) => sent.push(m), [root], runsDir, undefined, {
+          warn: (_o, msg) => void warnings.push(msg),
+        });
+        ex.accept(gitSpec({ prompt: 'hi', env: { file: './cfg/.env', vars: [{ name: 'A', value: 'b' }] } }));
+        await until(done, 'result');
+        expect(result().status).toBe('succeeded');
+        expect(existsSync(join(outside, '.env'))).toBe(false);
+        expect(warnings).toEqual([expect.stringMatching(/env template/)]);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('excludes a ./-prefixed env file by its normalized path', async () => {
+      executor.accept(gitSpec({ env: { file: './.env.local', vars: [{ name: 'A', value: 'b' }] } }));
+      await until(done, 'result');
+      expect(result().git).toMatchObject({ integration: 'fast_forwarded' });
+      expect(git(repo, 'show', '--name-only', '--format=', 'office/t')).toBe('sum.test.js');
+      expect(readFileSync(join(repo, '.git', 'info', 'exclude'), 'utf8')).toContain('\n/.env.local\n');
     });
 
     it('fails the run when the setup command fails', async () => {
