@@ -167,6 +167,10 @@ export class RunExecutor {
     pending.resolve(decision);
   }
 
+  hasPendingIntegration(runId: string): boolean {
+    return this.pendingIntegrations.has(runId);
+  }
+
   /** Settles a run's pending integration.check; unknown or late answers are ignored. */
   resolveIntegration(runId: string, ok: boolean, reason?: string): void {
     const pending = this.pendingIntegrations.get(runId);

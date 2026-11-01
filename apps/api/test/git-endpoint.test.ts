@@ -213,7 +213,7 @@ describe('git endpoint', () => {
     expect(out.stdout).toContain('refs/heads/main');
   });
 
-  it('kills a stalled child after the timeout and answers 504', async () => {
+  it('kills a stalled fetch child after the timeout and answers 504', async () => {
     (t.config as { gitTimeoutSeconds: number }).gitTimeoutSeconds = 1;
     const { port } = t.app.server.address() as AddressInfo;
     const marker = `GIT_PROJECT_ROOT=${join(t.config.dataDir, 'git-roots', projectId)}`;
@@ -236,10 +236,10 @@ describe('git endpoint', () => {
           host: '127.0.0.1',
           port,
           method: 'POST',
-          path: `/git/${projectId}/git-receive-pack`,
+          path: `/git/${projectId}/git-upload-pack`,
           headers: {
             authorization: `Bearer ${worker.credential}`,
-            'content-type': 'application/x-git-receive-pack-request',
+            'content-type': 'application/x-git-upload-pack-request',
             'content-length': '100000',
           },
         },

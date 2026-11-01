@@ -212,6 +212,24 @@ describe('run lifecycle', () => {
     expect((await s.run(spec.runId)).status).toBe('cancelled');
   });
 
+  it("records an owner-cancelled run's usage once from the worker's cancelled result", async () => {
+    s = await setup();
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    await s.req('POST', `/runs/${spec.runId}/cancel`);
+    await w.waitFor('run.cancel');
+    for (let i = 0; i < 2; i++) {
+      s.result(w, spec, { status: 'cancelled' });
+      await s.flush(w);
+    }
+    expect(await s.t.prisma.usageRecord.findMany({ where: { runId: spec.runId } })).toMatchObject([{ costUsd: 0.5, inputTokens: 10 }]);
+    const run = await s.run(spec.runId);
+    expect(run).toMatchObject({ status: 'cancelled', costUsd: 0.5 });
+    expect(run.usageRecordedAt).toBeTruthy();
+  });
+
   it('cancelling a summary run lets the parent run be summarized again', async () => {
     s = await setup();
     const summarizer = await s.agent('office-summarizer');

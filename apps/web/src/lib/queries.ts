@@ -464,11 +464,14 @@ export interface AuditFilters {
 export const useAudit = (f: AuditFilters) =>
   useInfiniteQuery({
     queryKey: ['audit', f],
-    initialPageParam: undefined as string | undefined,
+    initialPageParam: undefined as { before: string; beforeId: string } | undefined,
     queryFn: ({ pageParam }) => {
       const q = new URLSearchParams({ limit: String(AUDIT_PAGE_SIZE) });
-      for (const [k, v] of Object.entries({ ...f, before: pageParam })) if (v) q.set(k, v);
+      for (const [k, v] of Object.entries({ ...f, ...pageParam })) if (v) q.set(k, v);
       return api<AuditRow[]>(`/audit?${q}`);
     },
-    getNextPageParam: (last) => (last.length === AUDIT_PAGE_SIZE ? last[last.length - 1]!.createdAt : undefined),
+    getNextPageParam: (last) => {
+      const end = last[last.length - 1];
+      return last.length === AUDIT_PAGE_SIZE && end ? { before: end.createdAt, beforeId: end.id } : undefined;
+    },
   });

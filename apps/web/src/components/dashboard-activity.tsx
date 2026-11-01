@@ -12,13 +12,17 @@ const LIMIT = 50;
 /** Stored events of the project, newest first, with live events prepended as they arrive. */
 export function DashboardActivity() {
   const projectId = useProjects().data?.[0]?.id;
+  // remounted per project so the live rows of the previous one are dropped
+  return <ProjectActivity key={projectId} projectId={projectId} />;
+}
+
+function ProjectActivity({ projectId }: { projectId?: string }) {
   const stored = useActivity(projectId).data;
   const agents = useAgents().data;
   const [live, setLive] = useState<ActivityItem[]>([]);
 
   useEffect(() => {
     if (!projectId) return;
-    setLive([]);
     return uiSocket().subscribe(`project:${projectId}`, 0, (m) => {
       if (m.type !== 'event') return;
       const row = activityFromEvent(m.event);

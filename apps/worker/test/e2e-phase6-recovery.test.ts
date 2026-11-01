@@ -42,6 +42,7 @@ const PASSING_TEST = "import test from 'node:test'; import assert from 'node:ass
  */
 class HoldAdapter extends FakeAdapter {
   private releases = new Map<string, () => void>();
+  private sinks = new Map<string, { emit(e: { type: 'agent.text'; payload: { text: string } }): void }>();
 
   override async run(...args: Parameters<FakeAdapter['run']>): Promise<RunResult> {
     const [spec, sink, signal] = args;
@@ -49,9 +50,11 @@ class HoldAdapter extends FakeAdapter {
     if (spec.kind !== 'task' || !spec.prompt.includes('HOLD') || result.status !== 'succeeded') return result;
     await new Promise<void>((resolve) => {
       this.releases.set(spec.runId, resolve);
+      this.sinks.set(spec.runId, sink);
       signal.addEventListener('abort', () => resolve(), { once: true });
     });
     this.releases.delete(spec.runId);
+    this.sinks.delete(spec.runId);
     if (signal.aborted) return { status: 'cancelled', usage: result.usage };
     sink.emit({ type: 'agent.text', payload: { text: 'released' } });
     return result;
@@ -59,6 +62,8 @@ class HoldAdapter extends FakeAdapter {
 
   isHeld = (runId: string) => this.releases.has(runId);
   release = (runId: string) => this.releases.get(runId)?.();
+  /** Emits an event from a held run, e.g. while the worker is disconnected. */
+  say = (runId: string, text: string) => this.sinks.get(runId)?.emit({ type: 'agent.text', payload: { text } });
 }
 
 describe('phase 6 recovery end to end with the fake runtime', () => {
@@ -133,9 +138,10 @@ describe('phase 6 recovery end to end with the fake runtime', () => {
   }
 
   /** Closes the API (scheduler stopped, sockets dropped) and builds a new one on the same port and database. */
-  async function restartApi() {
+  async function restartApi(whileDown?: () => void) {
     await app.close();
     await until(() => conn && (conn as unknown as { socket?: { readyState: number } }).socket?.readyState !== 1, 'worker socket closed');
+    whileDown?.();
     app = await buildApp(config, { prisma, logger: false });
     await app.listen({ port, host: '127.0.0.1' });
     await until(online, 'worker reconnected');
@@ -192,7 +198,11 @@ describe('phase 6 recovery end to end with the fake runtime', () => {
     expect(before.length).toBeGreaterThan(0);
 
     const restartedAt = new Date();
-    await restartApi();
+    // events produced during the outage are buffered and delivered after the reconnect
+    await restartApi(() => {
+      adapter.say(run.id, 'during outage 1');
+      adapter.say(run.id, 'during outage 2');
+    });
     // the reconnecting hello reported the run: its lease was renewed and the new gateway counts it
     const reattached = await prisma.taskRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(reattached.status).toBe('running');
@@ -204,8 +214,9 @@ describe('phase 6 recovery end to end with the fake runtime', () => {
     expect((await prisma.taskRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded');
     const all = await events(run.id);
     const seqs = all.map((e) => e.seq);
-    expect(new Set(seqs).size).toBe(seqs.length);
-    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    // contiguous 1..N: nothing lost during the outage
+    expect(seqs).toEqual(seqs.map((_, i) => i + 1));
+    expect(all.filter((e) => e.type === 'agent.text' && String(e.payload.text).startsWith('during outage')).length).toBe(2);
     const released = all.find((e) => e.type === 'agent.text' && e.payload.text === 'released');
     expect(released!.seq).toBeGreaterThan(Math.max(...before.map((e) => e.seq)));
     expect(await prisma.taskRun.count({ where: { taskId: task.id } })).toBe(1);

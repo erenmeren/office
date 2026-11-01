@@ -154,7 +154,7 @@ const activityEvents = (db: Db, sessionIds: string[]): Promise<EventRow[]> =>
     select: { sessionId: true, seq: true, ts: true, type: true, payload: true },
   });
 
-// the event payload carries no parent tool-use id today, so per-subagent counts stay 0 until it does
+// events from inside a subagent carry its tool-use id as parentToolUseId (stamped by the Claude adapter)
 function counts(events: EventRow[], parent?: string) {
   const mine = parent === undefined ? events : events.filter((e) => payload(e).parentToolUseId === parent);
   const paths = new Set(mine.filter((e) => e.type === FILE).map((e) => str(payload(e).path)).filter(Boolean));

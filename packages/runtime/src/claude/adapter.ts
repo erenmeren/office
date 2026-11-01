@@ -43,6 +43,8 @@ export function buildQueryOptions(
   tools: ToolBridge | undefined,
   onSuspend: (info: { messageId?: string; to: string }) => void,
   sink: EventSink = { emit: () => {} },
+  // tool-use id -> the subagent's Agent/Task tool-use id, filled from the SDK's assistant messages
+  parents = new Map<string, string>(),
 ): Options {
   const served = tools ? (spec.tools as OfficeToolName[]) : [];
   const granted = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
@@ -52,17 +54,23 @@ export function buildQueryOptions(
   // one decision per tool call: the hook and canUseTool may both see it, the owner is asked once
   const decisions = new Map<string, ReturnType<typeof gateToolCall>>();
   // agent.command.executed only for a Bash call the gate let through; a denial shows as agent.tool.failed
-  const decide = async (toolName: string, input: Record<string, unknown>) => {
+  const decide = async (toolName: string, input: Record<string, unknown>, toolUseId?: string) => {
     const r = await gateToolCall(spec, sink, tools, toolName, input);
     if (r.allow && toolName === 'Bash') {
-      sink.emit({ type: 'agent.command.executed', payload: redactSecrets({ command: typeof input.command === 'string' ? input.command : undefined }) });
+      // shortcut: relies on the SDK queueing the assistant message (read by the run loop) before it calls the hook;
+      // a miss only loses the subagent attribution, upgrade by correlating toolUseId in the API if it shows up
+      const parent = toolUseId ? parents.get(toolUseId) : undefined;
+      sink.emit({
+        type: 'agent.command.executed',
+        payload: redactSecrets({ command: typeof input.command === 'string' ? input.command : undefined, ...(parent && { parentToolUseId: parent }) }),
+      });
     }
     return r;
   };
   const gate = (toolUseId: string | undefined, toolName: string, input: Record<string, unknown>) => {
     if (!toolUseId) return decide(toolName, input);
     let d = decisions.get(toolUseId);
-    if (!d) decisions.set(toolUseId, (d = decide(toolName, input)));
+    if (!d) decisions.set(toolUseId, (d = decide(toolName, input, toolUseId)));
     return d;
   };
   // PreToolUse runs before allow rules (allowedTools and project settings), so the gate always applies.
@@ -160,6 +168,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     let q: ReturnType<typeof query> | undefined;
     let suspended = false;
     let initSessionId: string | undefined;
+    const parents = new Map<string, string>();
     try {
       q = query({
         prompt: spec.prompt,
@@ -169,11 +178,14 @@ export class ClaudeAdapter implements RuntimeAdapter {
             sink.emit({ type: 'agent.waiting_reply', payload: info });
             // after the tool result has been returned to the CLI
             setTimeout(() => void q?.interrupt().catch(() => {}), 0);
-          }, sink),
+          }, sink, parents),
           abortController,
         },
       });
       for await (const msg of q) {
+        if (msg.type === 'assistant' && msg.parent_tool_use_id) {
+          for (const block of msg.message.content) if (block.type === 'tool_use') parents.set(block.id, msg.parent_tool_use_id);
+        }
         // an interrupted result of a suspended run is not a failure
         if (!(suspended && msg.type === 'result')) for (const body of normalizeSdkMessage(msg)) sink.emit(body);
         if (msg.type === 'system' && msg.subtype === 'init') initSessionId = msg.session_id;

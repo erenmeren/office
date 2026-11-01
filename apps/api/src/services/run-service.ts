@@ -603,6 +603,7 @@ export async function completeRun(
             error: r.error,
             finishedAt: now,
             costUsd: { increment: r.usage.costUsd },
+            usageRecordedAt: now,
             // Prisma rejects a raw null for a Json column
             structuredOutput: (r.structuredOutput ?? undefined) as Prisma.InputJsonValue | undefined,
           },
@@ -687,6 +688,28 @@ export async function completeRun(
       log?.error({ err, runId }, 'mission run notification failed');
     }
   }
+}
+
+/**
+ * Records the final usage of a run the owner cancelled before its result arrived: the result is otherwise acked as a
+ * resend. Exactly once, guarded by `usageRecordedAt` (a resumed run already has a row from its suspended segment).
+ */
+export async function recordCancelledUsage(prisma: PrismaClient, runId: string, result: RunResult) {
+  const { usage } = redactSecrets(result);
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.taskRun.updateMany({
+      where: { id: runId, status: 'cancelled', usageRecordedAt: null },
+      data: { usageRecordedAt: new Date(), costUsd: { increment: usage.costUsd } },
+    });
+    if (count === 0) return;
+    const session = await tx.agentSession.findUniqueOrThrow({ where: { runId } });
+    await tx.usageRecord.create({
+      data: {
+        runId, projectId: session.projectId, agentId: session.agentId, model: session.model,
+        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd,
+      },
+    });
+  });
 }
 
 /** Stores the git summary (run + GitWorkspace), the check (CheckResult + artifact) and an analysis/review result artifact. */

@@ -289,12 +289,22 @@ authed.describe('every page renders without console noise', () => {
   });
 
   authed('owner messages an agent', async ({ page, noise }) => {
+    // a dedicated inactive agent: never woken and never listed to agents, so no real chat run reads this e2e mail
+    const agentName = 'E2E Inbox';
+    const agents = (await (await page.request.get(`${API}/agents`)).json()) as { id: string; slug: string; isActive: boolean }[];
+    let inbox = agents.find((a) => a.slug === 'e2e-inbox');
+    if (!inbox) {
+      const res = await page.request.post(`${API}/agents`, {
+        data: { name: agentName, slug: 'e2e-inbox', role: 'e2e', config: { systemPrompt: 'e2e', model: 'haiku', allowedTools: [], maxBudgetUsd: 0.01 } },
+      });
+      expect(res.status()).toBe(201);
+      inbox = await res.json();
+    }
+    if (inbox!.isActive) expect((await page.request.put(`${API}/agents/${inbox!.id}`, { data: { isActive: false } })).ok()).toBe(true);
     await page.goto('/conversations');
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: 'Message an agent' }).click();
-    const select = page.getByLabel('Agent', { exact: true });
-    await select.selectOption({ index: 0 });
-    const agentName = (await select.locator('option').first().textContent())?.trim();
+    await page.getByLabel('Agent', { exact: true }).selectOption({ label: agentName });
     await page.getByRole('button', { name: 'Start conversation' }).click();
     // the thread switch resets the composer; fill only once the new thread is shown
     await expect(page.getByRole('heading', { name: `You and ${agentName}` })).toBeVisible();

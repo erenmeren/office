@@ -88,7 +88,8 @@ export async function gitRoutes(app: FastifyInstance, opts: { config: Config }) 
       if (child.exitCode === null && child.signalCode === null) child.kill();
     };
     let timedOut = false;
-    const timer = setTimeout(() => {
+    // a push is not killed on time: a kill during its ref update could leave a stale ref lock
+    const timer = rest === 'git-receive-pack' ? undefined : setTimeout(() => {
       timedOut = true;
       kill();
     }, config.gitTimeoutSeconds * 1000);

@@ -445,6 +445,7 @@ model TaskRun {
   error               String?
   costUsd             Float             @default(0)
   maxBudgetUsd        Float?
+  usageRecordedAt     DateTime?
   worktreePath        String?
   branch              String?
   baseCommit          String?

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pino from 'pino';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { FakeAdapter } from '@office/runtime';
 import type { WorkerToApi } from '@office/shared';
@@ -58,9 +58,10 @@ const result = (runId: string): WorkerToApi => ({
 });
 
 async function until(cond: () => boolean, what: string) {
-  const deadline = Date.now() + 3000;
+  // performance.now, not Date.now: a test may fake Date
+  const deadline = performance.now() + 3000;
   while (!cond()) {
-    if (Date.now() > deadline) throw new Error(what);
+    if (performance.now() > deadline) throw new Error(what);
     await new Promise((r) => setTimeout(r, 20));
   }
 }
@@ -172,4 +173,46 @@ it('run.assign drops only a stored suspended result for that run', async () => {
   expect(existsSync(join(home, 'outbox', 'r5.json'))).toBe(false);
   expect(existsSync(join(home, 'outbox', 'r4.json'))).toBe(true);
   expect([...internals.unsentResults.keys()]).toEqual(['r4']);
+});
+
+const event = (seq: number): WorkerToApi => ({
+  type: 'run.event',
+  event: { type: 'agent.text', seq, ts: new Date().toISOString(), sessionId: 's1', runId: 'r3', agentId: 'a1', projectId: 'p1', payload: {} },
+});
+
+it('events produced while disconnected are sent after the next welcome, in seq order, before the result', async () => {
+  const { received, sockets, make } = harness(ack);
+  const conn = make();
+  await conn.start();
+  send(conn, event(1));
+  await until(() => received.some((m) => m.type === 'run.event'), 'live event not sent');
+  sockets[0]!.terminate();
+  await new Promise((r) => setTimeout(r, 50));
+  for (const seq of [3, 2, 4]) send(conn, event(seq));
+  send(conn, result('r3'));
+  await until(() => received.filter((m) => m.type === 'hello').length === 2 && received.some((m) => m.type === 'run.result'), 'not resent');
+  const afterReconnect = received.slice(received.findLastIndex((m) => m.type === 'hello') + 1);
+  const wire = afterReconnect.filter((m) => m.type === 'run.event' || m.type === 'run.result').map((m) => (m.type === 'run.event' ? m.event.seq : m.type));
+  // seq 1 is the already-sent tail re-sent for safety (the API dedups by (sessionId, seq))
+  expect(wire.slice(0, 5)).toEqual([1, 2, 3, 4, 'run.result']);
+  await until(() => (conn as unknown as { recentEvents: Map<string, unknown> }).recentEvents.size === 0, 'buffers not cleared on ack');
+});
+
+it('re-sends an unacknowledged result on a heartbeat after 30 s on a live socket', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+  cleanup.push(() => vi.useRealTimers());
+  let swallowed = false;
+  const { home, received, make } = harness((msg, ws) => {
+    if (msg.type !== 'run.result') return;
+    if (!swallowed) swallowed = true; // lost in flight: no ack
+    else ack(msg, ws);
+  });
+  const conn = make();
+  await conn.start();
+  send(conn, result('r2'));
+  await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
+  vi.advanceTimersByTime(60_000); // one heartbeat (60 s): the unacked entry is older than 30 s
+  await until(() => received.filter((m) => m.type === 'run.result').length === 2, 'result not resent on heartbeat');
+  await until(() => !existsSync(join(home, 'outbox', 'r2.json')), 'outbox entry not removed after ack');
+  expect(received.filter((m) => m.type === 'hello')).toHaveLength(1);
 });

@@ -206,4 +206,19 @@ describe('observability read models', () => {
     const page = (await get(`/audit?action=x.done&limit=1&before=${all[0].createdAt}`)).json();
     expect(page.map((r: { id: string }) => r.id)).toEqual([all[1].id]);
   });
+
+  it('audit pages with a (createdAt, id) cursor so rows sharing a createdAt are not skipped', async () => {
+    const createdAt = new Date();
+    for (let i = 0; i < 3; i++) await t.prisma.auditLog.create({ data: { action: 'z.same', targetType: 'task', targetId: `t${i}`, createdAt } });
+    const seen: string[] = [];
+    let cursor = '';
+    for (let i = 0; i < 3; i++) {
+      const page = (await get(`/audit?action=z.same&limit=1${cursor}`)).json() as { id: string; createdAt: string }[];
+      expect(page).toHaveLength(1);
+      seen.push(page[0]!.id);
+      cursor = `&before=${page[0]!.createdAt}&beforeId=${page[0]!.id}`;
+    }
+    expect((await get(`/audit?action=z.same&limit=1${cursor}`)).json()).toEqual([]);
+    expect(new Set(seen).size).toBe(3);
+  });
 });

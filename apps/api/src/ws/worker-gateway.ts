@@ -11,7 +11,7 @@ import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
 import { appendEvent } from '../services/event-store.js';
 import { audit } from '../services/audit-service.js';
-import { completeRun, findLeasedRun, markRunning, renewLeases } from '../services/run-service.js';
+import { completeRun, findLeasedRun, markRunning, recordCancelledUsage, renewLeases } from '../services/run-service.js';
 import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
 import { requestApproval, resendDecisions } from '../services/approval-service.js';
@@ -306,6 +306,8 @@ export class WorkerGateway {
         // a resend after a lost ack: already final on this worker with the same outcome, so ack without applying it again
         const resend = mine && FINAL_RUN.has(prior.status) && prior.status === msg.result.status;
         if (!resend) await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
+        // an owner-cancelled run: the result is not applied, but its usage is owed once
+        else if (prior.status === 'cancelled') await recordCancelledUsage(this.prisma, msg.runId, msg.result);
         this.releaseRun(workerId, msg.runId);
         this.send(workerId, { type: 'run.result.ack', runId: msg.runId });
         return;
