@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/mission-control', '/agents', '/skills', '/workers', '/tasks/new'];
+const STATIC = ['/', '/mission-control', '/conversations', '/agents', '/skills', '/workers', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {
@@ -52,6 +52,20 @@ authed.describe('every page renders without console noise', () => {
       await expect(node).toHaveAttribute('aria-pressed', 'true');
       await expect(page.getByText(tasks[0].id.slice(0, 8), { exact: true }).first()).toBeVisible();
     }
+    expectQuiet(noise);
+  });
+
+  authed('owner messages an agent', async ({ page, noise }) => {
+    await page.goto('/conversations');
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: 'Message an agent' }).click();
+    const select = page.getByLabel('Agent', { exact: true });
+    await select.selectOption({ index: 0 });
+    await page.getByRole('button', { name: 'Start conversation' }).click();
+    await page.getByLabel('Message', { exact: true }).fill('Hello from e2e');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(page.getByRole('article').filter({ hasText: 'Hello from e2e' })).toBeVisible();
+    await expect(page.getByText('Saved · delivers at the next session boundary').first()).toBeVisible();
     expectQuiet(noise);
   });
 

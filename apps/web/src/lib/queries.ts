@@ -1,7 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import type { RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
+import type { MessageView, RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
 import { api } from './api';
 
 export type Me = { setupRequired: true } | { setupRequired: false; anonymous: true } | { id: string; email: string; setupRequired: false };
@@ -142,4 +142,40 @@ export const useRunSubagents = (runId: string, active: boolean) =>
     queryKey: ['run-subagents', runId],
     queryFn: () => api<SubagentRun[]>(`/runs/${runId}/subagents`),
     refetchInterval: active ? 3000 : false,
+  });
+
+export type { MessageView };
+export type ConversationKind = 'direct' | 'group' | 'task' | 'human';
+export interface Conversation {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  projectId: string;
+  kind: ConversationKind;
+  title: string;
+  taskId: string | null;
+  agentIds: string[];
+  includesOwner: boolean;
+  sdkSessionId: string | null;
+  lastMessage: MessageView | null;
+  unreadForOwner: number;
+  activeRun: { id: string; status: RunStatus } | null;
+}
+export const useConversations = (projectId: string | undefined, kind?: ConversationKind) =>
+  useQuery({
+    queryKey: ['conversations', projectId, kind ?? 'all'],
+    queryFn: () => api<Conversation[]>(`/conversations?projectId=${projectId}${kind ? `&kind=${kind}` : ''}`),
+    enabled: !!projectId,
+  });
+export const useConversation = (id: string | undefined) =>
+  useQuery({
+    queryKey: ['conversation', id],
+    queryFn: () => api<Conversation & { messages: MessageView[] }>(`/conversations/${id}`),
+    enabled: !!id,
+  });
+export const useMessageSearch = (projectId: string | undefined, q: string) =>
+  useQuery({
+    queryKey: ['message-search', projectId, q],
+    queryFn: () => api<MessageView[]>(`/messages/search?projectId=${projectId}&q=${encodeURIComponent(q)}`),
+    enabled: !!projectId && q.trim().length > 1,
   });
