@@ -136,7 +136,7 @@ describe('phase 4 end to end with the fake runtime', () => {
     connection = new WorkerConnection(
       {
         apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken, workspaceRoots: [tempRoot, repoRoot],
-        runtime: 'fake', capacity: 2, name: 'e2e',
+        runtime: 'fake', capacity: 2, name: 'e2e', tags: [], canClone: false,
       },
       { adapter, heartbeatMs: 200, reconnectBaseMs: 300, logger: pino({ level: 'silent' }) },
     );
