@@ -120,21 +120,35 @@ export async function collectResult(worktreePath: string, baseCommit: string) {
 /**
  * Moves the mission branch to `headCommit` only when that is a fast-forward of its current head.
  * With `remote` (a clone) the CAS is a push to the API leased on the run's base commit; the run branch is pushed
- * first so a needs_integration run keeps its commits reachable on the API side.
+ * first so a needs_integration run keeps its commits reachable on the API side. A rejected lease push reports
+ * git's stderr through `onRejected`.
  */
-export async function fastForward(repoPath: string, missionBranch: string, headCommit: string, remote?: RemoteAuth): Promise<IntegrationStatus> {
+export async function fastForward(
+  repoPath: string,
+  missionBranch: string,
+  headCommit: string,
+  remote?: RemoteAuth,
+  onRejected?: (reason: string) => void,
+): Promise<IntegrationStatus> {
   const ref = `refs/heads/${missionBranch}`;
   if (remote) {
     const run = `refs/heads/${remote.runBranch}`;
     await gitAuth(repoPath, remote.credential, 'push', '-q', 'office', `${run}:${run}`);
     // the lease implies force: a rewritten history (amend, reset) must never reach the mission branch
     if (!(await succeeds(repoPath, 'merge-base', '--is-ancestor', remote.baseCommit, headCommit))) return 'needs_integration';
+    let stderr = '';
     const pushed = await gitAuth(repoPath, remote.credential, 'push', '-q', 'office', `${headCommit}:${ref}`, `--force-with-lease=${ref}:${remote.baseCommit}`).then(
       () => true,
-      // the server may have applied the push and the response got lost
-      () => gitAuth(repoPath, remote.credential, 'ls-remote', 'office', ref).then((out) => out.split('\t')[0] === headCommit, () => false),
+      (err: { stderr?: string; message?: string }) => {
+        stderr = String(err.stderr || err.message || '').trim().slice(0, 2000);
+        // the server may have applied the push and the response got lost
+        return gitAuth(repoPath, remote.credential, 'ls-remote', 'office', ref).then((out) => out.split('\t')[0] === headCommit, () => false);
+      },
     );
-    if (!pushed) return 'needs_integration';
+    if (!pushed) {
+      onRejected?.(stderr || 'push to the mission branch was rejected');
+      return 'needs_integration';
+    }
     // mirror the API locally, so removeWorktree sees the run branch as integrated; a late update never moves it back
     await git(repoPath, 'update-ref', ref, headCommit, remote.baseCommit).catch(() => {});
     return 'fast_forwarded';

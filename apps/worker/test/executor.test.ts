@@ -459,6 +459,29 @@ describe('RunExecutor', () => {
       expect(git(cloneDir, 'branch', '--list', r.git!.branch)).toBe('');
     });
 
+    it('emits agent.integration.failed with the push rejection when the mission branch moved meanwhile', async () => {
+      const inner = new FakeAdapter();
+      const rec: RuntimeAdapter = {
+        name: 'fake',
+        run: async (s, sink, sig, t) => {
+          const r = await inner.run(s, sink, sig, t);
+          // another run fast-forwards the mission branch on the API before this one integrates
+          const moved = git(server, 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'moved');
+          git(server, 'update-ref', 'refs/heads/office/t', moved);
+          return r;
+        },
+      };
+      const clone = { apiUrl: `file://${root}`, canClone: true, credential: () => 'cred' };
+      new RunExecutor(rec, (m) => sent.push(m), [], runsDir, undefined, undefined, clone).accept(remoteSpec());
+      await until(done, 'result');
+      const r = result();
+      expect(r.git).toMatchObject({ integration: 'needs_integration' });
+      expect(r.git!.integrationReason).toMatch(/rejected|stale info|failed to push/);
+      const failed = sent.flatMap((m) => (m.type === 'run.event' && m.event.type === 'agent.integration.failed' ? [m.event] : []));
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.payload.reason).toBe(r.git!.integrationReason);
+    });
+
     it('rejects a remote spec when the worker cannot clone', async () => {
       executor.accept(remoteSpec());
       await until(done, 'rejected');

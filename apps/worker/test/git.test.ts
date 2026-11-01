@@ -154,7 +154,11 @@ describe('remote integration', () => {
     const serverHead = git(server, 'rev-parse', 'office/m');
 
     const remote = { credential: 'c', baseCommit: wt.baseCommit, runBranch: 'office/m-runs/r' };
-    expect(await fastForward(clone, 'office/m', head, remote)).toBe('needs_integration');
+    const reasons: string[] = [];
+    expect(await fastForward(clone, 'office/m', head, remote, (r) => reasons.push(r))).toBe('needs_integration');
+    // git's own rejection text reaches the caller
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/rejected|stale info|failed to push/);
     expect(git(server, 'rev-parse', 'office/m')).toBe(serverHead);
     // the run's commits stay reachable on the API side
     expect(git(server, 'rev-parse', 'refs/heads/office/m-runs/r')).toBe(head);

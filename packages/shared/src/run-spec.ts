@@ -80,6 +80,8 @@ export const RunResultSchema = z
       diffStat: z.string(),
       filesChanged: z.number().int(),
       integration: IntegrationStatusSchema,
+      /** Why a remote fast-forward was rejected (git's stderr), when it was. */
+      integrationReason: z.string().optional(),
       worktreePath: z.string().optional(),
     })
     .optional(),

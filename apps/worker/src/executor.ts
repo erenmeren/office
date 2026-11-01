@@ -272,7 +272,7 @@ export class RunExecutor {
       }
       if (worktree) {
         try {
-          result = await this.finishWorktree(spec, spec.git!, worktree, result);
+          result = await this.finishWorktree(spec, spec.git!, worktree, result, emit);
           keepWorktree = !!result.git?.worktreePath;
         } catch (err) {
           // the outcome is unknown: keep the worktree for inspection
@@ -334,10 +334,11 @@ export class RunExecutor {
   }
 
   /** Collects the run's commits; a succeeded code run is checked, then fast-forwarded onto the mission branch. */
-  private async finishWorktree(spec: RunSpec, g: MissionGit, wt: Worktree, result: RunResult): Promise<RunResult> {
+  private async finishWorktree(spec: RunSpec, g: MissionGit, wt: Worktree, result: RunResult, emit: (body: EventBody) => void): Promise<RunResult> {
     const collected = await collectResult(wt.path, wt.baseCommit);
     let check: RunResult['check'];
     let integration: IntegrationStatus = 'none';
+    let integrationReason: string | undefined;
     if (spec.taskKind === 'code' && !spec.readOnlyCheckout && result.status === 'succeeded') {
       check = spec.checkCommand
         ? {
@@ -347,14 +348,20 @@ export class RunExecutor {
         : { command: '', status: 'skipped', exitCode: null, durationMs: 0, output: '' };
       if (collected.commits.length > 0 && check.status !== 'failed' && check.status !== 'timeout') {
         const remote = g.remote ? { credential: this.credential(), baseCommit: wt.baseCommit, runBranch: wt.branch } : undefined;
-        integration = await fastForward(wt.repo, g.missionBranch, collected.headCommit, remote);
+        integration = await fastForward(wt.repo, g.missionBranch, collected.headCommit, remote, (reason) => {
+          integrationReason = reason;
+          emit({ type: 'agent.integration.failed', payload: { reason } });
+        });
       }
     }
     // a suspended run resumes here; unintegrated commits stay on disk for inspection until swept
     const keep = result.status === 'suspended' || (collected.commits.length > 0 && integration !== 'fast_forwarded');
     return {
       ...result,
-      git: { branch: wt.branch, baseCommit: wt.baseCommit, ...collected, integration, ...(keep && { worktreePath: wt.path }) },
+      git: {
+        branch: wt.branch, baseCommit: wt.baseCommit, ...collected, integration,
+        ...(integrationReason && { integrationReason }), ...(keep && { worktreePath: wt.path }),
+      },
       ...(check && { check }),
     };
   }
