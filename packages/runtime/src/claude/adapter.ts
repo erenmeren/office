@@ -1,4 +1,4 @@
-import { createSdkMcpServer, query, tool, type AgentDefinition, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
 import { gateToolCall } from '../gate.js';
 import { redactSecrets } from '../redact.js';
@@ -24,6 +24,8 @@ const BUILTIN_TOOLS = [
   'ReadMcpResourceTool',
   'ReadMcpResourceDirTool',
 ];
+// tools the gate must see: never auto-allowed while a policy or read-only checkout applies
+const GATED_TOOLS = ['Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 
 /** spec.allowedTools plus Skill/Agent when skills/subagents are pinned, so pinning implies the grant. */
 export function effectiveAllowedTools(spec: RunSpec): string[] {
@@ -43,7 +45,27 @@ export function buildQueryOptions(
   sink: EventSink = { emit: () => {} },
 ): Options {
   const served = tools ? (spec.tools as OfficeToolName[]) : [];
-  const allowedTools = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
+  const granted = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
+  // allowedTools entries skip canUseTool, so gated tools are left out (not disallowed): the CLI asks for them
+  const gating = !!spec.approvalPolicy || spec.readOnlyCheckout;
+  const allowedTools = gating ? granted.filter((t) => !GATED_TOOLS.includes(t)) : granted;
+  // one decision per tool call: the hook and canUseTool may both see it, the owner is asked once
+  const decisions = new Map<string, ReturnType<typeof gateToolCall>>();
+  const gate = (toolUseId: string | undefined, toolName: string, input: Record<string, unknown>) => {
+    if (!toolUseId) return gateToolCall(spec, sink, tools, toolName, input);
+    let d = decisions.get(toolUseId);
+    if (!d) decisions.set(toolUseId, (d = gateToolCall(spec, sink, tools, toolName, input)));
+    return d;
+  };
+  // PreToolUse runs before allow rules (allowedTools and project settings), so the gate always applies.
+  // An allowed call returns no decision, leaving the allowed-list check in place.
+  const gateHook: HookCallback = async (input) => {
+    if (input.hook_event_name !== 'PreToolUse') return {};
+    const r = await gate(input.tool_use_id, input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>);
+    return r.allow
+      ? {}
+      : { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: r.message } };
+  };
   const agents = spec.subagents.length
     ? Object.fromEntries(
         spec.subagents.map(({ name, description, prompt, skills, tools, model, maxTurns }): [string, AgentDefinition] => [
@@ -84,13 +106,14 @@ export function buildQueryOptions(
     systemPrompt: spec.systemPrompt,
     allowedTools,
     // strictMcpConfig keeps every MCP server except the in-process office one out of the session
-    disallowedTools: BUILTIN_TOOLS.filter((t) => !allowedTools.includes(t)),
+    disallowedTools: BUILTIN_TOOLS.filter((t) => !granted.includes(t)),
     ...(server && { mcpServers: { [MCP_SERVER_NAME]: server } }),
     strictMcpConfig: true,
     permissionMode: 'default',
     maxTurns: spec.maxTurns,
     maxBudgetUsd: spec.maxBudgetUsd,
     // Project settings are trusted workspace content (owner-controlled repos); deny rules still cap the tool surface. See docs/security.md.
+    // Their allow rules cannot skip the gate: the PreToolUse hook below runs before allow rules.
     settingSources: ['project'],
     resume: spec.resumeSdkSessionId,
     additionalDirectories: spec.skillsDir ? [spec.skillsDir] : undefined,
@@ -100,11 +123,13 @@ export function buildQueryOptions(
     // allowedTools auto-approves listed tools; disallowedTools blocks ungranted built-ins
     // ahead of project allow rules; this is the deny path for anything else that asks.
     // then read-only and approval-policy gating, which may wait for the owner
-    canUseTool: async (toolName, input) => {
-      if (!allowedTools.includes(toolName)) return { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' };
-      const g = await gateToolCall(spec, sink, tools, toolName, input);
+    canUseTool: async (toolName, input, { toolUseID }) => {
+      if (!granted.includes(toolName)) return { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' };
+      const g = await gate(toolUseID, toolName, input);
       return g.allow ? { behavior: 'allow' } : { behavior: 'deny', message: g.message };
     },
+    // gates only; normalizeSdkMessage emits the tool events
+    hooks: { PreToolUse: [{ hooks: [gateHook], timeout: (spec.approvalTimeoutMinutes ?? 30) * 60 + 60 }] },
     ...(spec.outputFormat && { outputFormat: spec.outputFormat }),
   };
 }

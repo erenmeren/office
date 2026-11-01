@@ -261,3 +261,69 @@ describe('policy gate and structured output', () => {
     expect(events.map((e) => e.type)).toEqual(['agent.waiting_approval', 'agent.approval.resolved']);
   });
 });
+
+describe('PreToolUse gate hook', () => {
+  type Hook = (i: Record<string, unknown>, id: string | undefined, o: { signal: AbortSignal }) => Promise<Record<string, unknown>>;
+  const hookOf = (o: { hooks?: unknown }) =>
+    (o.hooks as { PreToolUse: { hooks: Hook[]; timeout: number }[] }).PreToolUse[0]!;
+  const pre = (tool_name: string, tool_input: Record<string, unknown>, tool_use_id = 'tu1') => ({
+    hook_event_name: 'PreToolUse',
+    tool_name,
+    tool_input,
+    tool_use_id,
+  });
+  const opts = { signal: new AbortController().signal };
+  const policy = ApprovalPolicySchema.parse({});
+  function denying() {
+    const asks: unknown[] = [];
+    const b = {
+      call: async () => ({ ok: true as const, result: null }),
+      askApproval: async (r: { requestId: string }) => (asks.push(r), { requestId: r.requestId, decision: 'deny' as const, message: 'no' }),
+    };
+    return { asks, b };
+  }
+
+  it('denies an owner-denied Bash call and asks once per tool use', async () => {
+    const events: EventBody[] = [];
+    const { asks, b } = denying();
+    const o = buildQueryOptions({ ...spec, allowedTools: ['Bash'], approvalPolicy: policy, approvalTimeoutMinutes: 30 }, b, () => {}, {
+      emit: (e) => void events.push(e),
+    });
+    const m = hookOf(o);
+    expect(m.timeout).toBe(30 * 60 + 60);
+    expect(await m.hooks[0]!(pre('Bash', { command: 'rm -rf x' }), 'tu1', opts)).toEqual({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'no' },
+    });
+    expect(events.map((e) => e.type)).toEqual(['agent.waiting_approval', 'agent.approval.resolved']);
+    type CanUse = (t: string, i: Record<string, unknown>, o: { signal: AbortSignal; toolUseID: string }) => Promise<unknown>;
+    expect(await (o.canUseTool as CanUse)('Bash', { command: 'rm -rf x' }, { ...opts, toolUseID: 'tu1' })).toEqual({
+      behavior: 'deny',
+      message: 'no',
+    });
+    expect(asks).toHaveLength(1);
+    expect(await m.hooks[0]!(pre('Bash', { command: 'ls' }, 'tu2'), 'tu2', opts)).toEqual({});
+  });
+
+  it('keeps gated tools out of allowedTools and disallowedTools under a policy', () => {
+    const s = { ...spec, allowedTools: ['Read', 'Bash', 'Edit', 'Write'] };
+    for (const g of [{ ...s, approvalPolicy: policy }, { ...s, readOnlyCheckout: true }]) {
+      const o = buildQueryOptions(g, undefined, () => {});
+      expect(o.allowedTools).toEqual(['Read']);
+      for (const t of ['Bash', 'Edit', 'Write']) expect(o.disallowedTools).not.toContain(t);
+    }
+    const plain = buildQueryOptions(s, undefined, () => {});
+    expect(plain.allowedTools).toEqual(['Read', 'Bash', 'Edit', 'Write']);
+  });
+
+  it('denies Write on a read-only run', async () => {
+    const o = buildQueryOptions({ ...spec, allowedTools: ['Write'], readOnlyCheckout: true }, undefined, () => {});
+    expect(await hookOf(o).hooks[0]!(pre('Write', { file_path: '/tmp/a' }), 'tu1', opts)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Read-only run: writes are not permitted',
+      },
+    });
+  });
+});
+
