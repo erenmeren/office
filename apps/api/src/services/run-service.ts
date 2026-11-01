@@ -709,6 +709,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
   const lost: Array<{ runId: string; workerId: string | null }> = [];
   for (const run of expired) {
     const outbox: Outbox = [];
+    let retried = false;
     const changed = await prisma.$transaction(async (tx) => {
       // re-check inside the transaction so a concurrent result or renewal wins
       const { count } = await tx.taskRun.updateMany({
@@ -724,7 +725,8 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
         // a resumed run lost before accept (waiting_reply) or a run lost while asking: neither can go to ready
         if (task.status === 'waiting_reply' || task.status === 'waiting_approval') await setTaskStatus(tx, outbox, task.id, 'running');
-        await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
+        retried = task.attempts < task.maxAttempts;
+        await setTaskStatus(tx, outbox, task.id, retried ? 'ready' : 'failed');
       }
       if (run.kind === 'plan') await onPlanRunLost(tx, outbox, run);
       if (run.kind === 'review') await reviewRunFailed(tx, outbox, { ...run, status: 'lost' });
@@ -744,7 +746,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         runId: run.id,
         agentId: run.session.agentId,
         projectId: run.session.projectId,
-        payload: { workerId: run.workerId },
+        payload: { workerId: run.workerId, retried },
       };
       if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${run.id}`, event);
     }

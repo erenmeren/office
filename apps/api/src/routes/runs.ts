@@ -8,7 +8,13 @@ export async function runRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const run = await app.prisma.taskRun.findUnique({ where: { id }, include: { session: true } });
     if (!run) throw new HttpError(404, 'not_found');
-    return run;
+    // lost runs report when (finishedAt) and which run retried them: the next run of the same task
+    const retry = run.status === 'lost' && run.taskId
+      ? await app.prisma.taskRun.findFirst({
+          where: { taskId: run.taskId, createdAt: { gt: run.createdAt } }, orderBy: { createdAt: 'asc' }, select: { id: true },
+        })
+      : null;
+    return { ...run, retriedByRunId: retry?.id ?? null };
   });
 
   app.get('/runs/:id/events', async (req) => {

@@ -152,4 +152,42 @@ describe('worker gateway', () => {
     }
     await w.close();
   });
+
+  it('a worker reconnecting with a run that was lost meanwhile gets run.cancel and its late result is rejected', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    await w.close();
+    const other = await t.prisma.worker.create({ data: { name: 'w2', status: 'online' } });
+    const project = await t.prisma.project.create({ data: { name: 'P', slug: 'p', repoPath: '/tmp/p' } });
+    const agent = await t.prisma.agent.create({ data: { name: 'dev', slug: 'dev', role: 'dev' } });
+    const version = await t.prisma.agentVersion.create({ data: { agentId: agent.id, version: 1, config: {} } });
+    const mk = (workerId: string, status: 'lost' | 'running') =>
+      t.prisma.taskRun.create({
+        data: {
+          agentId: agent.id, projectId: project.id, agentVersionId: version.id, kind: 'chat', workerId, status,
+          leaseExpiresAt: new Date(Date.now() - 1000),
+        },
+      });
+    const lost = await mk(id, 'lost');
+    const foreign = await mk(other.id, 'running');
+    await t.prisma.agentSession.create({
+      data: { runId: lost.id, agentId: agent.id, projectId: project.id, model: 'sonnet', status: 'lost', startedAt: new Date() },
+    });
+
+    const re = await connectFakeWorker(t.app, { credential: w.credential, name: 'w1', activeRunIds: [lost.id, foreign.id] });
+    const cancelled = [await re.waitFor('run.cancel'), await re.waitFor('run.cancel')].map((m) => m.runId).sort();
+    expect(cancelled).toEqual([lost.id, foreign.id].sort());
+    // neither lease was renewed for this worker
+    for (const r of [lost, foreign]) {
+      const row = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: r.id } });
+      expect(row.leaseExpiresAt!.getTime()).toBeLessThan(Date.now());
+    }
+    re.send({
+      type: 'run.result', runId: lost.id, sessionId: 'x',
+      result: { status: 'succeeded', usage: { inputTokens: 1, outputTokens: 1, costUsd: 0, numTurns: 1, durationMs: 1 } },
+    });
+    expect(await re.waitFor('error')).toMatchObject({ message: `No live lease for run ${lost.id} on this worker` });
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: lost.id } })).status).toBe('lost');
+    await re.close();
+  });
 });
