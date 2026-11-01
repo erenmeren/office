@@ -178,7 +178,7 @@ function sessionItem(run: RunRow, all: EventRow[]) {
     costUsd: run.costUsd,
     ...counts(events),
     subagents: (run.session?.subagentRuns ?? []).map((s) => ({
-      id: s.id, subagentType: s.subagentType, description: s.description, status: s.status, startedAt: s.startedAt, endedAt: s.endedAt,
+      id: s.id, toolUseId: s.toolUseId, subagentType: s.subagentType, description: s.description, status: s.status, startedAt: s.startedAt, endedAt: s.endedAt,
       ...counts(events, s.toolUseId),
     })),
   };
@@ -228,7 +228,7 @@ export async function sessionDetail(db: Db, runId: string) {
       .filter((e) => e.type === COMMAND)
       .map((e) => {
         const p = payload(e);
-        return { seq: e.seq, ts: e.ts, command: str(p.command) ?? null, exitCode: num(p.exitCode), durationMs: num(p.durationMs) };
+        return { seq: e.seq, ts: e.ts, command: str(p.command) ?? null, exitCode: num(p.exitCode), durationMs: num(p.durationMs), bySubagent: str(p.parentToolUseId) };
       }),
     files: [...files.values()],
     skills: run.session?.skillsSnapshot ?? [],

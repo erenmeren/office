@@ -142,6 +142,56 @@ authed.describe('every page renders without console noise', () => {
     expectQuiet(noise);
   });
 
+  authed('live sessions: a subagent shows only its commands; Stop cancels the run; the composer explains delivery', async ({ page, request: api, noise }) => {
+    const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string }[];
+    const [agent] = (await (await api.get(`${API}/agents`)).json()) as { id: string; name: string }[];
+    const now = Date.now();
+    const at = (s: number) => new Date(now - 60_000 + s * 1000).toISOString();
+    const sub = { id: 'sub-fixture-41c', toolUseId: 'tu-sub', subagentType: 'Test Writer', description: 'write tests', status: 'running', startedAt: at(10), endedAt: null, commands: 1, files: 1 };
+    const item = {
+      runId: 'run-fixture', sessionId: 'ses-fixture', agentId: agent.id, agentName: agent.name, kind: 'task', status: 'running', taskId: 't', taskKey: 'T-104',
+      taskTitle: 'Login form', workerName: 'dev-laptop', startedAt: at(0), costUsd: 0.09, commands: 2, files: 2, subagents: [sub],
+    };
+    await page.route(`${API}/sessions?projectId=${project.id}&status=live`, (route) => route.fulfill({ json: [item] }));
+    await page.route(`${API}/sessions/run-fixture`, (route) =>
+      route.fulfill({
+        json: {
+          ...item, model: 'sonnet', agentVersion: 1, maxBudgetUsd: 5, usage: { inputTokens: 10, outputTokens: 5 }, skills: [], approval: null,
+          commands: [
+            { seq: 1, ts: at(5), command: 'pnpm lint', exitCode: 0, durationMs: 1200 },
+            { seq: 2, ts: at(20), command: 'pnpm --filter web vitest run LoginForm', bySubagent: 'tu-sub' },
+          ],
+          files: [{ path: 'apps/web/components/LoginForm.tsx', adds: 96, dels: 3 }, { path: 'apps/web/components/LoginForm.test.tsx', adds: 62, dels: 0, bySubagent: 'tu-sub' }],
+        },
+      }),
+    );
+    let cancelled = false;
+    await page.route(`${API}/runs/run-fixture/cancel`, (route) => {
+      cancelled = route.request().method() === 'POST';
+      return route.fulfill({ json: { id: 'run-fixture', status: 'cancelled' } });
+    });
+    await page.goto('/sessions');
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByText('1 agent · 1 subagent')).toBeVisible();
+    await expect(page.getByRole('table', { name: `Commands run by ${agent.name}` }).getByText('pnpm lint')).toBeVisible();
+
+    await page.getByRole('list', { name: `Subagents of ${agent.name}` }).getByRole('button').click();
+    const commands = page.getByRole('table', { name: 'Commands run by Test Writer' });
+    await expect(commands.getByText('pnpm --filter web vitest run LoginForm')).toBeVisible();
+    await expect(commands.getByText('pnpm lint')).toHaveCount(0);
+    await expect(page.getByText(`Subagent of ${agent.name}`)).toBeVisible();
+    await expect(page.getByRole('table', { name: 'Files changed' }).getByText('LoginForm.test.tsx')).toBeVisible();
+    await expect(page.getByRole('table', { name: 'Files changed' }).getByText('LoginForm.tsx', { exact: true })).toHaveCount(0);
+
+    await expect(page.getByText('Delivered at the next run boundary')).toBeVisible();
+    await expect(page.getByRole('radiogroup', { name: 'Recipient' }).getByRole('radio')).toHaveText([agent.name]);
+
+    page.once('dialog', (d) => void d.accept());
+    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await expect.poll(() => cancelled).toBe(true);
+    expectQuiet(noise);
+  });
+
   authed('workers: a pending worker shows no mode; a remote worker shows its mode and tag', async ({ page, request: api, noise }) => {
     const name = `e2e-worker-${Date.now()}`;
     expect((await api.post(`${API}/workers`, { data: { name } })).ok()).toBe(true);

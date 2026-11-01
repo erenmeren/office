@@ -141,7 +141,7 @@ describe('observability read models', () => {
       workerName: 'w1', costUsd: 2, commands: 2, files: 2,
     });
     expect(live[0].subagents).toEqual([
-      expect.objectContaining({ subagentType: 'helper', description: 'look', status: 'running', commands: 1, files: 1 }),
+      expect.objectContaining({ toolUseId: 'tu-1', subagentType: 'helper', description: 'look', status: 'running', commands: 1, files: 1 }),
     ]);
     expect((await get(`/sessions?projectId=${q}&status=live`)).json()).toEqual([]);
     expect((await get(`/sessions?projectId=${q}&status=all`)).json()).toHaveLength(1);
@@ -158,6 +158,7 @@ describe('observability read models', () => {
     });
     expect(body.maxBudgetUsd).toBeGreaterThan(0);
     expect(body.commands.map((c: { command: string }) => c.command)).toEqual(['ls', 'pnpm test']);
+    expect(body.commands.map((c: { bySubagent?: string }) => c.bySubagent)).toEqual([undefined, 'tu-1']);
     expect(body.files).toEqual([{ path: 'a.ts' }, { path: 'b.ts', bySubagent: 'tu-1' }]);
     expect(body).not.toHaveProperty('contextPack');
     expect((await get(`/sessions/nope`)).statusCode).toBe(404);

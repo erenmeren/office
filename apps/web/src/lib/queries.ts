@@ -360,6 +360,7 @@ export interface LiveSession {
   agentName: string;
   kind: string;
   status: RunStatus;
+  taskId: string | null;
   taskKey: string | null;
   taskTitle: string | null;
   workerName: string | null;
@@ -367,6 +368,41 @@ export interface LiveSession {
   costUsd: number;
   commands: number;
   files: number;
+  subagents: SessionSubagent[];
+}
+export interface SessionSubagent {
+  id: string;
+  toolUseId: string;
+  subagentType: string | null;
+  description: string | null;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  commands: number;
+  files: number;
+}
+export interface SessionCommand {
+  seq: number;
+  ts: string;
+  command: string | null;
+  exitCode?: number;
+  durationMs?: number;
+  /** parent tool-use id of the subagent that ran it */
+  bySubagent?: string;
+}
+export interface SessionFile {
+  path: string;
+  adds?: number;
+  dels?: number;
+  bySubagent?: string;
+}
+export interface SessionDetail extends Omit<LiveSession, 'commands' | 'files'> {
+  model: string | null;
+  agentVersion: number;
+  maxBudgetUsd: number | null;
+  usage: { inputTokens: number; outputTokens: number };
+  commands: SessionCommand[];
+  files: SessionFile[];
 }
 export const useOverview = (projectId: string | undefined) =>
   useQuery({
@@ -391,3 +427,5 @@ export const useLiveSessions = (projectId: string | undefined) =>
     enabled: !!projectId,
     refetchInterval: 10_000,
   });
+export const useSession = (runId: string | undefined) =>
+  useQuery({ queryKey: ['session', runId], queryFn: () => api<SessionDetail>(`/sessions/${runId}`), enabled: !!runId, refetchInterval: 10_000 });
