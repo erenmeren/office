@@ -6,7 +6,7 @@
 | 2 | done |
 | 3 | done |
 | 4 | done (real-Claude acceptance on Maratus plus the Task 12b gate probe; see "Phase 4 evidence") |
-| 5 | not started |
+| 5 | done (two workers: real Claude on the host, a fake-runtime container cloning over the git endpoint; see "Phase 5 evidence") |
 | 6 | not started |
 
 ## Outstanding
@@ -78,9 +78,102 @@ Phase 4 (Chief and orchestration):
 - A project without a `checkCommand` records `check.status: skipped`; the worker fast-forwards such runs, but the Chief's code-task evidence rule requires a passed check, so `done` is reachable only through the owner override. Deliberate (the check output is the test evidence), noted here because the docs' "(or no check configured)" wording hides it.
 - A run that succeeds after its mission was cancelled still moves its task to `review`; the gate blocks any further spend and no review run starts, so the only effect is a stray `review` task in a cancelled mission.
 
-Phase 5 (hybrid workers): remote workers, remote clone, worker capabilities.
+Phase 5 (hybrid workers):
+- No `run.result` acknowledgement: a result sent on a socket that dies before the frame is flushed is deleted from the outbox and not re-delivered; the lease then expires and the task is retried (one duplicated run after a rare race). A result ack is Phase 6 work.
+- Git endpoint: `Git-Protocol` is not forwarded to `git http-backend` (protocol v0 only); the http-backend child has no size or time limit; duplicate CGI header names keep the last value; the gzip and chunked upload paths are untested.
+- Worker outbox: a corrupt outbox file is skipped with a warning on every start and never removed; `load()` accepts any worker message, not only `run.result`; a stray `*.tmp` stays if the rename fails.
+- Remote clone: `git remote set-url` rewrites `.git/config` on every sync, which can race the first worktree's `extensions.worktreeConfig` write (config lock); a `<dir>.tmp-<pid>` clone directory stays after a kill; any `rev-parse` failure re-clones a good clone; the lost-push-response path (`ls-remote` check) is untested.
+- Remote run branches stay on the API repository: the worker deletes its local run branch after a fast-forward, but the copy it pushed stays (`office/phase-5-acceptance-lease-loss-a19850-runs/remote-marker-23327d81` in the sandbox after the acceptance). Local runs' branches are deleted as in Phase 4.
+- Plan and review runs are `needsRepoAccess: 'any'`, so a remote worker can take the Chief's runs whenever the local worker has no free slot. With a remote worker on another runtime this hands the Chief's work to that runtime: in the acceptance the first review run of mission `c3e0dbf5` (`7de2b3ab`) went to the container's fake runtime, decided nothing, and the fake runtime executed the `COMMIT:` markers of the task descriptions inside its read-only review worktree (local commits `40cb27b`, `71e90f4` in the container's clone, never pushed; that worktree is kept). Give every worker in a pool the same runtime.
+- `requiredWorkerTags` is per project, not per task: it steers plan, review and summary runs too (a local-only summary run waits while a tag only remote workers carry is required).
+- The run spec is not persisted and `agent.started` does not carry it; that a run used `git.remote` is visible only through its `worktreePath` (a path on the worker) and the worker's clone.
+- The fake runtime commits as `fake <fake@example.invalid>` on the remote worker (it reads the identity from its own process environment, which the remote worker does not set); real Claude commits use the project's committer identity.
+- The context pack may carry absolute paths of the control plane (from memory entries or summaries) to a remote worker; they are text only, the remote worker cannot open them.
+- A reply that arrives while the pinned worker is offline waits the full `replyTimeoutMinutes` before the run fails (`pinned worker offline at resume`) and the task is retried fresh. `failWaitingRun` writes no session event; the wrong-worker resume guard is untested.
+- `GET /runs/:id` `retriedByRunId` is the first later run of the same task, of any kind; the `retried: false` path of `run.lease.lost` is untested.
+- The Phase 5 end-to-end test's mission-head check cannot tell the original base from a moved head in test 5, and its `SLOW` marker gives a 2 s window.
+- Remote worker container: `COPY . .` before `pnpm install` defeats layer caching (1.02 GB image); the enroll token stays in the container environment after enrollment; the entrypoint checks only that `credentials.json` exists.
+- The host firewall: on this machine ufw drops Docker bridge traffic to host port 4000, so the acceptance ran the container with the host-network override (`infra/compose.hostnet.yaml`); network isolation of the container was therefore not exercised, only filesystem isolation.
+- Data note for the owner: the `remote-1` worker row `57d49b72` from an earlier enrollment is `revoked` and stays listed; the current container is `d30c51d2`.
 
 Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, project membership, interactive PTY shell.
+
+## Phase 5 decisions
+
+- The API is the git endpoint for workers: `ALL /git/:projectId/*` runs `git http-backend` on the repository the database names for that project (never a client-supplied path), through a per-project `GIT_PROJECT_ROOT` symlink directory under `<OFFICE_DATA_DIR>/git-roots/<projectId>`. Only `Authorization: Bearer <worker credential>` is accepted there (401 `worker_unauthorized`); a revoked worker is refused at its next request. Session cookies are not accepted on it and worker credentials are not accepted anywhere else. The child is killed when the client goes away.
+- Only fast-forwards of `refs/heads/office/*` are accepted there: the `pre-receive` hook (`apps/api/git-hooks/pre-receive`) rejects any other ref, deletes, tags and non-fast-forwards, and the default branch is never writable; one bad ref rejects the whole push. Nothing is pushed to the project's own `origin`.
+- Workers declare `tags` (lowercase `^[a-z0-9][a-z0-9-]{0,31}$`, `OFFICE_WORKER_TAGS`) and `canClone` (`OFFICE_WORKER_CAN_CLONE`) in `hello`; `Worker.tags` and `Worker.canClone` store them. A project's `requiredWorkerTags` must all be present on a worker.
+- Scheduling: a worker is local for a project when its `allowedRoots` cover the repository. Mission runs with a worktree (task runs of a mission, plan and review runs) may go to a worker that clones (`needsRepoAccess: 'any'`); runs without a worktree (chat, inbox, summary, non-mission task) are local-only. Local workers are preferred, then the one with the fewest active runs.
+- Remote workers never receive a control-plane path: their `RunSpec.git` carries `remote: { path: '/git/<projectId>' }` instead of `repoPath` (exactly one of the two), and `cwd` is `remote`. They clone into `<OFFICE_WORKER_HOME>/repos/<projectId>` (remote `office`, credential passed only through `GIT_CONFIG_*` environment variables as an `http.extraHeader`, `GIT_TERMINAL_PROMPT=0`, clone into a temporary directory then rename, a broken clone is re-cloned), work in a worktree of that clone and integrate by pushing the run branch and then the mission branch with `--force-with-lease=refs/heads/<mission>:<base>` after an ancestry check. A lost push response is resolved with `ls-remote`. A worker that cannot clone answers `run.rejected` `worker cannot clone`.
+- Resumes are pinned to the worker that holds the SDK session (`TaskRun.workerId`). While it is offline the run stays parked; when the reply timeout passes with it still offline the run fails (`pinned worker offline at resume`) and the task is retried fresh, without `resumeSdkSessionId`.
+- Results are persisted in the worker outbox `<OFFICE_WORKER_HOME>/outbox/<runId>.json` (mode 0600) before they are sent and deleted after the send or after the API's `No live lease…` error; a restarted worker re-sends them on `welcome` while their runs are in `activeRunIds`. A run whose lease expires gets `run.lease.lost { workerId, retried }`; `GET /runs/:id` adds `retriedByRunId`.
+- The remote worker container (`infra/docker/worker.Dockerfile`, Compose service `worker-remote`, profile `remote`, `pnpm worker:remote`) mounts no host path: its credential, clones and worktrees live in the named volume `office-worker-remote`. `infra/compose.hostnet.yaml` is an opt-in override that puts the container on the host network for hosts whose firewall blocks the Docker bridge.
+- `GET /workers` adds `tags`, `canClone`, `online` and `activeRuns`; the Workers page shows mode (local, remote or none), tags, active runs against capacity, the relative heartbeat and Revoke; the Settings page edits `requiredWorkerTags`.
+
+## Phase 5 evidence
+
+### Fake-adapter end-to-end
+
+`pnpm --filter @office/worker test` (2026-11-01 13:37Z, HEAD 9e04298): 12 files, 75 tests passed. `apps/worker/test/e2e-phase5.test.ts` (7 tests) runs the real API in-process with two fake-runtime workers, one local and one that clones over the git endpoint: parallel mission tasks on both, a remote run fast-forwarding over HTTP (also after the mission head moved), the CAS race between a local `update-ref` and a remote `--force-with-lease` push, a result delivered from the outbox after a worker restart, `No live lease` once the run is `lost`, and the pinned resume.
+
+### Phase 5 acceptance (real Claude on the host, fake runtime in a container)
+
+Setup (2026-11-01, all through the API with the owner's session):
+
+- Machines: the host worker `eren-pc` `e973b79e` (`OFFICE_RUNTIME=claude`, roots `/home/meren/projects/office-workspaces:/home/meren/projects/maratus-admin`, started with only the `OFFICE_*` variables of `.env`) and the container `remote-1` `d30c51d2` (`infra-worker-remote-1`, `OFFICE_RUNTIME=fake`, tag `remote`, `canClone`, no workspace roots, saved credential in the volume). The host worker started with `OFFICE_WORKER_CAPACITY=1` and was restarted with 2 at 13:43Z (see mission 1).
+- Network: this host's ufw drops Docker bridge traffic to port 4000, so the container ran with the committed host-network override: `docker compose -f infra/compose.yaml -f infra/compose.hostnet.yaml --profile remote up -d worker-remote`. Network isolation was therefore not exercised. Filesystem isolation was: `docker inspect` `Mounts` = `[{"Type":"volume","Name":"infra_office-worker-remote","Destination":"/office-worker","RW":true}]` (the named volume only, `HostConfig.Binds` the same), before the missions and again after them; the container's mount table shows no host path other than Docker's own `/etc/hostname`, `/etc/hosts` and `/etc/resolv.conf`.
+- Project `office-sandbox` `e844090c-2a16-4a62-a199-a251103a8736` (`/home/meren/projects/office-workspaces/office-sandbox`). Its `main` had no commit and 5 untracked files (`docs/`, `hello.txt`, `index.html`, `sum.js`, `sum.test.js`); they were committed as `9c94e8f` "sandbox baseline" at 13:39Z. Settings: `checkCommand node --test`, `envFile .env.local`, `envTemplate [{FOO: bar}]`, `dailyBudgetUsd 50`, `maxConcurrentRuns 2`, `requiredWorkerTags []`, approval policy defaults. Project agents: architect, chief, designer, developer, qa-engineer.
+- No live or queued run existed before the workers connected; nothing had to be cancelled (0 USD).
+
+Mission 1 `c3e0dbf5-c551-4745-920c-38e76961dd15` ("Phase 5 acceptance: two workers", budget cap 5 USD), branch `office/phase-5-acceptance-two-workers-c3e0db`. The request was the brief's sentence plus the three task descriptions verbatim: `changelog` (developer, plain language), `hello-script` (designer, `COMMIT:scripts/hello.sh:#!/bin/sh\necho office`) and `phase5-doc` (qa-engineer, `COMMIT:docs/PHASE5.md:phase 5` plus the same in plain language). Plan run `423db131` (host, 0.24 USD) kept all three descriptions; plan approval `f38d72e3` approved through the API at 13:41:00Z (audit `plan.approved`).
+
+| Run | Task | Worker | Started | Result |
+|---|---|---|---|---|
+| `c5b514db` | changelog | host `e973b79e` | 13:41:00.368 | succeeded, 0.12 USD, check `e2f3401d` passed, `fast_forwarded` `8fbaf40` |
+| `86c2c791` | hello-script | container `d30c51d2` | 13:41:00.423 | succeeded, 0 USD (fake), check `998b8fd9` passed (`node --test` in the container, `agent.check.completed` seq 11), commit `4d8f098`, `needs_integration` (changelog was integrated first), worktree `/office-worker/worktrees/86c2c791-…` |
+| `ebb6877b` | phase5-doc | host | 13:41:12 | succeeded, 0.12 USD, check `43f2776a` passed, `fast_forwarded` `5795618` |
+| `7de2b3ab` | (review) | container | 13:41:26 | the host's single slot was taken by a summary run, so the Chief's review went to the container's fake runtime: no decision; mission stayed `review` |
+| `ee8f9e46` | hello-script retry | host | 13:43:28 | owner reopen (audit `task.override` 13:43:27Z: "needs_integration …; rerun from the mission head"), succeeded, 0.05 USD, check `c091c44f` passed, `fast_forwarded` `49cc698` |
+| `33c88c92` | (review) | host | 13:43:38 | Chief (real), 0.32 USD: `task.reviewed` done for changelog, hello-script and phase5-doc (13:43:51–55Z), review artifact `9272b7dd`; mission `done` |
+
+Before the reopen the host worker was restarted with capacity 2 (by pid), so that summary and review runs both fit on it. For the retry the implementer set `requiredWorkerTags: ["remote"]` to steer it onto the container but cleared it again before the next scheduler tick, so the retry ran on the host with real Claude, which wrote the same file from the description. Mission 1 spend 0.86 USD.
+
+Mission 2 `a1985078-97ea-42e2-ac6b-26f0a0b1d094` ("Phase 5 acceptance: lease loss", cap 5 USD), branch `office/phase-5-acceptance-lease-loss-a19850`: two independent tasks, `remote-marker` (designer, `COMMIT:docs/REMOTE.md:written by the remote worker`) and `phase5-doc` (qa-engineer, as above, with the fake runtime's `SLOW` marker). Plan run `9d35089a` (host, 0.11 USD). Before approving plan approval `4483b98c` (13:45:33Z) the owner's stand-in set `requiredWorkerTags: ["remote"]` and `maxConcurrentRuns: 1` (audit `settings.updated` 13:45:32Z), so both tasks went to the container one after the other; a watcher script killed the container (`docker kill infra-worker-remote-1`) as soon as the `phase5-doc` run was `running` and reset the settings (`requiredWorkerTags []`, `maxConcurrentRuns 2`, audit 13:46:05Z).
+
+| Run | Task | Worker | Result |
+|---|---|---|---|
+| `23327d81` | remote-marker | container | succeeded 13:46:04Z, check passed, `fast_forwarded` `9d467dc` over HTTP (the API log shows the container's `git-receive-pack` requests) |
+| `f7a5d0db` | phase5-doc | container | `running` 13:46:05.319Z, container killed 13:46:05.562Z; lease expired; `lost` 13:47:05.409Z with `run.lease.lost` seq 1 `{ "workerId": "d30c51d2-…", "retried": true }`; `GET /runs/f7a5d0db…` `retriedByRunId` `d33d2564…` |
+| `d33d2564` | phase5-doc retry | host | succeeded 13:47:15Z, 0.05 USD, check passed, `fast_forwarded` `2ef7495` |
+| `75810953` | (review) | host | Chief, 0.18 USD: both tasks `done` (13:47:33Z, 13:47:35Z, the second note cites the lost run and the retry), review artifact `23ae6292`; mission `done` |
+
+The container was started again at 13:47:50Z with no enroll token: its log shows `connected to API` with `workerId d30c51d2-…` (saved credential). Its outbox was empty and it had no worktree of `f7a5d0db`, so it reported nothing for the stale run, which stayed `lost`. Mission 2 spend 0.34 USD.
+
+Total spend of the acceptance: 1.22 USD over 18 runs (two plan runs; four task runs on the host and three on the container; three review runs, one of them on the container; six summary runs; the container's runs cost 0 USD). The 5 USD stop was not reached.
+
+| Expectation | Result | Evidence |
+|---|---|---|
+| (1) `GET /workers` shows both online, the container `canClone: true`, `allowedRoots: []` | PASS | 13:40:05Z: `e973b79e` `eren-pc` online, tags `[]`, `canClone: false`, roots as above, capacity 1; `d30c51d2` `remote-1` online, tags `["remote"]`, `canClone: true`, `allowedRoots: []`, capacity 2. The revoked stale row `57d49b72` (`remote-1`) is listed `revoked`, offline. |
+| (2) the two code runs have different `workerId`s, one the container's | PASS | `c5b514db` on `e973b79e` and `86c2c791` on `d30c51d2`, started 56 ms apart and both running at the same time (finished 13:41:11Z and 13:41:26Z). |
+| (3) the container run used `git.remote`, no `repoPath`; clone under `/office-worker/repos/<projectId>`; no host mount | PASS | The run spec is not persisted and `agent.started` carries only the model, so the spec is shown indirectly: the worker clones only for `spec.git.remote` (`executor.ts`), and `RunSpecSchema` admits exactly one of `repoPath` and `remote`. `docker exec`: `/office-worker/repos/e844090c-2a16-4a62-a199-a251103a8736` with remote `office http://host.docker.internal:4000/git/e844090c-…` (no credential in its config), the mission and run branches, and worktrees `86c2c791` and `7de2b3ab` under `/office-worker/worktrees`; the run row's `worktreePath` is `/office-worker/worktrees/86c2c791-…`. The API log has the container's `/git/e844090c-…/info/refs`, `git-upload-pack` and `git-receive-pack` requests. `Mounts` as above. |
+| (4) both runs have `CheckResult` rows; the mission branch has both commits, or one `needs_integration` with its run branch present and integrated by a retry | PASS | `998b8fd9` (container) and `e2f3401d` (host), both `node --test` exit 0. `86c2c791` was `needs_integration`; its run branch `office/phase-5-acceptance-two-workers-c3e0db-runs/hello-script-86c2c791` is in the sandbox; the retry `ee8f9e46` integrated `49cc698`. Mission 1 branch: `9c94e8f` → `8fbaf40` → `5795618` → `49cc698`. A container commit fast-forwarded over HTTP in mission 2 (`9d467dc`). |
+| (5) container killed mid-run: lease expires, `run.lease.lost`, retry on the host completes; the restarted container reconnects with its credential and the stale run has no effect | PASS | Run `f7a5d0db` and its retry `d33d2564`, above. |
+| (6) the Chief's review closes the tasks from evidence | PASS, after one misplaced review | Review runs `33c88c92` (mission 1) and `75810953` (mission 2) on the host, notes citing commits, checks and integration. Mission 1's first review run `7de2b3ab` went to the container's fake runtime and decided nothing (see Outstanding); the owner's reopen of the `needs_integration` task (needed for (4) anyway) started a new review cycle. |
+| (7) after restarting the API and both workers, `GET /missions/:id` and the Workers page show everything | PASS | 13:48:23Z: both workers stopped, the API killed by pid and restarted (`API_HOST=0.0.0.0`, same `.env`), both workers started again. `GET /workers`: both online (heartbeats 13:48:38Z). `GET /missions/c3e0dbf5…`: `done`, three tasks `done`, checks `passed`, plan approval `approved`, review run `33c88c92`, artifact `9272b7dd`, 0.86 USD. `GET /missions/a1985078…`: `done`, both tasks `done` (phase5-doc attempts 2), review `75810953`, 0.34 USD. `GET /runs/f7a5d0db…`: `lost`, `retriedByRunId` `d33d2564…`. The web `/workers` page answered 200, and the Playwright suite passed after the restart (see Step 4 in the Task 10 report). |
+
+Sandbox repository before and after:
+
+| Check | Before | After |
+|---|---|---|
+| `main` | no commit; 5 untracked files, then `9c94e8f` "sandbox baseline" (committed for the acceptance) | `9c94e8f`, clean |
+| Branches | `main` | `main`; `office/phase-5-acceptance-two-workers-c3e0db` (`49cc698`), `office/phase-5-acceptance-lease-loss-a19850` (`2ef7495`); run branches `…-two-workers-c3e0db-runs/hello-script-86c2c791` (`needs_integration`, kept) and `…-lease-loss-a19850-runs/remote-marker-23327d81` (pushed by the container, fast-forwarded, not deleted: see Outstanding) |
+| Worktrees | none | none in the sandbox; the container's volume keeps `86c2c791` (unintegrated) and `7de2b3ab` (the fake review's local commits) |
+
+Nothing was merged into `main`, pushed to an outside remote or deployed. The host worker and the container were stopped at the end; the API and the web app stay up.
+
+### Verdict
+
+Phase 5 is `done`. Expectations 1 to 7 hold. Expectation 3's spec evidence is indirect (the spec is not persisted), and expectation 6 needed a second review cycle after the first review run went to the container's fake runtime; both are recorded under Outstanding.
 
 ## Phase 4 decisions
 

@@ -1,0 +1,6 @@
+# Opt-in override for hosts whose firewall drops Docker bridge traffic to the API port (README §15):
+#   docker compose -f infra/compose.yaml -f infra/compose.hostnet.yaml --profile remote up -d worker-remote
+# The container shares the host's network stack; it still mounts no host path.
+services:
+  worker-remote:
+    network_mode: host
