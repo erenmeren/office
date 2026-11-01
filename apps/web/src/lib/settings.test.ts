@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { changedKeys, linesToList, listToLines, policyRows } from './settings';
+import { ProjectSettingsSchema } from '@office/shared';
+import { changedKeys, linesToList, listToLines, policyRows, validateSettingsDraft } from './settings';
 
 describe('settings helpers', () => {
   it('converts between lines and lists', () => {
@@ -14,6 +15,13 @@ describe('settings helpers', () => {
     expect(changedKeys(a, same)).toEqual([]);
     expect(changedKeys(a, { ...same, x: 2, policy: { plan: 'auto', list: ['a'] } })).toEqual(['x', 'policy']);
     expect(changedKeys(a, { ...same, tpl: [] })).toEqual(['tpl']);
+  });
+
+  it('validates numbers and env names', () => {
+    const ok = ProjectSettingsSchema.parse({});
+    expect(validateSettingsDraft(ok)).toEqual([]);
+    const bad = { ...ok, maxConcurrentRuns: 0, defaultMaxAttempts: 1.5, dailyBudgetUsd: NaN, envTemplate: [{ name: 'OK_1', value: '' }, { name: 'bad name', value: '' }] };
+    expect(validateSettingsDraft(bad).map((p) => p.field)).toEqual(['maxConcurrentRuns', 'defaultMaxAttempts', 'dailyBudgetUsd', 'envTemplate.1']);
   });
 
   it('defines the six policy rows, git push and merge together', () => {

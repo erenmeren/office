@@ -23,3 +23,18 @@ export const listToLines = (list: string[]) => list.join('\n');
 export function changedKeys<T extends Record<string, unknown>>(original: T, draft: T): (keyof T)[] {
   return (Object.keys(draft) as (keyof T)[]).filter((k) => JSON.stringify(original[k]) !== JSON.stringify(draft[k]));
 }
+
+export const INT_FIELDS = ['maxConcurrentRuns', 'defaultMaxAttempts', 'approvalTimeoutMinutes', 'checkTimeoutSeconds'] as const;
+export const USD_FIELDS = ['dailyBudgetUsd', 'defaultTaskBudgetUsd'] as const;
+const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
+
+/** Problems that would make the API reject the draft; `field` is a settings key or `envTemplate.<index>`. */
+export function validateSettingsDraft(draft: ProjectSettings): { field: string; message: string }[] {
+  const out: { field: string; message: string }[] = [];
+  for (const f of INT_FIELDS) if (!Number.isInteger(draft[f]) || draft[f] < 1) out.push({ field: f, message: 'Enter a whole number of at least 1.' });
+  for (const f of USD_FIELDS) if (!Number.isFinite(draft[f]) || draft[f] <= 0) out.push({ field: f, message: 'Enter an amount greater than 0.' });
+  draft.envTemplate.forEach((r, i) => {
+    if (!ENV_NAME.test(r.name)) out.push({ field: `envTemplate.${i}`, message: `Env row ${i + 1}: name must be upper case letters, digits and underscores, and not start with a digit.` });
+  });
+  return out;
+}

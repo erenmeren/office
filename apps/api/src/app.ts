@@ -69,7 +69,7 @@ export async function buildApp(
     return reply.code(status).send({ error: status === 500 ? 'internal_error' : err.message });
   });
 
-  await app.register(cors, { origin: config.webOrigin, credentials: true });
+  await app.register(cors, { origin: config.webOrigin, credentials: true, methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] });
   await app.register(cookie, { secret: config.cookieSecret });
   await app.register(websocket);
   registerPrisma(app, config.databaseUrl, deps.prisma);

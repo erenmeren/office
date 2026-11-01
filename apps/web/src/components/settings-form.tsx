@@ -15,7 +15,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { put } from '@/lib/api';
 import { useAgents, useBudget, useRuntimeSettings } from '@/lib/queries';
-import { changedKeys } from '@/lib/settings';
+import { changedKeys, validateSettingsDraft } from '@/lib/settings';
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
@@ -32,6 +32,13 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string>();
+  const [problems, setProblems] = useState<{ field: string; message: string }[]>([]);
+  const numKeys = ['maxConcurrentRuns', 'defaultMaxAttempts', 'dailyBudgetUsd', 'defaultTaskBudgetUsd', 'approvalTimeoutMinutes', 'checkTimeoutSeconds'] as const;
+  type NumKey = (typeof numKeys)[number];
+  // raw text while typing, so a cleared field stays empty instead of turning into 0
+  const rawOf = (s: ProjectSettings) => Object.fromEntries(numKeys.map((k) => [k, String(s[k])])) as Record<NumKey, string>;
+  const [raw, setRaw] = useState(() => rawOf(settings));
+  const problem = (field: string) => problems.find((p) => p.field === field)?.message;
 
   const keys = changedKeys(original, draft);
   const idsChanged = [...ids].sort().join() !== [...originalIds].sort().join();
@@ -45,23 +52,32 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
     value: draft[key] ?? '',
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(key, e.target.value),
   });
-  const num = (key: 'maxConcurrentRuns' | 'defaultMaxAttempts' | 'dailyBudgetUsd' | 'defaultTaskBudgetUsd' | 'approvalTimeoutMinutes' | 'checkTimeoutSeconds') => ({
+  const num = (key: NumKey) => ({
     id: key,
     type: 'number' as const,
-    min: 0,
-    value: draft[key],
-    onChange: (e: React.ChangeEvent<HTMLInputElement>) => set(key, Number(e.target.value)),
+    min: 1,
+    value: raw[key],
+    'aria-invalid': !!problem(key) || undefined,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+      setRaw((r) => ({ ...r, [key]: e.target.value }));
+      set(key, e.target.value.trim() === '' ? NaN : Number(e.target.value));
+    },
   });
 
   const discard = () => {
     setDraft(original);
     setIds(originalIds);
     setResetKey((k) => k + 1);
+    setRaw(rawOf(original));
+    setProblems([]);
     setError(undefined);
     setSaved(false);
   };
 
   const save = async () => {
+    const found = validateSettingsDraft(draft);
+    setProblems(found);
+    if (found.length) return;
     setSaving(true);
     setError(undefined);
     try {
@@ -120,10 +136,10 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
           <CardTitle>Execution limits</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <Field label="Concurrent sessions per project" htmlFor="maxConcurrentRuns">
+          <Field label="Concurrent sessions per project" htmlFor="maxConcurrentRuns" error={problem('maxConcurrentRuns')}>
             <Input {...num('maxConcurrentRuns')} />
           </Field>
-          <Field label="Task retries" htmlFor="defaultMaxAttempts">
+          <Field label="Task retries" htmlFor="defaultMaxAttempts" error={problem('defaultMaxAttempts')}>
             <Input {...num('defaultMaxAttempts')} />
           </Field>
           <Field label="Worker lease (seconds)" htmlFor="leaseSeconds">
@@ -141,10 +157,10 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
           <CardDescription>The SDK budget is a soft limit inside a session. The scheduler checks spend before each start and stops runs that pass the hard cap.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <Field label="Daily budget (USD)" htmlFor="dailyBudgetUsd" hint={budget ? `Today ${usd(budget.spentTodayUsd)} of ${usd(budget.dailyBudgetUsd)}` : undefined}>
+          <Field label="Daily budget (USD)" htmlFor="dailyBudgetUsd" error={problem('dailyBudgetUsd')} hint={budget ? `Today ${usd(budget.spentTodayUsd)} of ${usd(budget.dailyBudgetUsd)}` : undefined}>
             <Input {...num('dailyBudgetUsd')} step="0.01" />
           </Field>
-          <Field label="Default per task (USD)" htmlFor="defaultTaskBudgetUsd">
+          <Field label="Default per task (USD)" htmlFor="defaultTaskBudgetUsd" error={problem('defaultTaskBudgetUsd')}>
             <Input {...num('defaultTaskBudgetUsd')} step="0.01" />
           </Field>
         </CardContent>
@@ -180,10 +196,10 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
             <Field label="Lint command" htmlFor="lintCommand">
               <Input {...text('lintCommand')} className="font-mono" />
             </Field>
-            <Field label="Approval timeout (minutes)" htmlFor="approvalTimeoutMinutes">
+            <Field label="Approval timeout (minutes)" htmlFor="approvalTimeoutMinutes" error={problem('approvalTimeoutMinutes')}>
               <Input {...num('approvalTimeoutMinutes')} />
             </Field>
-            <Field label="Check timeout (seconds)" htmlFor="checkTimeoutSeconds">
+            <Field label="Check timeout (seconds)" htmlFor="checkTimeoutSeconds" error={problem('checkTimeoutSeconds')}>
               <Input {...num('checkTimeoutSeconds')} />
             </Field>
             <Field label="Committer name" htmlFor="committerName">
@@ -215,6 +231,11 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
                   <X aria-hidden />
                 </Button>
               </div>
+            ))}
+            {problems.filter((p) => p.field.startsWith('envTemplate.')).map((p) => (
+              <p key={p.field} role="alert" className="text-xs text-destructive">
+                {p.message}
+              </p>
             ))}
             <Button variant="secondary" size="sm" onClick={() => set('envTemplate', [...draft.envTemplate, { name: '', value: '' }])}>
               <Plus data-icon="inline-start" aria-hidden />
