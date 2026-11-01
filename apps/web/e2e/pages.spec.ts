@@ -355,3 +355,35 @@ authed('owner changes the check command and sees it saved', async ({ page, noise
   await expect(page.getByLabel('Check command')).toHaveValue(value);
   expectQuiet(noise);
 });
+
+authed('audit: rows render, action filter narrows, load older appends', async ({ page, noise }) => {
+  const row = (i: number, action: string) => ({
+    id: `a${i}`,
+    createdAt: new Date(Date.UTC(2026, 10, 1, 12, 0, 59 - i)).toISOString(),
+    userId: null,
+    action,
+    targetType: 'task',
+    targetId: `t${i}`,
+    detail: { n: i, html: '<b>x</b>' },
+  });
+  // a full page (50 rows) so the cursor is offered; two actions alternate
+  const first = Array.from({ length: 50 }, (_, i) => row(i, i % 2 ? 'task.cancel' : 'task.create'));
+  const older = [row(50, 'task.create')];
+  await page.route(`${API}/audit*`, (route) => {
+    const q = new URL(route.request().url()).searchParams;
+    const rows = q.get('before') ? older : first;
+    return route.fulfill({ json: rows.filter((r) => !q.get('action') || r.action === q.get('action')) });
+  });
+  await page.goto('/audit');
+  const rows = page.getByRole('row');
+  await expect(rows).toHaveCount(51); // header + 50
+  await expect(page.getByText('<b>x</b>').first()).toBeVisible(); // detail is text, not HTML
+  await page.getByLabel('Action').selectOption('task.cancel');
+  await expect(rows).toHaveCount(26);
+  await page.getByLabel('Action').selectOption('');
+  await expect(rows).toHaveCount(51);
+  await page.getByRole('button', { name: 'Load older' }).click();
+  await expect(rows).toHaveCount(52);
+  await expect(page.getByRole('button', { name: 'Load older' })).toHaveCount(0);
+  expectQuiet(noise);
+});

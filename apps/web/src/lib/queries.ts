@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import type { ApprovalStatus, ApprovalView, MessageView, MissionStatus, Plan, ProjectSettings, RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
 import { api } from './api';
 
@@ -444,3 +444,31 @@ export const useSession = (runId: string | undefined) =>
   useQuery({ queryKey: ['session', runId], queryFn: () => api<SessionDetail>(`/sessions/${runId}`), enabled: !!runId, refetchInterval: 10_000 });
 export const useAgentRuns = (agentId: string | undefined) =>
   useQuery({ queryKey: ['agent-runs', agentId], queryFn: () => api<AgentRunRow[]>(`/agents/${agentId}/runs?limit=20`), enabled: !!agentId });
+
+export interface AuditRow {
+  id: string;
+  createdAt: string;
+  userId: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  detail: unknown;
+}
+export const AUDIT_PAGE_SIZE = 50;
+export interface AuditFilters {
+  action?: string;
+  targetType?: string;
+  since?: string;
+}
+/** Newest first; pages chain on the createdAt of the previous page's last row (`before`). */
+export const useAudit = (f: AuditFilters) =>
+  useInfiniteQuery({
+    queryKey: ['audit', f],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => {
+      const q = new URLSearchParams({ limit: String(AUDIT_PAGE_SIZE) });
+      for (const [k, v] of Object.entries({ ...f, before: pageParam })) if (v) q.set(k, v);
+      return api<AuditRow[]>(`/audit?${q}`);
+    },
+    getNextPageParam: (last) => (last.length === AUDIT_PAGE_SIZE ? last[last.length - 1]!.createdAt : undefined),
+  });
