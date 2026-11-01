@@ -102,6 +102,19 @@ describe('missions', () => {
     expect(await s.t.prisma.taskRun.count({ where: { kind: 'plan' } })).toBe(1);
   });
 
+  it('owner cancel of the plan run cancels the mission and no new plan run starts', async () => {
+    s = await setup();
+    const w = await s.worker();
+    const m = await s.createMission();
+    const spec = await s.assign(w);
+    expect((await s.req('POST', `/runs/${spec.runId}/cancel`)).statusCode).toBe(200);
+    expect((await s.mission(m.id)).status).toBe('cancelled');
+    expect(await s.t.prisma.auditLog.count({ where: { action: 'run.cancelled', targetId: spec.runId } })).toBe(1);
+    expect(await s.t.prisma.auditLog.count({ where: { action: 'mission.cancelled', targetId: m.id } })).toBe(1);
+    await s.t.app.scheduler.tick();
+    expect(await s.t.prisma.taskRun.count({ where: { kind: 'plan' } })).toBe(1);
+  });
+
   it('POST /missions without a chief agent -> 404 no_chief', async () => {
     s = await setup();
     await s.t.prisma.agent.update({ where: { id: s.ids.chief }, data: { slug: 'boss' } });

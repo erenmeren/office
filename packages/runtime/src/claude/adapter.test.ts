@@ -308,6 +308,22 @@ describe('PreToolUse gate hook', () => {
     expect(events.filter((e) => e.type === 'agent.command.executed')).toEqual([{ type: 'agent.command.executed', payload: { command: 'ls' } }]);
   });
 
+  it('stamps the subagent parent on agent.command.executed from the SDK message that carried the tool use', async () => {
+    const events: EventBody[] = [];
+    h.messages = [init, {
+      type: 'assistant', parent_tool_use_id: 'tu-agent', session_id: 's', uuid: 'u',
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-sub', name: 'Bash', input: { command: 'ls' } }] },
+    }];
+    const runP = new ClaudeAdapter().run({ ...spec, allowedTools: ['Bash'] }, { emit: (e) => void events.push(e) }, new AbortController().signal);
+    // the hook fires after the run loop has read the subagent's tool_use
+    await vi.waitFor(() => expect(events.some((e) => e.type === 'agent.tool.started')).toBe(true));
+    const options = (h.calls[0] as { options: ReturnType<typeof buildQueryOptions> }).options;
+    await hookOf(options).hooks[0]!(pre('Bash', { command: 'ls' }, 'tu-sub'), 'tu-sub', opts);
+    await runP;
+    expect(events.find((e) => e.type === 'agent.tool.started')!.payload).toMatchObject({ parentToolUseId: 'tu-agent' });
+    expect(events.find((e) => e.type === 'agent.command.executed')!.payload).toEqual({ command: 'ls', parentToolUseId: 'tu-agent' });
+  });
+
   it('keeps gated tools out of allowedTools and disallowedTools under a policy', () => {
     const s = { ...spec, allowedTools: ['Read', 'Bash', 'Edit', 'Write'] };
     for (const g of [{ ...s, approvalPolicy: policy }, { ...s, readOnlyCheckout: true }]) {

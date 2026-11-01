@@ -28,13 +28,18 @@ describe('RunExecutor', () => {
     readOnlyCheckout: false, checkTimeoutSeconds: 900, approvalTimeoutMinutes: 30, ...over,
   });
   const done = () => sent.some((m) => m.type === 'run.result' || m.type === 'run.rejected');
+  // fake API: records every message and allows every integration.check
+  const bridge = (ex: () => RunExecutor) => (m: WorkerToApi) => {
+    sent.push(m);
+    if (m.type === 'integration.check') queueMicrotask(() => ex().resolveIntegration(m.runId, true));
+  };
 
   beforeEach(() => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'office-exec-')));
     mkdirSync(join(root, 'repo'));
     sent = [];
     runsDir = join(root, 'runs');
-    executor = new RunExecutor(new FakeAdapter(), (m) => sent.push(m), [root], runsDir);
+    executor = new RunExecutor(new FakeAdapter(), bridge(() => executor), [root], runsDir);
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -321,7 +326,8 @@ describe('RunExecutor', () => {
       const seen: RunSpec[] = [];
       const inner = new FakeAdapter();
       const rec: RuntimeAdapter = { name: 'fake', run: (s, sink, sig, t) => (seen.push(s), inner.run(s, sink, sig, t)) };
-      new RunExecutor(rec, (m) => sent.push(m), [root], runsDir).accept(gitSpec());
+      const ex: RunExecutor = new RunExecutor(rec, bridge(() => ex), [root], runsDir);
+      ex.accept(gitSpec());
       await until(done, 'result');
       const r = result();
       expect(r.status).toBe('succeeded');
@@ -335,6 +341,45 @@ describe('RunExecutor', () => {
       // the env template never reaches a commit
       expect(git(repo, 'show', '--name-only', '--format=', 'office/t')).toBe('sum.test.js');
       expect(existsSync(join(root, 'worktrees', 'run-1'))).toBe(false);
+    });
+
+    it('refuses to fast-forward when integration.check says ok=false; result needs_integration with reason lease lost', async () => {
+      const ex: RunExecutor = new RunExecutor(new FakeAdapter(), (m) => {
+        sent.push(m);
+        if (m.type === 'integration.check') queueMicrotask(() => ex.resolveIntegration(m.runId, false, 'lease lost'));
+      }, [root], runsDir);
+      ex.accept(gitSpec());
+      await until(done, 'result');
+      const r = result();
+      expect(r.status).toBe('succeeded');
+      expect(r.git).toMatchObject({ integration: 'needs_integration', integrationReason: 'lease lost', worktreePath: join(root, 'worktrees', 'run-1') });
+      expect(git(repo, 'rev-parse', 'office/t')).toBe(r.git!.baseCommit);
+      const failed = sent.flatMap((m) => (m.type === 'run.event' && m.event.type === 'agent.integration.failed' ? [m.event.payload] : []));
+      expect(failed).toEqual([{ reason: 'lease lost' }]);
+    });
+
+    it('refuses after a 30 s check timeout (use fake timers)', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        const ex = new RunExecutor(new FakeAdapter(), (m) => void sent.push(m), [root], runsDir);
+        ex.accept(gitSpec());
+        const deadline = Date.now() + 10_000;
+        while (!sent.some((m) => m.type === 'integration.check')) {
+          if (Date.now() > deadline) throw new Error('no integration.check');
+          await new Promise((r) => setImmediate(r));
+        }
+        await vi.advanceTimersByTimeAsync(29_000);
+        expect(done()).toBe(false);
+        await vi.advanceTimersByTimeAsync(1000);
+        while (!done()) {
+          if (Date.now() > deadline) throw new Error('no result');
+          await new Promise((r) => setImmediate(r));
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(result().git).toMatchObject({ integration: 'needs_integration', integrationReason: 'lease check timed out' });
+      expect(git(repo, 'rev-parse', 'office/t')).toBe(result().git!.baseCommit);
     });
 
     it('a failed check leaves the mission branch alone and keeps the worktree until it is swept', async () => {
@@ -382,7 +427,7 @@ describe('RunExecutor', () => {
         git(repo, 'add', '-A');
         git(repo, 'commit', '-q', '-m', 'cfg link');
         const warnings: string[] = [];
-        const ex = new RunExecutor(new FakeAdapter(), (m) => sent.push(m), [root], runsDir, undefined, {
+        const ex: RunExecutor = new RunExecutor(new FakeAdapter(), bridge(() => ex), [root], runsDir, undefined, {
           warn: (_o, msg) => void warnings.push(msg),
         });
         ex.accept(gitSpec({ prompt: 'hi', env: { file: './cfg/.env', vars: [{ name: 'A', value: 'b' }] } }));
@@ -446,7 +491,8 @@ describe('RunExecutor', () => {
       const rec: RuntimeAdapter = { name: 'fake', run: (s, sink, sig, t) => (seen.push(s), inner.run(s, sink, sig, t)) };
       const clone = { apiUrl: `file://${root}`, canClone: true, credential: () => 'cred' };
       // no workspace roots: a remote spec needs none
-      new RunExecutor(rec, (m) => sent.push(m), [], runsDir, undefined, undefined, clone).accept(remoteSpec());
+      const ex: RunExecutor = new RunExecutor(rec, bridge(() => ex), [], runsDir, undefined, undefined, clone);
+      ex.accept(remoteSpec());
       await until(done, 'result');
       const r = result();
       expect(r.status).toBe('succeeded');
@@ -472,7 +518,8 @@ describe('RunExecutor', () => {
         },
       };
       const clone = { apiUrl: `file://${root}`, canClone: true, credential: () => 'cred' };
-      new RunExecutor(rec, (m) => sent.push(m), [], runsDir, undefined, undefined, clone).accept(remoteSpec());
+      const ex: RunExecutor = new RunExecutor(rec, bridge(() => ex), [], runsDir, undefined, undefined, clone);
+      ex.accept(remoteSpec());
       await until(done, 'result');
       const r = result();
       expect(r.git).toMatchObject({ integration: 'needs_integration' });

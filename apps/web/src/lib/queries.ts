@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import type { ApprovalStatus, ApprovalView, MessageView, MissionStatus, Plan, ProjectSettings, RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
 import { api } from './api';
 
@@ -320,3 +320,158 @@ export const useProjectAgents = (projectId: string | undefined) =>
   useQuery({ queryKey: ['project-agents', projectId], queryFn: () => api<Agent[]>(`/projects/${projectId}/agents`), enabled: !!projectId });
 export const useRuntimeSettings = () =>
   useQuery({ queryKey: ['settings', 'runtime'], queryFn: () => api<{ leaseSeconds: number; heartbeatSeconds: number }>('/settings/runtime') });
+
+export type TeamStatus = 'running' | 'needs_approval' | 'idle';
+export interface Overview {
+  agentsAvailable: number;
+  agentsTotal: number;
+  runningSessions: number;
+  maxConcurrentRuns: number;
+  pendingTasks: number;
+  awaitingApproval: number;
+  costTodayUsd: number;
+  dailyBudgetUsd: number;
+  team: { agentId: string; name: string; role: string; status: TeamStatus; currentWork: string | null; workerName: string | null; costTodayUsd: number }[];
+  attention: { kind: 'approval' | 'skill_review'; id: string; title: string; detail: string; createdAt: string }[];
+}
+export interface CostBucket {
+  key: string;
+  label: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+export interface ActivityItem {
+  id: string;
+  /** `sessionId:seq`, the same for a stored row and its live event */
+  key: string;
+  ts: string;
+  type: string;
+  agentId: string;
+  agentName: string;
+  runId: string;
+  taskKey: string | null;
+  detail: string;
+}
+export interface LiveSession {
+  runId: string;
+  sessionId: string | null;
+  agentId: string;
+  agentName: string;
+  kind: string;
+  status: RunStatus;
+  taskId: string | null;
+  taskKey: string | null;
+  taskTitle: string | null;
+  workerName: string | null;
+  startedAt: string | null;
+  costUsd: number;
+  commands: number;
+  files: number;
+  subagents: SessionSubagent[];
+}
+export interface SessionSubagent {
+  id: string;
+  toolUseId: string;
+  subagentType: string | null;
+  description: string | null;
+  status: string;
+  startedAt: string;
+  endedAt: string | null;
+  commands: number;
+  files: number;
+}
+export interface SessionCommand {
+  seq: number;
+  ts: string;
+  command: string | null;
+  exitCode?: number;
+  durationMs?: number;
+  /** parent tool-use id of the subagent that ran it */
+  bySubagent?: string;
+}
+export interface SessionFile {
+  path: string;
+  adds?: number;
+  dels?: number;
+  bySubagent?: string;
+}
+export interface SessionDetail extends Omit<LiveSession, 'commands' | 'files'> {
+  projectId: string;
+  finishedAt: string | null;
+  model: string | null;
+  agentVersion: number;
+  maxBudgetUsd: number | null;
+  usage: { inputTokens: number; outputTokens: number };
+  commands: SessionCommand[];
+  files: SessionFile[];
+  skills: SkillSnapshotEntry[];
+  approval: ApprovalView | null;
+}
+export interface AgentRunRow {
+  runId: string;
+  taskKey: string | null;
+  taskTitle: string | null;
+  status: RunStatus;
+  durationMs: number | null;
+  costUsd: number;
+  headCommit: string | null;
+}
+export const useOverview = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['overview', projectId],
+    queryFn: () => api<Overview>(`/projects/${projectId}/overview`),
+    enabled: !!projectId,
+    refetchInterval: 10_000,
+  });
+export const useCosts = (projectId: string | undefined, days: number, groupBy: 'day' | 'agent') =>
+  useQuery({
+    queryKey: ['costs', projectId, days, groupBy],
+    queryFn: () => api<{ totalUsd: number; buckets: CostBucket[] }>(`/projects/${projectId}/costs?days=${days}&groupBy=${groupBy}`),
+    enabled: !!projectId,
+    refetchInterval: 30_000,
+  });
+export const useActivity = (projectId: string | undefined) =>
+  useQuery({ queryKey: ['activity', projectId], queryFn: () => api<ActivityItem[]>(`/projects/${projectId}/activity?limit=50`), enabled: !!projectId });
+export const useLiveSessions = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['sessions', projectId, 'live'],
+    queryFn: () => api<LiveSession[]>(`/sessions?projectId=${projectId}&status=live`),
+    enabled: !!projectId,
+    refetchInterval: 10_000,
+  });
+export const useSession = (runId: string | undefined) =>
+  useQuery({ queryKey: ['session', runId], queryFn: () => api<SessionDetail>(`/sessions/${runId}`), enabled: !!runId, refetchInterval: 10_000 });
+export const useAgentRuns = (agentId: string | undefined) =>
+  useQuery({ queryKey: ['agent-runs', agentId], queryFn: () => api<AgentRunRow[]>(`/agents/${agentId}/runs?limit=20`), enabled: !!agentId });
+
+export interface AuditRow {
+  id: string;
+  createdAt: string;
+  userId: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  detail: unknown;
+}
+export const AUDIT_PAGE_SIZE = 50;
+export interface AuditFilters {
+  action?: string;
+  targetType?: string;
+  since?: string;
+}
+/** Newest first; pages chain on the createdAt of the previous page's last row (`before`). */
+export const useAudit = (f: AuditFilters) =>
+  useInfiniteQuery({
+    queryKey: ['audit', f],
+    initialPageParam: undefined as { before: string; beforeId: string } | undefined,
+    queryFn: ({ pageParam }) => {
+      const q = new URLSearchParams({ limit: String(AUDIT_PAGE_SIZE) });
+      for (const [k, v] of Object.entries({ ...f, ...pageParam })) if (v) q.set(k, v);
+      return api<AuditRow[]>(`/audit?${q}`);
+    },
+    getNextPageParam: (last) => {
+      const end = last[last.length - 1];
+      return last.length === AUDIT_PAGE_SIZE && end ? { before: end.createdAt, beforeId: end.id } : undefined;
+    },
+  });

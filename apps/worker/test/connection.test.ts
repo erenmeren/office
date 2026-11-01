@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pino from 'pino';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { FakeAdapter } from '@office/runtime';
 import type { WorkerToApi } from '@office/shared';
@@ -58,9 +58,10 @@ const result = (runId: string): WorkerToApi => ({
 });
 
 async function until(cond: () => boolean, what: string) {
-  const deadline = Date.now() + 3000;
+  // performance.now, not Date.now: a test may fake Date
+  const deadline = performance.now() + 3000;
   while (!cond()) {
-    if (Date.now() > deadline) throw new Error(what);
+    if (performance.now() > deadline) throw new Error(what);
     await new Promise((r) => setTimeout(r, 20));
   }
 }
@@ -71,7 +72,9 @@ function harness(reply?: (msg: WorkerToApi, ws: WebSocket) => void) {
   const wss = new WebSocketServer({ port: 0 });
   cleanup.push(() => new Promise((r) => wss.close(r)));
   const received: WorkerToApi[] = [];
+  const sockets: WebSocket[] = [];
   wss.on('connection', (ws) => {
+    sockets.push(ws);
     ws.on('message', (d) => {
       const msg = JSON.parse(String(d)) as WorkerToApi;
       received.push(msg);
@@ -88,11 +91,16 @@ function harness(reply?: (msg: WorkerToApi, ws: WebSocket) => void) {
     cleanup.push(() => conn.stop());
     return conn;
   };
-  return { home, received, make };
+  return { home, received, sockets, make };
 }
 
+const ack = (msg: WorkerToApi, ws: WebSocket) => {
+  if (msg.type === 'run.result') ws.send(JSON.stringify({ type: 'run.result.ack', runId: msg.runId }));
+};
+const send = (conn: WorkerConnection, m: WorkerToApi) => (conn as unknown as { send(m: WorkerToApi): void }).send(m);
+
 it('a result produced while disconnected survives a restart and is sent after the next welcome', async () => {
-  const { home, received, make } = harness();
+  const { home, received, make } = harness(ack);
   const first = make();
   (first as unknown as { send(m: WorkerToApi): void }).send(result('r9'));
   await until(() => existsSync(join(home, 'outbox', 'r9.json')), 'outbox file not written');
@@ -114,4 +122,97 @@ it('removes the outbox entry after the API rejects it for a lost lease', async (
   await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
   await until(() => !existsSync(join(home, 'outbox', 'r8.json')), 'outbox entry not removed');
   expect((second as unknown as { unsentResults: Map<string, unknown> }).unsentResults.size).toBe(0);
+});
+
+it('keeps the outbox entry until run.result.ack arrives and resends it after a reconnect', async () => {
+  let acking = false;
+  const { home, received, sockets, make } = harness((msg, ws) => acking && ack(msg, ws));
+  const conn = make();
+  await conn.start();
+  send(conn, result('r7'));
+  await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
+  // no ack: the entry stays on disk and the run stays reported as active
+  await new Promise((r) => setTimeout(r, 100));
+  expect(existsSync(join(home, 'outbox', 'r7.json'))).toBe(true);
+  acking = true;
+  sockets[0]!.terminate();
+  await until(() => received.filter((m) => m.type === 'run.result').length === 2, 'result not resent after reconnect');
+  expect(received.filter((m) => m.type === 'hello')[1]).toMatchObject({ activeRunIds: ['r7'] });
+  await until(() => !existsSync(join(home, 'outbox', 'r7.json')), 'outbox entry not removed after ack');
+});
+
+it('deletes the outbox entry on ack', async () => {
+  const { home, received, make } = harness(ack);
+  const conn = make();
+  await conn.start();
+  send(conn, result('r6'));
+  await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
+  await until(() => !existsSync(join(home, 'outbox', 'r6.json')), 'outbox entry not removed after ack');
+  expect((conn as unknown as { unsentResults: Map<string, unknown> }).unsentResults.size).toBe(0);
+});
+
+it('run.assign drops only a stored suspended result for that run', async () => {
+  const { home, make } = harness();
+  const conn = make();
+  await conn.start();
+  const internals = conn as unknown as { executor: { accept(): void }; onMessage(raw: string): Promise<void>; unsentResults: Map<string, unknown> };
+  internals.executor.accept = () => {};
+  const suspended: WorkerToApi = {
+    type: 'run.result', runId: 'r5', sessionId: 's1',
+    result: { status: 'suspended', sdkSessionId: 'sdk', usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, numTurns: 0, durationMs: 0 } },
+  };
+  send(conn, suspended);
+  send(conn, result('r4'));
+  await until(() => existsSync(join(home, 'outbox', 'r5.json')) && existsSync(join(home, 'outbox', 'r4.json')), 'outbox files not written');
+  const spec = {
+    sessionId: 's1', agentId: 'a1', projectId: 'p1', cwd: home, prompt: 'p', systemPrompt: 's', model: 'sonnet', allowedTools: [],
+    maxTurns: 1, maxBudgetUsd: 1, maxConcurrentSubagents: 1, maxSubagentDepth: 1, skills: [], subagents: [],
+    readOnlyCheckout: false, checkTimeoutSeconds: 1, approvalTimeoutMinutes: 1,
+  };
+  for (const runId of ['r5', 'r4']) await internals.onMessage(JSON.stringify({ type: 'run.assign', spec: { ...spec, runId } }));
+  expect(existsSync(join(home, 'outbox', 'r5.json'))).toBe(false);
+  expect(existsSync(join(home, 'outbox', 'r4.json'))).toBe(true);
+  expect([...internals.unsentResults.keys()]).toEqual(['r4']);
+});
+
+const event = (seq: number): WorkerToApi => ({
+  type: 'run.event',
+  event: { type: 'agent.text', seq, ts: new Date().toISOString(), sessionId: 's1', runId: 'r3', agentId: 'a1', projectId: 'p1', payload: {} },
+});
+
+it('events produced while disconnected are sent after the next welcome, in seq order, before the result', async () => {
+  const { received, sockets, make } = harness(ack);
+  const conn = make();
+  await conn.start();
+  send(conn, event(1));
+  await until(() => received.some((m) => m.type === 'run.event'), 'live event not sent');
+  sockets[0]!.terminate();
+  await new Promise((r) => setTimeout(r, 50));
+  for (const seq of [3, 2, 4]) send(conn, event(seq));
+  send(conn, result('r3'));
+  await until(() => received.filter((m) => m.type === 'hello').length === 2 && received.some((m) => m.type === 'run.result'), 'not resent');
+  const afterReconnect = received.slice(received.findLastIndex((m) => m.type === 'hello') + 1);
+  const wire = afterReconnect.filter((m) => m.type === 'run.event' || m.type === 'run.result').map((m) => (m.type === 'run.event' ? m.event.seq : m.type));
+  // seq 1 is the already-sent tail re-sent for safety (the API dedups by (sessionId, seq))
+  expect(wire.slice(0, 5)).toEqual([1, 2, 3, 4, 'run.result']);
+  await until(() => (conn as unknown as { recentEvents: Map<string, unknown> }).recentEvents.size === 0, 'buffers not cleared on ack');
+});
+
+it('re-sends an unacknowledged result on a heartbeat after 30 s on a live socket', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+  cleanup.push(() => vi.useRealTimers());
+  let swallowed = false;
+  const { home, received, make } = harness((msg, ws) => {
+    if (msg.type !== 'run.result') return;
+    if (!swallowed) swallowed = true; // lost in flight: no ack
+    else ack(msg, ws);
+  });
+  const conn = make();
+  await conn.start();
+  send(conn, result('r2'));
+  await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
+  vi.advanceTimersByTime(60_000); // one heartbeat (60 s): the unacked entry is older than 30 s
+  await until(() => received.filter((m) => m.type === 'run.result').length === 2, 'result not resent on heartbeat');
+  await until(() => !existsSync(join(home, 'outbox', 'r2.json')), 'outbox entry not removed after ack');
+  expect(received.filter((m) => m.type === 'hello')).toHaveLength(1);
 });

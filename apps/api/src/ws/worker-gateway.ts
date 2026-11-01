@@ -10,7 +10,8 @@ import { isUnderRoot } from '../lib/paths.js';
 import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
 import { appendEvent } from '../services/event-store.js';
-import { completeRun, findLeasedRun, markRunning, renewLeases } from '../services/run-service.js';
+import { audit } from '../services/audit-service.js';
+import { completeRun, findLeasedRun, markRunning, recordCancelledUsage, renewLeases } from '../services/run-service.js';
 import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
 import { requestApproval, resendDecisions } from '../services/approval-service.js';
@@ -36,11 +37,14 @@ function realOrResolved(path: string) {
   }
 }
 
+const FINAL_RUN = new Set(['succeeded', 'failed', 'cancelled']);
+
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 
 // emitted by the API itself; a worker must not forge them
 const SERVER_ONLY_EVENTS = new Set([
   'run.lease.lost',
+  'run.resume.failed',
   'run.status.changed',
   'task.status.changed',
   'agent.resumed',
@@ -179,6 +183,12 @@ export class WorkerGateway {
       },
     });
     if (count === 0) return fail();
+    if (credential) {
+      await audit(this.prisma, {
+        action: 'worker.enrolled', targetType: 'worker', targetId: worker.id,
+        detail: { name: msg.name, ...(msg.machineId ? { machineId: msg.machineId } : {}) },
+      });
+    }
     await renewLeases(this.prisma, worker.id, msg.activeRunIds, this.config);
     const activeRuns = await this.leasedRuns(worker.id);
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');
@@ -246,8 +256,7 @@ export class WorkerGateway {
           projectId: run.session.projectId,
           payload: redactSecrets(msg.event.payload),
         };
-        if (!(await appendEvent(this.prisma, event)).inserted) return;
-        this.hub.publish(`run:${event.runId}`, event);
+        if (!(await appendEvent(this.prisma, event, this.hub)).inserted) return;
         await recordSubagentEvent(this.prisma, event).catch((err: unknown) =>
           this.log.error({ err, runId: event.runId, seq: event.seq }, 'failed to record subagent event'),
         );
@@ -282,10 +291,32 @@ export class WorkerGateway {
         if (decision) this.send(workerId, { type: 'approval.result', runId: run.id, decision });
         return;
       }
-      case 'run.result':
-        await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
+      case 'run.result': {
+        const prior = await this.prisma.taskRun.findUnique({
+          where: { id: msg.runId },
+          select: { workerId: true, status: true, session: { select: { sdkSessionId: true } } },
+        });
+        const mine = prior?.workerId === workerId;
+        // a stale suspended result: applied, then the run resumed (queued again here) on the same SDK session
+        const sdk = msg.result.sdkSessionId;
+        if (mine && msg.result.status === 'suspended' && prior.status === 'queued' && sdk && prior.session?.sdkSessionId === sdk) {
+          this.send(workerId, { type: 'run.result.ack', runId: msg.runId });
+          return;
+        }
+        // a resend after a lost ack: already final on this worker with the same outcome, so ack without applying it again
+        const resend = mine && FINAL_RUN.has(prior.status) && prior.status === msg.result.status;
+        if (!resend) await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
+        // an owner-cancelled run: the result is not applied, but its usage is owed once
+        else if (prior.status === 'cancelled') await recordCancelledUsage(this.prisma, msg.runId, msg.result);
         this.releaseRun(workerId, msg.runId);
+        this.send(workerId, { type: 'run.result.ack', runId: msg.runId });
         return;
+      }
+      case 'integration.check': {
+        const run = await findLeasedRun(this.prisma, msg.runId, workerId);
+        this.send(workerId, { type: 'integration.allowed', runId: msg.runId, ...(run ? { ok: true } : { ok: false, reason: 'lease lost' }) });
+        return;
+      }
     }
   }
 }

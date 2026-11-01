@@ -186,9 +186,76 @@ describe('run lifecycle', () => {
     expect(failed).toMatchObject({ status: 'failed', error: 'pinned worker offline at resume' });
     expect(failed.finishedAt).toBeTruthy();
     expect(failed.session?.status).toBe('failed');
+    const ev = await s.t.prisma.sessionEvent.findMany({ where: { sessionId: failed.session!.id, type: 'run.resume.failed' } });
+    expect(ev).toHaveLength(1);
+    expect(ev[0]!.payload).toMatchObject({ reason: 'pinned worker offline at resume' });
     expect(retry.runId).not.toBe(spec.runId);
     expect(retry.resumeSdkSessionId).toBeUndefined();
     expect(await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'queued', attempts: 2 });
+  });
+
+  it('owner cancels a live run; the task is ready again and an audit row exists', async () => {
+    s = await setup();
+    const task = await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    const res = await s.req('POST', `/runs/${spec.runId}/cancel`);
+    expect(res.json()).toEqual({ id: spec.runId, status: 'cancelled' });
+    expect((await w.waitFor('run.cancel')).runId).toBe(spec.runId);
+    expect(await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'ready', attempts: 0 });
+    expect(await s.t.prisma.auditLog.findFirst({ where: { action: 'run.cancelled', targetId: spec.runId } })).toMatchObject({
+      targetType: 'run', detail: { taskId: task.id },
+    });
+    s.result(w, spec, { status: 'succeeded', summary: 'late' });
+    await s.flush(w);
+    expect((await s.run(spec.runId)).status).toBe('cancelled');
+  });
+
+  it("records an owner-cancelled run's usage once from the worker's cancelled result", async () => {
+    s = await setup();
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    await s.req('POST', `/runs/${spec.runId}/cancel`);
+    await w.waitFor('run.cancel');
+    for (let i = 0; i < 2; i++) {
+      s.result(w, spec, { status: 'cancelled' });
+      await s.flush(w);
+    }
+    expect(await s.t.prisma.usageRecord.findMany({ where: { runId: spec.runId } })).toMatchObject([{ costUsd: 0.5, inputTokens: 10 }]);
+    const run = await s.run(spec.runId);
+    expect(run).toMatchObject({ status: 'cancelled', costUsd: 0.5 });
+    expect(run.usageRecordedAt).toBeTruthy();
+  });
+
+  it('cancelling a summary run lets the parent run be summarized again', async () => {
+    s = await setup();
+    const summarizer = await s.agent('office-summarizer');
+    await s.t.prisma.agent.update({ where: { id: summarizer }, data: { isSystem: true } });
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    s.result(w, spec, { status: 'succeeded', resultText: 'done', sdkSessionId: 'sdk-1' });
+    await s.flush(w);
+    const sum = await s.assign(w);
+    expect((await s.run(spec.runId)).summarizedAt).toBeTruthy();
+    await s.req('POST', `/runs/${sum.runId}/cancel`);
+    expect((await s.run(spec.runId)).summarizedAt).toBeNull();
+  });
+
+  it('cancel of a finished run is 409; ?task=true cancels the task', async () => {
+    s = await setup();
+    const task = await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    const res = await s.req('POST', `/runs/${spec.runId}/cancel?task=true`);
+    expect(res.statusCode).toBe(200);
+    expect((await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('cancelled');
+    const again = await s.req('POST', `/runs/${spec.runId}/cancel`);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toBe('run_not_live');
   });
 
   it('a cancelled waiting run is not resumed', async () => {

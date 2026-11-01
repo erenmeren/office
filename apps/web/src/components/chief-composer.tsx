@@ -56,7 +56,8 @@ export function ChiefComposer({ project, chief, onCreated }: { project?: Project
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Describe the outcome you want."
-          className="min-h-[86px] rounded-[10px] bg-[rgb(7_5_24/0.55)] px-3.5 py-3 text-base leading-6 shadow-[inset_0_1px_3px_rgba(0,0,0,.35)]"
+          variant="well"
+          className="min-h-[86px] px-3.5 py-3 text-base leading-6 shadow-[inset_0_1px_3px_rgba(0,0,0,.35)]"
         />
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">

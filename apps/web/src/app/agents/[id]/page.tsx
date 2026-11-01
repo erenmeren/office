@@ -1,19 +1,23 @@
 'use client';
 
+import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { Fragment, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AgentForm, type AgentFormBody } from '@/components/agent-form';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api';
-import { useAgent } from '@/lib/queries';
+import { useAgent, useLiveSessions, useProjects } from '@/lib/queries';
 
 export default function AgentPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const agent = useAgent(id);
+  const project = useProjects().data?.[0];
+  const liveRun = useLiveSessions(project?.id).data?.find((s) => s.agentId === id);
   const [open, setOpen] = useState<string | null>(null);
 
   const save = async (body: AgentFormBody) => {
@@ -34,6 +38,11 @@ export default function AgentPage() {
         <span className="font-mono text-sm text-muted-foreground">{a.slug}</span>
         <Badge variant="outline">{a.isActive ? 'active' : 'inactive'}</Badge>
         {a.currentVersion && <Badge variant="secondary">v{a.currentVersion.version}</Badge>}
+        {liveRun && (
+          <Button variant="secondary" size="sm" nativeButton={false} render={<Link href={`/sessions/${liveRun.runId}`} />}>
+            Inspect live session
+          </Button>
+        )}
       </div>
 
       <Card>

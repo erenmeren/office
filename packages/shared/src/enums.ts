@@ -64,6 +64,7 @@ export const EventType = z.enum([
   'memory.verified',
   'agent.check.completed',
   'agent.integration.failed',
+  'run.resume.failed',
   'mission.status.changed',
 ]);
 export type EventType = z.infer<typeof EventType>;

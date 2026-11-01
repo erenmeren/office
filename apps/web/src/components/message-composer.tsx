@@ -41,7 +41,7 @@ export function MessageComposer({ conversationId }: { conversationId: string }) 
         value={body}
         onChange={(e) => setBody(e.target.value)}
         placeholder="Write a message. It is saved before it is delivered."
-        className="min-h-[64px] rounded-[10px] bg-[rgb(7_5_24/0.55)] px-3 py-2.5"
+        variant="well"
       />
       <div className="flex items-center justify-between gap-3">
         <Segmented

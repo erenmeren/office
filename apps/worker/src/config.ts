@@ -47,6 +47,6 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
     name: env.OFFICE_WORKER_NAME || hostname(),
     tags,
     canClone,
-    machineId: machineId(home, etcMachineId),
+    machineId: machineId(home, etcMachineId, env.OFFICE_MACHINE_ID?.trim() || undefined),
   };
 }

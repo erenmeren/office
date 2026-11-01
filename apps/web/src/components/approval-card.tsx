@@ -19,7 +19,7 @@ function subject(a: ApprovalView): string {
 }
 
 /** A pending tool or budget approval: the paused session waits for the owner's decision. */
-export function ApprovalCard({ approval, agentName }: { approval: ApprovalView; agentName: string }) {
+export function ApprovalCard({ approval, agentName, title = 'Approval required' }: { approval: ApprovalView; agentName: string; title?: string }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -28,7 +28,7 @@ export function ApprovalCard({ approval, agentName }: { approval: ApprovalView; 
     setError('');
     try {
       await post(`/approvals/${approval.id}/${path}`, body);
-      await Promise.all([qc.invalidateQueries({ queryKey: ['approvals'] }), qc.invalidateQueries({ queryKey: ['missions'] })]);
+      await Promise.all(['approvals', 'missions', 'session'].map((k) => qc.invalidateQueries({ queryKey: [k] })));
     } catch (err) {
       setError(String(err));
       // e.g. 409 already_decided: refetch so a stale card disappears
@@ -43,7 +43,7 @@ export function ApprovalCard({ approval, agentName }: { approval: ApprovalView; 
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ShieldAlert className="size-4 text-amber" aria-hidden />
-          Approval required
+          {title}
         </CardTitle>
         <CardDescription className="text-ink-2">{approvalSentence(approval, agentName)}</CardDescription>
       </CardHeader>

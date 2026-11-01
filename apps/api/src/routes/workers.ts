@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { HttpError } from '../lib/errors.js';
+import { audit } from '../services/audit-service.js';
 import { generateToken, hashToken } from '../lib/tokens.js';
 
 // never expose enrollTokenHash / credentialHash
@@ -38,6 +39,7 @@ export async function workerRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     if (!(await app.prisma.worker.findUnique({ where: { id } }))) throw new HttpError(404, 'not_found');
     const worker = await app.prisma.worker.update({ where: { id }, data: { status: 'revoked' }, select: PUBLIC });
+    await audit(app.prisma, { userId: req.user!.id, action: 'worker.revoked', targetType: 'worker', targetId: id });
     app.gateway.disconnect(id);
     return worker;
   });

@@ -195,6 +195,11 @@ describe('orchestration', () => {
     const workerId = (await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: first.runId } })).workerId;
     expect(lost.payload).toEqual({ workerId, retried: true });
     expect((await s.req('GET', `/runs/${first.runId}`)).json()).toMatchObject({ status: 'lost', retriedByRunId: null });
+    // a later non-task run on the same task is not its retry
+    const { id: _id, ...base } = await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: first.runId } });
+    const fake = await s.t.prisma.taskRun.create({ data: { ...base, kind: 'review', status: 'cancelled', createdAt: new Date(Date.now() + 1000) } as never });
+    expect((await s.req('GET', `/runs/${first.runId}`)).json()).toMatchObject({ retriedByRunId: null });
+    await s.t.prisma.taskRun.delete({ where: { id: fake.id } });
 
     await s.t.app.scheduler.tick();
     let second = (await w.waitFor('run.assign')).spec;
@@ -293,6 +298,17 @@ describe('orchestration', () => {
     expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 2 });
     await s.assign(w);
     expect(await s.t.prisma.taskRun.count({ where: { kind: 'task' } })).toBeGreaterThan(0);
+  });
+
+  it('owner cancel of the review run keeps the mission in review and starts no new review', async () => {
+    s = await setup();
+    const { w, m, k } = await s.approved();
+    await s.toReview(w, k, 'failed');
+    const review = await s.assign(w);
+    expect((await s.req('POST', `/runs/${review.runId}/cancel`)).statusCode).toBe(200);
+    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: review.runId });
+    await s.t.app.scheduler.tick();
+    expect(await s.t.prisma.taskRun.count({ where: { kind: 'review' } })).toBe(1);
   });
 
   it('a stalled mission goes to review; the Chief review run gets the review tools; a failed check is evidence_missing; structured reopen -> ready', async () => {

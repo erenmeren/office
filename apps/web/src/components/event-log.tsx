@@ -1,28 +1,16 @@
 'use client';
 
 import { useState } from 'react';
-import type { OfficeEvent } from '@office/shared';
+import { summarizeEvent, type OfficeEvent } from '@office/shared';
 import { Badge } from '@/components/ui/badge';
 
 export type LogRow = { kind: 'event'; event: OfficeEvent } | { kind: 'replay.done'; lastSeq: number };
 
-function summary(e: OfficeEvent): string {
-  const p = e.payload as {
-    tool?: unknown;
-    input?: { command?: unknown; path?: unknown };
-    text?: unknown;
-    skill?: unknown;
-    subagentType?: unknown;
-  };
-  if (e.type === 'agent.skill.invoked') return `skill ${typeof p.skill === 'string' ? p.skill : ''}`.trim();
-  if (e.type === 'agent.subagent.spawned') return `subagent ${typeof p.subagentType === 'string' ? p.subagentType : ''}`.trim();
-  if (typeof p.tool === 'string') {
-    const arg = p.input?.command ?? p.input?.path;
-    return `${p.tool} ${typeof arg === 'string' ? arg.slice(0, 80) : ''}`;
-  }
-  if (typeof p.text === 'string') return p.text.slice(0, 120);
-  return '';
-}
+// the shared summary falls back to the type name, which the row already shows as a badge
+const summary = (e: OfficeEvent) => {
+  const s = summarizeEvent(e);
+  return s === e.type ? '' : s;
+};
 
 function Row({ event }: { event: OfficeEvent }) {
   const [open, setOpen] = useState(false);

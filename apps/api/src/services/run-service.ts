@@ -1,14 +1,18 @@
 import type { AgentSession, CheckResult, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
 import { RunSpecSchema, skillPromptSection, type OfficeEvent, type RunResult, type RunSpec } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
+import { HttpError } from '../lib/errors.js';
 import type { Config } from '../config.js';
 import type { EventHub, Outbox, RunStatusChanged } from './event-hub.js';
 import { loadVersion } from './agent-service.js';
 import { appendEvent } from './event-store.js';
-import { setTaskStatus } from './task-service.js';
+import { audit } from './audit-service.js';
+import { cancelLiveRuns, notifyCancelled, setTaskStatus } from './task-service.js';
 import { buildContextPack } from './context-pack.js';
 import { toolsForKind } from './tool-service.js';
 import {
+  LIVE_TASK,
+  cancelMission,
   missionBranch,
   onPlanRunFinished,
   onPlanRunLost,
@@ -164,6 +168,8 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
     kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt,
   });
 
+  const maxBudgetUsd =
+    input.taskBudgetUsd !== undefined ? Math.min(base.spec.maxBudgetUsd, input.taskBudgetUsd) : base.spec.maxBudgetUsd;
   const outbox: Outbox = [];
   const created = await prisma.$transaction(async (tx) => {
     const run = await tx.taskRun.create({
@@ -179,6 +185,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
         agentVersionId: base.version.id,
         workerId: input.worker.workerId,
         status: 'queued',
+        maxBudgetUsd,
         leaseExpiresAt: leaseUntil(config),
       },
     });
@@ -211,7 +218,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
       ...base.spec,
       ...input.spec,
       ...remoteCwd(input.spec?.git),
-      ...(input.taskBudgetUsd !== undefined && { maxBudgetUsd: Math.min(base.spec.maxBudgetUsd, input.taskBudgetUsd) }),
+      maxBudgetUsd,
       ...(input.allowedToolsOverride && { allowedTools: input.allowedToolsOverride }),
       outputFormat: input.outputFormat,
       readOnlyCheckout: input.readOnlyCheckout,
@@ -365,7 +372,7 @@ export async function resumeRun(
     projectId: run.projectId,
     payload: opts.reason === 'reply' ? { reason: 'reply', messageId: opts.reply.id } : { reason: 'timeout' },
   };
-  if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${runId}`, event);
+  await appendEvent(prisma, event, hub);
   hub.publish(`run:${runId}`, { type: 'run.status.changed', runId, status: 'queued' });
 
   // a mission task keeps its worktree, commands and budget across the resume
@@ -432,6 +439,22 @@ export async function failWaitingRun(prisma: PrismaClient, hub: EventHub, runId:
     return true;
   });
   hub.publishAll(outbox);
+  if (failed) {
+    const session = await prisma.agentSession.findUnique({ where: { runId } });
+    if (session) {
+      const max = await prisma.sessionEvent.aggregate({ where: { sessionId: session.id }, _max: { seq: true } });
+      await appendEvent(prisma, {
+        type: 'run.resume.failed',
+        seq: (max._max.seq ?? 0) + 1,
+        ts: now.toISOString(),
+        sessionId: session.id,
+        runId,
+        agentId: session.agentId,
+        projectId: session.projectId,
+        payload: { reason: error },
+      }, hub);
+    }
+  }
   return failed;
 }
 
@@ -480,6 +503,51 @@ export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: str
     queueRunStatus(outbox, runId, 'lost');
   });
   hub.publishAll(outbox);
+}
+
+/**
+ * Owner stops a live run (409 run_not_live otherwise). A mission task returns to ready without using an attempt
+ * (or is cancelled with `cancelTaskToo`); a plan/review run is handled like a lost one.
+ */
+export async function cancelRun(
+  prisma: PrismaClient, hub: EventHub, gateway: WorkerGateway, runId: string, userId: string, cancelTaskToo: boolean,
+  log: { error: (obj: object, msg: string) => void },
+) {
+  const outbox: Outbox = [];
+  const cancelled = await prisma.$transaction(async (tx) => {
+    const [run] = await cancelLiveRuns(tx, outbox, { id: runId });
+    if (!run) return null;
+    await audit(tx, {
+      userId, action: 'run.cancelled', targetType: 'run', targetId: runId,
+      detail: { by: userId, ...(run.taskId ? { taskId: run.taskId } : {}), ...(run.missionId ? { missionId: run.missionId } : {}) },
+    });
+    if (run.kind === 'task' && run.taskId) {
+      const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
+      if ((LIVE_TASK as readonly string[]).includes(task.status)) {
+        const mission = task.missionId ? await tx.mission.findUnique({ where: { id: task.missionId } }) : null;
+        // a task of a stopped mission must not go ready; the attempt is given back like in abandonRun
+        const stopped = mission && !['approved', 'running', 'review'].includes(mission.status);
+        if (task.status === 'waiting_reply' || task.status === 'waiting_approval') await setTaskStatus(tx, outbox, task.id, 'running');
+        const to = cancelTaskToo || stopped ? 'cancelled' : 'ready';
+        if (to === 'ready') await tx.task.update({ where: { id: task.id }, data: { attempts: { decrement: 1 } } });
+        await setTaskStatus(tx, outbox, task.id, to);
+      }
+    }
+    // let the scheduler summarize that run again
+    if (run.summaryOfRunId) await tx.taskRun.update({ where: { id: run.summaryOfRunId }, data: { summarizedAt: null } });
+    // a cancelled review run keeps reviewRunId on purpose: no new review starts, the owner decides the tasks
+    return run;
+  });
+  if (!cancelled) throw new HttpError(409, 'run_not_live');
+  hub.publishAll(outbox);
+  notifyCancelled(gateway, [cancelled]);
+  // an owner-cancelled plan run stops the mission; cancelMission is a no-op when it is already over
+  if (cancelled.kind === 'plan' && cancelled.missionId) {
+    await cancelMission(prisma, hub, gateway, cancelled.missionId, userId, log).catch((err: unknown) => {
+      if (!(err instanceof HttpError && err.status === 409)) throw err;
+    });
+  }
+  return { id: runId, status: 'cancelled' as const };
 }
 
 export async function markRunning(prisma: PrismaClient, hub: EventHub, runId: string, workerId: string) {
@@ -535,6 +603,7 @@ export async function completeRun(
             error: r.error,
             finishedAt: now,
             costUsd: { increment: r.usage.costUsd },
+            usageRecordedAt: now,
             // Prisma rejects a raw null for a Json column
             structuredOutput: (r.structuredOutput ?? undefined) as Prisma.InputJsonValue | undefined,
           },
@@ -621,6 +690,28 @@ export async function completeRun(
   }
 }
 
+/**
+ * Records the final usage of a run the owner cancelled before its result arrived: the result is otherwise acked as a
+ * resend. Exactly once, guarded by `usageRecordedAt` (a resumed run already has a row from its suspended segment).
+ */
+export async function recordCancelledUsage(prisma: PrismaClient, runId: string, result: RunResult) {
+  const { usage } = redactSecrets(result);
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.taskRun.updateMany({
+      where: { id: runId, status: 'cancelled', usageRecordedAt: null },
+      data: { usageRecordedAt: new Date(), costUsd: { increment: usage.costUsd } },
+    });
+    if (count === 0) return;
+    const session = await tx.agentSession.findUniqueOrThrow({ where: { runId } });
+    await tx.usageRecord.create({
+      data: {
+        runId, projectId: session.projectId, agentId: session.agentId, model: session.model,
+        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd,
+      },
+    });
+  });
+}
+
 /** Stores the git summary (run + GitWorkspace), the check (CheckResult + artifact) and an analysis/review result artifact. */
 async function recordMissionRun(tx: Prisma.TransactionClient, config: Config, run: TaskRun & { taskId: string }, r: RunResult) {
   const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId }, include: { project: true } });
@@ -667,7 +758,7 @@ async function emitCheckEvent(prisma: PrismaClient, hub: EventHub, session: Agen
       artifactId: check.artifactId,
     },
   };
-  if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${check.runId}`, event);
+  await appendEvent(prisma, event, hub);
 }
 
 /** A plain `message` (never wakes) to the Chief in the mission conversation. */
@@ -748,7 +839,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         projectId: run.session.projectId,
         payload: { workerId: run.workerId, retried },
       };
-      if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${run.id}`, event);
+      await appendEvent(prisma, event, hub);
     }
   }
   return lost;

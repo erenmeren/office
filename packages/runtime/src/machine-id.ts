@@ -12,9 +12,10 @@ function readTrimmed(file: string): string | undefined {
 
 /**
  * This machine's identity: `/etc/machine-id` when readable, else a random id persisted at `<fallbackDir>/machine-id`
- * (0600). The API and a worker on the same host compute the same value from `/etc/machine-id`.
+ * (0600). A non-empty `override` (OFFICE_MACHINE_ID) wins over both. The API and a worker on the same host compute the same value from `/etc/machine-id`.
  */
-export function machineId(fallbackDir: string, etcFile = '/etc/machine-id'): string {
+export function machineId(fallbackDir: string, etcFile = '/etc/machine-id', override?: string): string {
+  if (override) return override;
   const system = readTrimmed(etcFile);
   if (system) return system;
   const file = join(fallbackDir, 'machine-id');
