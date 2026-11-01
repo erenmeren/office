@@ -227,6 +227,7 @@ describe('phase 4 end to end with the fake runtime', () => {
     expect((await req('GET', `/runs/${reviewRun.id}`)).json()).toMatchObject({ kind: 'review', reviewOfMissionId: missionId });
     await until(async () => (await getMission(missionId)).summary === 'fake review', 'mission summary');
     expect((await getTask(b.id)).status).toBe('review');
+    expect(await getMission(missionId)).toMatchObject({ status: 'review', reviewRunId: reviewRun.id });
     expect((await req('POST', `/tasks/${b.id}/done`, {})).statusCode).toBe(200);
     mission = await waitMission(missionId, 'done');
     expect(mission.summary).toBe('fake review');

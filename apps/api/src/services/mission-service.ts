@@ -493,8 +493,8 @@ export async function onTaskStatusChanged(db: Db, outbox: Outbox, task: Task) {
   }
   if (mission.status === 'approved' || mission.status === 'running') {
     await moveMission(db, outbox, mission.id, ['approved', 'running'], { status: 'review', reviewRunId: null });
-  } else if (mission.status === 'failed' && tasks.every((t) => t.status === 'done')) {
-    await moveMission(db, outbox, mission.id, ['failed'], { status: 'done' });
+  } else if ((mission.status === 'failed' || mission.status === 'review') && tasks.every((t) => t.status === 'done')) {
+    await moveMission(db, outbox, mission.id, ['failed', 'review'], { status: 'done' });
   }
 }
 
@@ -590,7 +590,7 @@ export async function reviewRunFailed(db: Db, outbox: Outbox, run: TaskRun) {
 /**
  * Applies the review run's structured decisions (a `done` failing the evidence rule becomes `reopen`),
  * stores the summary and a `review` artifact, then settles the mission: still runnable -> running,
- * every task done -> done, otherwise failed.
+ * every task done -> done, a task still in review -> stays review, otherwise failed.
  */
 export async function onReviewRunFinished(
   prisma: PrismaClient,
@@ -652,7 +652,10 @@ export async function onReviewRunFinished(
       await moveMission(tx, outbox, mission.id, ['review', 'running'], { status: 'running', reviewRunId: null });
     } else {
       const done = tasks.every((t) => t.status === 'done');
-      await moveMission(tx, outbox, mission.id, ['review', 'running'], { status: done ? 'done' : 'failed' });
+      // an undecided task stays with the owner: the mission remains in review and keeps reviewRunId,
+      // so the scheduler does not start another review run; any reopen/retry clears it (onTaskStatusChanged)
+      const undecided = tasks.some((t) => t.status === 'review');
+      await moveMission(tx, outbox, mission.id, ['review', 'running'], { status: done ? 'done' : undecided ? 'review' : 'failed' });
     }
   });
   hub.publishAll(outbox);

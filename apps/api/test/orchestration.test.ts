@@ -317,6 +317,21 @@ describe('orchestration', () => {
     expect(await s.mission(m.id)).toMatchObject({ status: 'done', summary: 'all good' });
   });
 
+  it('a mission with an undecided review task stays in review; the owner closing it finishes the mission', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a' || x.key === 'c');
+    const { w, m, k } = await s.approved(1, plan);
+    await s.toReview(w, k, 'passed');
+    const review = await s.assign(w);
+    await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'partial', tasks: [{ taskId: k.a, decision: 'done' }] } });
+    expect((await s.task(k.a)).status).toBe('done');
+    expect((await s.task(k.c)).status).toBe('review');
+    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: review.runId });
+    expect((await s.req('POST', `/tasks/${k.c}/done`, {})).statusCode).toBe(200);
+    expect((await s.mission(m.id)).status).toBe('done');
+  });
+
   it('required consultation: done needs a question to the consultant and a reply in the task conversation', async () => {
     s = await setup();
     const plan = testPlan();
