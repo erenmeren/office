@@ -1,7 +1,7 @@
-import { query, type AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
-import type { RunResult, RunSpec } from '@office/shared';
+import { createSdkMcpServer, query, tool, type AgentDefinition, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
 import { redactSecrets } from '../redact.js';
-import type { EventSink, RuntimeAdapter } from '../types.js';
+import type { EventSink, RuntimeAdapter, ToolBridge } from '../types.js';
 import { buildChildEnv } from './env.js';
 import { normalizeSdkMessage } from './normalize.js';
 
@@ -34,10 +34,73 @@ export function effectiveAllowedTools(spec: RunSpec): string[] {
   return tools;
 }
 
+/** Everything passed to the SDK except abortController. The office MCP server exists only when tools are served. */
+export function buildQueryOptions(spec: RunSpec, tools: ToolBridge | undefined, onSuspend: () => void): Options {
+  const served = tools ? (spec.tools as OfficeToolName[]) : [];
+  const allowedTools = [...effectiveAllowedTools(spec), ...served.map(mcpToolName)];
+  const agents = spec.subagents.length
+    ? Object.fromEntries(
+        spec.subagents.map(({ name, description, prompt, skills, tools, model, maxTurns }): [string, AgentDefinition] => [
+          name,
+          {
+            description,
+            prompt,
+            skills,
+            ...(tools && { tools }),
+            ...(model && { model }),
+            ...(maxTurns && { maxTurns }),
+          },
+        ]),
+      )
+    : undefined;
+  const server =
+    tools && served.length
+      ? createSdkMcpServer({
+          name: MCP_SERVER_NAME,
+          version: '1.0.0',
+          tools: served.map((name) =>
+            tool(name, OFFICE_TOOLS[name].description, OFFICE_TOOLS[name].input, async (args) => {
+              const r = await tools.call(name, args as Record<string, unknown>);
+              if (!r.ok) return { content: [{ type: 'text' as const, text: `Error ${r.code}: ${r.error}` }], isError: true };
+              if (r.suspend) onSuspend();
+              return { content: [{ type: 'text' as const, text: JSON.stringify(r.result) }] };
+            }),
+          ),
+        })
+      : undefined;
+  return {
+    cwd: spec.cwd,
+    model: spec.model,
+    effort: spec.effort,
+    systemPrompt: spec.systemPrompt,
+    allowedTools,
+    // strictMcpConfig keeps every MCP server except the in-process office one out of the session
+    disallowedTools: BUILTIN_TOOLS.filter((t) => !allowedTools.includes(t)),
+    ...(server && { mcpServers: { [MCP_SERVER_NAME]: server } }),
+    strictMcpConfig: true,
+    permissionMode: 'default',
+    maxTurns: spec.maxTurns,
+    maxBudgetUsd: spec.maxBudgetUsd,
+    // Project settings are trusted workspace content (owner-controlled repos); deny rules still cap the tool surface. See docs/security.md.
+    settingSources: ['project'],
+    resume: spec.resumeSdkSessionId,
+    additionalDirectories: spec.skillsDir ? [spec.skillsDir] : undefined,
+    skills: spec.skills.length ? spec.skills.map((s) => s.name) : undefined,
+    agents,
+    env: buildChildEnv(process.env, spec),
+    // allowedTools auto-approves listed tools; disallowedTools blocks ungranted built-ins
+    // ahead of project allow rules; this is the deny path for anything else that asks.
+    canUseTool: async (toolName) =>
+      allowedTools.includes(toolName)
+        ? { behavior: 'allow' }
+        : { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' },
+  };
+}
+
 export class ClaudeAdapter implements RuntimeAdapter {
   readonly name = 'claude' as const;
 
-  async run(spec: RunSpec, sink: EventSink, signal: AbortSignal): Promise<RunResult> {
+  async run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge): Promise<RunResult> {
     const abortController = new AbortController();
     const onAbort = () => abortController.abort();
     signal.addEventListener('abort', onAbort, { once: true });
@@ -48,56 +111,26 @@ export class ClaudeAdapter implements RuntimeAdapter {
       return { status: 'cancelled', usage: ZERO_USAGE };
     };
 
-    const allowedTools = effectiveAllowedTools(spec);
-    const agents = spec.subagents.length
-      ? Object.fromEntries(
-          spec.subagents.map(({ name, description, prompt, skills, tools, model, maxTurns }): [string, AgentDefinition] => [
-            name,
-            {
-              description,
-              prompt,
-              skills,
-              ...(tools && { tools }),
-              ...(model && { model }),
-              ...(maxTurns && { maxTurns }),
-            },
-          ]),
-        )
-      : undefined;
-
     let result: RunResult | undefined;
+    let q: ReturnType<typeof query> | undefined;
+    let suspended = false;
+    let initSessionId: string | undefined;
     try {
-      const q = query({
+      q = query({
         prompt: spec.prompt,
         options: {
-          cwd: spec.cwd,
-          model: spec.model,
-          effort: spec.effort,
-          systemPrompt: spec.systemPrompt,
-          allowedTools,
-          // no MCP server is pinned in Phase 2; Phase 3 must replace this wildcard with a list that excludes mcp__office__*
-          disallowedTools: [...BUILTIN_TOOLS.filter((t) => !allowedTools.includes(t)), 'mcp__*'],
-          permissionMode: 'default',
-          maxTurns: spec.maxTurns,
-          maxBudgetUsd: spec.maxBudgetUsd,
-          // Project settings are trusted workspace content (owner-controlled repos); deny rules still cap the tool surface. See docs/security.md.
-          settingSources: ['project'],
-          resume: spec.resumeSdkSessionId,
-          additionalDirectories: spec.skillsDir ? [spec.skillsDir] : undefined,
-          skills: spec.skills.length ? spec.skills.map((s) => s.name) : undefined,
-          agents,
-          env: buildChildEnv(process.env, spec),
+          ...buildQueryOptions(spec, tools, () => {
+            suspended = true;
+            // after the tool result has been returned to the CLI
+            setTimeout(() => void q?.interrupt().catch(() => {}), 0);
+          }),
           abortController,
-          // allowedTools auto-approves listed tools; disallowedTools blocks ungranted built-ins
-          // ahead of project allow rules; this is the deny path for anything else that asks.
-          canUseTool: async (toolName) =>
-            allowedTools.includes(toolName)
-              ? { behavior: 'allow' }
-              : { behavior: 'deny', message: 'Tool not permitted by Agent Office policy' },
         },
       });
       for await (const msg of q) {
-        for (const body of normalizeSdkMessage(msg)) sink.emit(body);
+        // an interrupted result of a suspended run is not a failure
+        if (!(suspended && msg.type === 'result')) for (const body of normalizeSdkMessage(msg)) sink.emit(body);
+        if (msg.type === 'system' && msg.subtype === 'init') initSessionId = msg.session_id;
         if (msg.type !== 'result') continue;
         const usage = {
           inputTokens: msg.usage.input_tokens,
@@ -106,8 +139,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
           numTurns: msg.num_turns,
           durationMs: msg.duration_ms,
         };
-        result =
-          msg.subtype === 'success'
+        result = suspended
+          ? { status: 'suspended', sdkSessionId: msg.session_id, usage }
+          : msg.subtype === 'success'
             ? { status: 'succeeded', resultText: redactSecrets(msg.result), sdkSessionId: msg.session_id, usage }
             : {
                 status: 'failed',
@@ -120,6 +154,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
       // The SDK throws on process exit after an error result; that result already produced agent.failed.
       if (result) return result;
       if (signal.aborted) return cancelled();
+      if (suspended && initSessionId) return { status: 'suspended', sdkSessionId: initSessionId, usage: ZERO_USAGE };
       const error = redactSecrets(err instanceof Error ? err.message : String(err));
       sink.emit({ type: 'agent.failed', payload: { error } });
       return { status: 'failed', error, usage: ZERO_USAGE };
@@ -128,6 +163,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     }
     if (result) return result;
     if (signal.aborted) return cancelled();
+    if (suspended && initSessionId) return { status: 'suspended', sdkSessionId: initSessionId, usage: ZERO_USAGE };
     const error = 'SDK stream ended without a result message';
     sink.emit({ type: 'agent.failed', payload: { error } });
     return { status: 'failed', error, usage: ZERO_USAGE };
