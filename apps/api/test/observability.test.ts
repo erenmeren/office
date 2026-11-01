@@ -125,6 +125,10 @@ describe('observability read models', () => {
     expect(rows.every((r: { runId: string }) => r.runId === r1.runId)).toBe(true);
     expect(rows[0]).toMatchObject({ type: 'agent.file.changed', agentName: 'Ada', detail: 'changed b.ts' });
     expect(rows.at(-1)).toMatchObject({ type: 'agent.text', detail: 'starting' });
+    // `sessionId:seq`, the key a live `project:` event of the same row carries
+    const keys = rows.map((r: { key: string }) => r.key);
+    expect(keys.every((k: string) => new RegExp(`^${r1.sessionId}:\\d+$`).test(k))).toBe(true);
+    expect(new Set(keys).size).toBe(keys.length);
     const page = (await get(`/projects/${p}/activity?limit=2&beforeSeqId=${rows[1].id}`)).json();
     expect(page.map((r: { id: string }) => r.id)).toEqual([rows[2].id, rows[3].id]);
   });

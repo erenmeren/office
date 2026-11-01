@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OfficeEvent } from '@office/shared';
-import { activityFromEvent, costBars, niceMax } from './dashboard';
+import { activityFromEvent, costBars, mergeActivity, niceMax } from './dashboard';
 
 const bucket = (key: string, costUsd: number) => ({ key, label: key, costUsd, inputTokens: 0, outputTokens: 0 });
 
@@ -23,6 +23,13 @@ describe('dashboard helpers', () => {
 
   it('turns a live event into an activity row', () => {
     const e = { type: 'agent.command.executed', seq: 7, ts: '2026-11-01T10:00:00.000Z', sessionId: 's', runId: 'r', agentId: 'a', projectId: 'p', payload: { command: 'pnpm test' } } as OfficeEvent;
-    expect(activityFromEvent(e, 'Backend Dev')).toMatchObject({ id: 's:7', agentName: 'Backend Dev', detail: '$ pnpm test' });
+    expect(activityFromEvent(e)).toMatchObject({ key: 's:7', agentId: 'a', detail: '$ pnpm test' });
+  });
+
+  it('merges live and stored activity, keeping each event once', () => {
+    const row = (key: string, id = key) => ({ id, key, ts: '', type: 't', agentId: 'a', agentName: '', runId: 'r', taskKey: null, detail: '' });
+    const merged = mergeActivity([row('s:9'), row('s:8')], [row('s:8', 'db-8'), row('s:7', 'db-7')], 50);
+    expect(merged.map((r) => r.key)).toEqual(['s:9', 's:8', 's:7']);
+    expect(mergeActivity([row('s:9')], [row('s:8')], 1)).toHaveLength(1);
   });
 });

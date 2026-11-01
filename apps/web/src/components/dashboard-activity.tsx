@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { ActivityRow } from '@/components/ui/activity-row';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { activityFromEvent } from '@/lib/dashboard';
+import { activityFromEvent, mergeActivity } from '@/lib/dashboard';
 import { useActivity, useAgents, useProjects, type ActivityItem } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
 
@@ -21,13 +21,15 @@ export function DashboardActivity() {
     setLive([]);
     return uiSocket().subscribe(`project:${projectId}`, 0, (m) => {
       if (m.type !== 'event') return;
-      const row = activityFromEvent(m.event, m.event.agentId);
-      setLive((rows) => [row, ...rows].slice(0, LIMIT));
+      const row = activityFromEvent(m.event);
+      setLive((rows) => mergeActivity([row], rows, LIMIT));
     });
   }, [projectId]);
 
-  const name = (r: ActivityItem) => agents?.find((a) => a.id === r.agentId)?.name ?? r.agentName;
-  const rows = [...live, ...(stored ?? [])].slice(0, LIMIT);
+  // live rows carry no name: the agent list, then a stored row of the same agent, then a generic label
+  const name = (r: ActivityItem) =>
+    agents?.find((a) => a.id === r.agentId)?.name ?? (r.agentName || stored?.find((s) => s.agentId === r.agentId)?.agentName || 'Agent');
+  const rows = mergeActivity(live, stored ?? [], LIMIT);
   return (
     <Card>
       <CardHeader>
@@ -40,7 +42,7 @@ export function DashboardActivity() {
         ) : (
           <ol aria-label="Recent activity" className="flex max-h-[520px] flex-col divide-y divide-white/8 overflow-y-auto">
             {rows.map((r) => (
-              <ActivityRow key={r.id} ts={r.ts} actor={name(r)} identity={agents?.find((a) => a.id === r.agentId)?.slug} type={r.type} detail={r.detail === r.type ? '' : r.detail} />
+              <ActivityRow key={r.key} ts={r.ts} actor={name(r)} identity={agents?.find((a) => a.id === r.agentId)?.slug} type={r.type} detail={r.detail === r.type ? '' : r.detail} />
             ))}
           </ol>
         )}

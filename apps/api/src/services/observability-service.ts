@@ -123,6 +123,8 @@ export async function projectActivity(db: Db, projectId: string, limit: number, 
   });
   return rows.map((r) => ({
     id: r.id,
+    // matches the live `project:` event, so the UI can merge stored and live rows
+    key: `${r.sessionId}:${r.seq}`,
     ts: r.ts,
     type: r.type,
     agentId: r.session.agentId,

@@ -343,6 +343,8 @@ export interface CostBucket {
 }
 export interface ActivityItem {
   id: string;
+  /** `sessionId:seq`, the same for a stored row and its live event */
+  key: string;
   ts: string;
   type: string;
   agentId: string;

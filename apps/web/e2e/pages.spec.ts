@@ -121,7 +121,7 @@ authed.describe('every page renders without console noise', () => {
       route.fulfill({ json: { totalUsd: 77.62, buckets: days.map((key, i) => ({ key, label: key, costUsd: i === 6 ? 18.42 : 9.86, inputTokens: 0, outputTokens: 0 })) } }),
     );
     await page.route(`${API}/projects/${project.id}/activity?limit=50`, (route) =>
-      route.fulfill({ json: [{ id: 'ev-1', ts: now, type: 'agent.tool.completed', agentId: 'a-fe', agentName: 'E2E Frontend Dev', runId: 'r', taskKey: null, detail: 'Edit LoginForm.tsx' }] }),
+      route.fulfill({ json: [{ id: 'ev-1', key: 's-fixture:1', ts: now, type: 'agent.tool.completed', agentId: 'a-fe', agentName: 'E2E Frontend Dev', runId: 'r', taskKey: null, detail: 'Edit LoginForm.tsx' }] }),
     );
     await page.goto('/');
     await page.waitForLoadState('networkidle');
