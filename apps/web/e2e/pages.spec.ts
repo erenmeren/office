@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/mission-control', '/conversations', '/agents', '/skills', '/memory', '/workers', '/settings', '/tasks/new'];
+const STATIC = ['/', '/mission-control', '/sessions', '/conversations', '/agents', '/skills', '/memory', '/workers', '/audit', '/settings', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {
@@ -97,6 +97,48 @@ authed.describe('every page renders without console noise', () => {
     await expect(page.getByText('E2E verdict: all tasks done')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Review run events' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'mission-review.md' })).toBeVisible();
+    expectQuiet(noise);
+  });
+
+  authed('dashboard: KPIs, team, attention and the 7-day cost chart from the API', async ({ page, request: api, noise }) => {
+    const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string }[];
+    const now = new Date().toISOString();
+    const days = [...Array(7)].map((_, i) => new Date(Date.now() - (6 - i) * 86_400_000).toISOString().slice(0, 10));
+    await page.route(`${API}/projects/${project.id}/overview`, (route) =>
+      route.fulfill({
+        json: {
+          agentsAvailable: 1, agentsTotal: 2, runningSessions: 1, maxConcurrentRuns: 8, pendingTasks: 4, awaitingApproval: 1,
+          costTodayUsd: 18.42, dailyBudgetUsd: 50,
+          team: [
+            { agentId: 'a-fe', name: 'E2E Frontend Dev', role: 'Frontend Developer', status: 'needs_approval', currentWork: 'Login form + validation', workerName: 'dev-laptop', costTodayUsd: 3.31 },
+            { agentId: 'a-qa', name: 'E2E QA Engineer', role: 'QA Engineer', status: 'idle', currentWork: null, workerName: null, costTodayUsd: 0 },
+          ],
+          attention: [{ kind: 'skill_review', id: 'skill-fixture', title: 'e2e-testing', detail: 'Imported from git', createdAt: now }],
+        },
+      }),
+    );
+    await page.route(new RegExp(`${API}/projects/${project.id}/costs\\?days=7&groupBy=day`), (route) =>
+      route.fulfill({ json: { totalUsd: 77.62, buckets: days.map((key, i) => ({ key, label: key, costUsd: i === 6 ? 18.42 : 9.86, inputTokens: 0, outputTokens: 0 })) } }),
+    );
+    await page.route(`${API}/projects/${project.id}/activity?limit=50`, (route) =>
+      route.fulfill({ json: [{ id: 'ev-1', ts: now, type: 'agent.tool.completed', agentId: 'a-fe', agentName: 'E2E Frontend Dev', runId: 'r', taskKey: null, detail: 'Edit LoginForm.tsx' }] }),
+    );
+    await page.goto('/');
+    await page.waitForLoadState('networkidle');
+    for (const label of ['Active projects', 'Agents available', 'Running sessions', 'Pending tasks', 'Cost today']) {
+      await expect(page.getByText(label, { exact: true })).toBeVisible();
+    }
+    await expect(page.getByText('37% of $50.00 daily budget')).toBeVisible();
+    const fe = page.getByRole('row').filter({ hasText: 'E2E Frontend Dev' });
+    await expect(fe.getByText('Needs approval')).toBeVisible();
+    await expect(fe.getByText('$3.31')).toBeVisible();
+    const attention = page.getByRole('list', { name: 'Needs your attention' }).getByRole('listitem');
+    await expect(attention.filter({ hasText: 'e2e-testing' }).getByRole('link', { name: 'Review import' })).toBeVisible();
+    const chart = page.getByRole('img', { name: /Cost per day, last 7 days/ });
+    await expect(chart.locator('[data-slot="bar"]')).toHaveCount(7);
+    await expect(chart.locator('[data-slot="bar"][data-partial]')).toHaveCount(1);
+    await expect(page.getByText('$77.62 total')).toBeVisible();
+    await expect(page.getByRole('list', { name: 'Recent activity' }).getByText('Edit LoginForm.tsx')).toBeVisible();
     expectQuiet(noise);
   });
 

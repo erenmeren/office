@@ -320,3 +320,72 @@ export const useProjectAgents = (projectId: string | undefined) =>
   useQuery({ queryKey: ['project-agents', projectId], queryFn: () => api<Agent[]>(`/projects/${projectId}/agents`), enabled: !!projectId });
 export const useRuntimeSettings = () =>
   useQuery({ queryKey: ['settings', 'runtime'], queryFn: () => api<{ leaseSeconds: number; heartbeatSeconds: number }>('/settings/runtime') });
+
+export type TeamStatus = 'running' | 'needs_approval' | 'idle';
+export interface Overview {
+  agentsAvailable: number;
+  agentsTotal: number;
+  runningSessions: number;
+  maxConcurrentRuns: number;
+  pendingTasks: number;
+  awaitingApproval: number;
+  costTodayUsd: number;
+  dailyBudgetUsd: number;
+  team: { agentId: string; name: string; role: string; status: TeamStatus; currentWork: string | null; workerName: string | null; costTodayUsd: number }[];
+  attention: { kind: 'approval' | 'skill_review'; id: string; title: string; detail: string; createdAt: string }[];
+}
+export interface CostBucket {
+  key: string;
+  label: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+export interface ActivityItem {
+  id: string;
+  ts: string;
+  type: string;
+  agentId: string;
+  agentName: string;
+  runId: string;
+  taskKey: string | null;
+  detail: string;
+}
+export interface LiveSession {
+  runId: string;
+  sessionId: string | null;
+  agentId: string;
+  agentName: string;
+  kind: string;
+  status: RunStatus;
+  taskKey: string | null;
+  taskTitle: string | null;
+  workerName: string | null;
+  startedAt: string | null;
+  costUsd: number;
+  commands: number;
+  files: number;
+}
+export const useOverview = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['overview', projectId],
+    queryFn: () => api<Overview>(`/projects/${projectId}/overview`),
+    enabled: !!projectId,
+    refetchInterval: 10_000,
+  });
+export const useCosts = (projectId: string | undefined, days: number, groupBy: 'day' | 'agent') =>
+  useQuery({
+    queryKey: ['costs', projectId, days, groupBy],
+    queryFn: () => api<{ totalUsd: number; buckets: CostBucket[] }>(`/projects/${projectId}/costs?days=${days}&groupBy=${groupBy}`),
+    enabled: !!projectId,
+    refetchInterval: 30_000,
+  });
+export const useActivity = (projectId: string | undefined) =>
+  useQuery({ queryKey: ['activity', projectId], queryFn: () => api<ActivityItem[]>(`/projects/${projectId}/activity?limit=50`), enabled: !!projectId });
+export const useLiveSessions = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['sessions', projectId, 'live'],
+    queryFn: () => api<LiveSession[]>(`/sessions?projectId=${projectId}&status=live`),
+    enabled: !!projectId,
+    refetchInterval: 10_000,
+  });
