@@ -18,6 +18,8 @@ import { skillRoutes } from './routes/skills.js';
 import { taskRoutes } from './routes/tasks.js';
 import { conversationRoutes } from './routes/conversations.js';
 import { memoryRoutes } from './routes/memory.js';
+import { auditRoutes } from './routes/audit.js';
+import { artifactRoutes } from './routes/artifacts.js';
 import { runRoutes } from './routes/runs.js';
 import { workerRoutes } from './routes/workers.js';
 import { EventHub } from './services/event-hub.js';
@@ -88,6 +90,8 @@ export async function buildApp(
   await app.register(taskRoutes);
   await app.register(conversationRoutes, { config });
   await app.register(memoryRoutes);
+  await app.register(auditRoutes);
+  await app.register(artifactRoutes, { config });
   await app.register(runRoutes);
   await app.register(workerRoutes);
   app.addHook('onReady', async () => scheduler.start());

@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { ProjectSettingsSchema } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
+import { audit } from '../services/audit-service.js';
+import { getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
 
 const CreateProject = z.object({
   name: z.string().min(1),
@@ -25,5 +28,29 @@ export async function projectRoutes(app: FastifyInstance) {
     const project = await app.prisma.project.findUnique({ where: { id } });
     if (!project) throw new HttpError(404, 'not_found');
     return project;
+  });
+
+  app.get('/projects/:id/settings', async (req) => getSettings(app.prisma, (req.params as { id: string }).id));
+
+  app.put('/projects/:id/settings', async (req) => {
+    const { id } = req.params as { id: string };
+    const patch = ProjectSettingsSchema.partial().parse(req.body);
+    const settings = await updateSettings(app.prisma, id, patch);
+    await audit(app.prisma, { userId: req.user!.id, action: 'settings.updated', targetType: 'project', targetId: id, detail: { keys: Object.keys(patch) } });
+    return settings;
+  });
+
+  app.get('/projects/:id/agents', async (req) => {
+    const { id } = req.params as { id: string };
+    await getSettings(app.prisma, id); // 404 when project is missing
+    return projectAgents(app.prisma, id);
+  });
+
+  app.put('/projects/:id/agents', async (req) => {
+    const { id } = req.params as { id: string };
+    const { agentIds } = z.object({ agentIds: z.array(z.string()) }).parse(req.body);
+    const agents = await setProjectAgents(app.prisma, id, agentIds);
+    await audit(app.prisma, { userId: req.user!.id, action: 'project_agents.updated', targetType: 'project', targetId: id, detail: { agentIds } });
+    return agents;
   });
 }

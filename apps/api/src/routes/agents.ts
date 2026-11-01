@@ -3,6 +3,7 @@ import type { AgentVersion } from '@office/db';
 import { z } from 'zod';
 import { AgentConfigInputSchema } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
+import { audit } from '../services/audit-service.js';
 import { createAgentVersion, versionView } from '../services/agent-service.js';
 
 const CreateAgent = z.object({
@@ -84,6 +85,7 @@ export async function agentRoutes(app: FastifyInstance) {
       }
       return tx.agent.update({ where: { id }, data: { ...data, currentVersionId } });
     });
+    await audit(app.prisma, { userId: req.user!.id, action: 'agent.updated', targetType: 'agent', targetId: id });
     return withCurrent(agent);
   });
 }

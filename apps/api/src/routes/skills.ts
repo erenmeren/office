@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { SkillFilesSchema } from '@office/shared';
 import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
+import { audit } from '../services/audit-service.js';
 import { addSkillVersion, createSkill, importGit, importLocal } from '../services/skill-service.js';
 
 const CreateSkill = z.object({ name: z.string().min(1).optional(), files: SkillFilesSchema });
@@ -77,6 +78,16 @@ export async function skillRoutes(app: FastifyInstance, opts: { config: Config }
     return reply.code(created ? 201 : 200).send(version);
   });
 
-  app.post('/skills/:id/approve', async (req) => setStatus((req.params as { id: string }).id, 'approved'));
-  app.post('/skills/:id/reject', async (req) => setStatus((req.params as { id: string }).id, 'rejected'));
+  app.post('/skills/:id/approve', async (req) => {
+    const { id } = req.params as { id: string };
+    const s = await setStatus(id, 'approved');
+    await audit(app.prisma, { userId: req.user!.id, action: 'skill.approved', targetType: 'skill', targetId: id });
+    return s;
+  });
+  app.post('/skills/:id/reject', async (req) => {
+    const { id } = req.params as { id: string };
+    const s = await setStatus(id, 'rejected');
+    await audit(app.prisma, { userId: req.user!.id, action: 'skill.rejected', targetType: 'skill', targetId: id });
+    return s;
+  });
 }

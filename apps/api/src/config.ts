@@ -1,5 +1,5 @@
 import { realpathSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { MessageLimitsSchema, type MessageLimits } from '@office/shared';
@@ -30,6 +30,7 @@ export interface Config {
   cookieSecret: string;
   webOrigin: string;
   dataDir: string;
+  artifactsDir: string;
   leaseSeconds: number;
   heartbeatSeconds: number;
   schedulerIntervalMs: number;
@@ -64,6 +65,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     cookieSecret: e.COOKIE_SECRET,
     webOrigin: e.WEB_ORIGIN,
     dataDir: e.OFFICE_DATA_DIR,
+    artifactsDir: join(e.OFFICE_DATA_DIR, 'artifacts'),
     leaseSeconds: e.OFFICE_LEASE_SECONDS,
     heartbeatSeconds: e.OFFICE_HEARTBEAT_SECONDS,
     schedulerIntervalMs: e.OFFICE_SCHEDULER_INTERVAL_MS,
