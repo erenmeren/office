@@ -596,8 +596,18 @@ export async function onReviewRunFinished(
   if (!mission || mission.status === 'cancelled' || (mission.reviewRunId && mission.reviewRunId !== run.id)) return;
   const parsed = ReviewDecisionSchema.safeParse(run.structuredOutput);
   const decisions = parsed.success ? parsed.data.tasks : [];
+  // tasks this run already decided through review_task: a reopened task may be back in review by now
+  const closedByTool = new Set(
+    (
+      await prisma.auditLog.findMany({
+        where: { action: 'task.reviewed', detail: { path: ['runId'], equals: run.id } },
+        select: { targetId: true },
+      })
+    ).map((a) => a.targetId),
+  );
   const applied: string[] = [];
   for (const d of decisions) {
+    if (closedByTool.has(d.taskId)) continue;
     const task = await prisma.task.findFirst({ where: { id: d.taskId, missionId: mission.id } });
     if (task?.status !== 'review') continue;
     try {
@@ -625,6 +635,9 @@ export async function onReviewRunFinished(
   const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
     await tx.mission.update({ where: { id: mission.id }, data: { summary } });
+    // a reopen unlinked this run (the mission went back to running): the next review settles the mission
+    const current = await tx.mission.findUniqueOrThrow({ where: { id: mission.id } });
+    if (current.reviewRunId !== run.id) return;
     const tasks = await tx.task.findMany({ where: { missionId: mission.id }, select: { status: true } });
     if (tasks.some((t) => RUNNABLE_TASK.includes(t.status))) {
       await moveMission(tx, outbox, mission.id, ['review', 'running'], { status: 'running', reviewRunId: null });

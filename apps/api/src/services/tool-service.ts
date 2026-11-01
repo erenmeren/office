@@ -250,7 +250,7 @@ async function run(
         const e = await evidenceFor(prisma, task.id);
         return { result: { ...e, rule: evidenceRule(e), consultations: await consultationsSatisfied(prisma, task) } };
       }
-      const closed = await closeTask(prisma, hub, task.id, args.decision, args.note, { chief: true });
+      const closed = await closeTask(prisma, hub, task.id, args.decision, args.note, { chief: true, runId: run.id });
       return { result: { taskId: closed.id, status: closed.status } };
     }
     case 'submit_summary': {

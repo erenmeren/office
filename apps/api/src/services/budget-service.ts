@@ -4,7 +4,7 @@ import { HttpError } from '../lib/errors.js';
 import { audit } from './audit-service.js';
 import type { EventHub, Outbox } from './event-hub.js';
 import { queueApproval } from './mission-service.js';
-import { agentAllowed, getSettings } from './project-service.js';
+import { agentAllowed } from './project-service.js';
 import type { Db } from './task-service.js';
 
 const LIVE_RUN = ['queued', 'running', 'waiting_reply', 'waiting_approval'] as const;
@@ -16,6 +16,20 @@ export const utcMidnight = (now = new Date()) =>
 export async function spentToday(db: Db, where: { agentId?: string; projectId?: string }) {
   const r = await db.usageRecord.aggregate({ where: { ...where, createdAt: { gte: utcMidnight() } }, _sum: { costUsd: true } });
   return r._sum.costUsd ?? 0;
+}
+
+/** Total cost of every run of the mission (plan, tasks, reviews). */
+export async function missionSpent(db: Db, missionId: string) {
+  const r = await db.usageRecord.aggregate({ where: { run: { missionId } }, _sum: { costUsd: true } });
+  return r._sum.costUsd ?? 0;
+}
+
+/** The project's daily budget, raised by one more daily budget per budget_exceeded approval decided today. */
+export async function dailyLimit(db: Db, settings: ProjectSettings, projectId: string) {
+  const approved = await db.approval.count({
+    where: { projectId, type: 'budget_exceeded', status: 'approved', decidedAt: { gte: utcMidnight() } },
+  });
+  return settings.dailyBudgetUsd * (1 + approved);
 }
 
 /** Runs holding a session: queued, running or waiting. */
@@ -35,8 +49,10 @@ export async function gate(db: Db, settings: ProjectSettings, task: Task, agent:
     return { ok: false, reason: 'agent daily budget spent' };
   }
   const mission = task.missionId ? await db.mission.findUnique({ where: { id: task.missionId } }) : null;
-  const limit = settings.dailyBudgetUsd + (mission?.budgetUsd ?? 0);
-  if ((await spentToday(db, { projectId: task.projectId })) >= limit) {
+  if (mission?.budgetUsd != null && (await missionSpent(db, mission.id)) >= mission.budgetUsd) {
+    return { ok: false, reason: 'mission budget exhausted', budgetExceeded: true };
+  }
+  if ((await spentToday(db, { projectId: task.projectId })) >= (await dailyLimit(db, settings, task.projectId))) {
     return { ok: false, reason: 'project daily budget spent', budgetExceeded: true };
   }
   if ((await runningCount(db, { projectId: task.projectId })) >= settings.maxConcurrentRuns) {
@@ -63,7 +79,7 @@ export async function requestBudgetApproval(prisma: PrismaClient, hub: EventHub,
   hub.publishAll(outbox);
 }
 
-/** Approves a pending budget_exceeded approval: the mission's budget grows by the project's daily budget. */
+/** Approves a pending budget_exceeded approval; dailyLimit counts it, raising today's project budget. */
 export async function approveBudget(prisma: PrismaClient, hub: EventHub, approvalId: string, userId: string) {
   const outbox: Outbox = [];
   const approval = await prisma.$transaction(async (tx) => {
@@ -75,10 +91,7 @@ export async function approveBudget(prisma: PrismaClient, hub: EventHub, approva
       data: { status: 'approved', decidedAt: new Date(), decidedByUserId: userId },
     });
     if (count === 0) throw new HttpError(409, 'approval_decided');
-    const settings = await getSettings(tx, a.projectId);
-    const mission = await tx.mission.findUniqueOrThrow({ where: { id: a.missionId } });
-    await tx.mission.update({ where: { id: mission.id }, data: { budgetUsd: (mission.budgetUsd ?? 0) + settings.dailyBudgetUsd } });
-    await audit(tx, { userId, action: 'budget.approved', targetType: 'mission', targetId: mission.id, detail: { approvalId } });
+    await audit(tx, { userId, action: 'budget.approved', targetType: 'mission', targetId: a.missionId, detail: { approvalId } });
     const decided = await tx.approval.findUniqueOrThrow({ where: { id: approvalId } });
     queueApproval(outbox, decided);
     return decided;

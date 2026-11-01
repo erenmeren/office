@@ -121,7 +121,7 @@ export class Scheduler {
             this.log.info({ taskId: task.id, reason: verdict.reason }, 'ready task held back');
           }
           if (verdict.budgetExceeded && task.missionId) {
-            await requestBudgetApproval(this.prisma, this.hub, task.missionId, `Project daily budget spent; approve to continue`);
+            await requestBudgetApproval(this.prisma, this.hub, task.missionId, `${verdict.reason}; approve to continue`);
           }
           continue;
         }

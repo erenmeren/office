@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ProjectSettingsSchema, type ProjectSettings } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
-import { spentToday } from '../services/budget-service.js';
+import { dailyLimit, spentToday } from '../services/budget-service.js';
 import { getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
 
 const CreateProject = z.object({
@@ -45,7 +45,8 @@ export async function projectRoutes(app: FastifyInstance) {
 
   app.get('/projects/:id/budget', async (req) => {
     const { id } = req.params as { id: string };
-    const { dailyBudgetUsd } = await getSettings(app.prisma, id);
+    // today's limit, including budget_exceeded approvals decided today
+    const dailyBudgetUsd = await dailyLimit(app.prisma, await getSettings(app.prisma, id), id);
     return { spentTodayUsd: await spentToday(app.prisma, { projectId: id }), dailyBudgetUsd };
   });
 

@@ -536,7 +536,17 @@ export async function completeRun(
   hub.publishAll(outbox);
   const finished = { ...run, status: status as TaskRun['status'], structuredOutput: (r.structuredOutput ?? null) as TaskRun['structuredOutput'] };
   if (run.kind === 'plan' && status === 'succeeded') await onPlanRunFinished(prisma, hub, finished);
-  if (run.kind === 'review' && status === 'succeeded') await onReviewRunFinished(prisma, hub, config, finished, log);
+  if (run.kind === 'review' && status === 'succeeded') {
+    try {
+      await onReviewRunFinished(prisma, hub, config, finished, log);
+    } catch (err) {
+      // unlink the run so the scheduler starts another review instead of leaving the mission stuck
+      log?.error({ err, runId }, 'applying the review run failed');
+      if (run.reviewOfMissionId) {
+        await prisma.mission.updateMany({ where: { id: run.reviewOfMissionId, reviewRunId: runId }, data: { reviewRunId: null } });
+      }
+    }
+  }
   if (run.kind === 'task' && run.missionId && (status === 'succeeded' || status === 'failed')) {
     // the run's result already committed; a failed notification must not fail the worker message
     try {

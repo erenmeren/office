@@ -90,9 +90,9 @@ async function setup() {
   const mission = (id: string) => t.prisma.mission.findUniqueOrThrow({ where: { id } });
   const task = (id: string) => t.prisma.task.findUniqueOrThrow({ where: { id } });
   /** An auto-approved mission with testPlan(); the plan run used the returned worker. */
-  const approved = async (capacity = 1, plan = testPlan()) => {
+  const approved = async (capacity = 1, plan = testPlan(), budgetUsd?: number) => {
     const w = await worker(capacity);
-    const res = await req('POST', '/missions', { projectId, request: 'Implement the mapping and fix the typo' });
+    const res = await req('POST', '/missions', { projectId, request: 'Implement the mapping and fix the typo', budgetUsd });
     const planSpec = await assign(w);
     await finish(w, planSpec, { status: 'succeeded', structuredOutput: plan });
     const m = await until(async () => {
@@ -251,7 +251,8 @@ describe('orchestration', () => {
 
     const user = await s.t.prisma.user.findFirstOrThrow();
     await approveBudget(s.t.prisma, s.t.app.hub, approvals[0]!.id, user.id);
-    expect((await s.mission(m.id)).budgetUsd).toBe(1);
+    expect((await s.mission(m.id)).budgetUsd).toBeNull();
+    expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 2 });
     await s.assign(w);
     expect(await s.t.prisma.taskRun.count({ where: { kind: 'task' } })).toBeGreaterThan(0);
   });
@@ -381,5 +382,121 @@ describe('orchestration', () => {
     const resumed = await s.assign(w);
     expect(resumed.runId).toBe(spec.runId);
     expect(resumed).toMatchObject({ taskKind: 'code', readOnlyCheckout: false, checkCommand: 'pnpm test', git: spec.git, maxBudgetUsd: 2 });
+  });
+
+  it('mission budget: spend across the mission at the cap holds its tasks and raises budget_exceeded', async () => {
+    s = await setup();
+    // the plan run alone costs 0.5
+    const { w, m, k } = await s.approved(2, testPlan(), 0.4);
+    const info = vi.spyOn((s.t.app.scheduler as unknown as { log: { info: (...a: unknown[]) => void } }).log, 'info');
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect(w.received.filter((x) => x.type === 'run.assign')).toHaveLength(1);
+    expect((await s.task(k.a)).status).toBe('ready');
+    const line = info.mock.calls.find(([o]) => (o as { taskId?: string }).taskId === k.a);
+    expect((line![0] as { reason: string }).reason).toBe('mission budget exhausted');
+    expect(await s.t.prisma.approval.count({ where: { missionId: m.id, type: 'budget_exceeded', status: 'pending' } })).toBe(1);
+  });
+
+  it('a late review run does not re-apply a decision it made through review_task', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, m, k } = await s.approved(2, plan);
+    const first = await s.assign(w);
+    await s.finish(w, first, { status: 'succeeded', git: git(1), check: check('failed') });
+    const review = await s.assign(w);
+    expect(review.kind).toBe('review');
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'reopen', note: 'fix it' })).toMatchObject({ ok: true });
+    expect(await s.mission(m.id)).toMatchObject({ status: 'running', reviewRunId: null });
+    const again = await s.assign(w);
+    expect(again.git?.taskSlug).toBe('a');
+    await s.finish(w, again, { status: 'succeeded', git: git(1), check: check('passed') });
+    expect((await s.mission(m.id)).status).toBe('review');
+    await s.finish(w, review, {
+      status: 'succeeded',
+      structuredOutput: { summary: 'old', tasks: [{ taskId: k.a, decision: 'reopen', note: 'fix it' }] },
+    });
+    expect((await s.task(k.a)).status).toBe('review');
+    expect((await s.mission(m.id)).status).toBe('review');
+  });
+
+  it('a failure while applying the review unlinks the run; the next tick starts a new review', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, m } = await s.approved(1, plan);
+    const run = await s.assign(w);
+    await s.finish(w, run, { status: 'succeeded', git: git(1), check: check('passed') });
+    const review = await s.assign(w);
+    const dir = s.t.config.artifactsDir;
+    s.t.config.artifactsDir = '/dev/null/artifacts'; // mkdir fails
+    try {
+      await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'x', tasks: [] } });
+    } finally {
+      s.t.config.artifactsDir = dir;
+    }
+    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: null });
+    const next = await s.assign(w);
+    expect(next.kind).toBe('review');
+    expect(next.runId).not.toBe(review.runId);
+  });
+
+  it('failed task with nothing runnable -> review -> failed; owner retry -> running, blocked dependent re-readied, final review -> done', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a' || x.key === 'b');
+    const { w, m, k } = await s.approved(1, plan);
+    for (let i = 0; i < 2; i++) await s.finish(w, await s.assign(w), { status: 'failed', error: 'boom' });
+    expect(await s.statuses(m.id)).toEqual({ a: 'failed', b: 'blocked' });
+    expect((await s.mission(m.id)).status).toBe('review');
+    let review = await s.assign(w);
+    expect(review.kind).toBe('review');
+    await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'a failed', tasks: [] } });
+    expect((await s.mission(m.id)).status).toBe('failed');
+
+    expect((await s.req('POST', `/tasks/${k.a}/retry`)).statusCode).toBe(200);
+    expect((await s.mission(m.id)).status).toBe('running');
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('passed') });
+    expect((await s.mission(m.id)).status).toBe('review');
+    review = await s.assign(w);
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: true });
+    expect(await s.statuses(m.id)).toEqual({ a: 'done', b: 'ready' });
+    await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'a done', tasks: [] } });
+    expect((await s.mission(m.id)).status).toBe('running');
+
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('passed') });
+    review = await s.assign(w);
+    await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'all done', tasks: [{ taskId: k.b, decision: 'done' }] } });
+    expect(await s.statuses(m.id)).toEqual({ a: 'done', b: 'done' });
+    expect(await s.mission(m.id)).toMatchObject({ status: 'done', summary: 'all done' });
+  });
+
+  it('a failed review run is retried once; a second failure fails the mission', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, m } = await s.approved(1, plan);
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: git(1), check: check('passed') });
+    const r1 = await s.assign(w);
+    await s.finish(w, r1, { status: 'failed', error: 'overloaded' });
+    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: null });
+    const r2 = await s.assign(w);
+    expect(r2.kind).toBe('review');
+    expect(r2.runId).not.toBe(r1.runId);
+    await s.finish(w, r2, { status: 'failed', error: 'overloaded' });
+    expect((await s.mission(m.id)).status).toBe('failed');
+  });
+
+  it('unintegrated commits fail the code evidence rule', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key === 'a');
+    const { w, k } = await s.approved(1, plan);
+    await s.finish(w, await s.assign(w), { status: 'succeeded', git: { ...git(1), integration: 'needs_integration' }, check: check('passed') });
+    const review = await s.assign(w);
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({
+      ok: false, code: 'evidence_missing', error: 'commits not integrated',
+    });
   });
 });

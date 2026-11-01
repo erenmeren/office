@@ -49,6 +49,7 @@ export function evidenceRule(e: Pick<Evidence, 'task' | 'runs' | 'artifacts' | '
     if (!last) return { ok: false, reason: 'no succeeded run' };
     // shortcut: filesChanged is not stored; a head commit past the base stands for it
     if (!last.git || last.git.headCommit === last.git.baseCommit) return { ok: false, reason: 'the latest succeeded run changed no files' };
+    if (last.git.integration !== 'fast_forwarded') return { ok: false, reason: 'commits not integrated' };
     if (last.check?.status !== 'passed') return { ok: false, reason: `check ${last.check?.status ?? 'missing'} on the latest succeeded run` };
     return { ok: true };
   }
@@ -87,7 +88,8 @@ export async function consultationsSatisfied(db: Db, task: Task): Promise<{ ok: 
   return { ok: missing.length === 0, missing };
 }
 
-export type CloseBy = { chief?: true; userId?: string; override?: boolean };
+/** `runId`: the Chief's review run deciding through review_task. */
+export type CloseBy = { chief?: true; runId?: string; userId?: string; override?: boolean };
 
 /**
  * review -> done or review -> ready (reopen). `done` needs the evidence rule and the required consultations
@@ -121,7 +123,7 @@ export async function closeTask(
       action: by.override ? 'task.override' : 'task.reviewed',
       targetType: 'task',
       targetId: taskId,
-      detail: { decision, note: note ?? null, by: by.chief ? 'chief' : 'owner' },
+      detail: { decision, note: note ?? null, by: by.chief ? 'chief' : 'owner', runId: by.runId ?? null },
     });
     return updated;
   });
