@@ -30,6 +30,7 @@ import type {
 } from '@office/shared';
 
 const TOOL_TIMEOUT_MS = 30_000;
+const INTEGRATION_CHECK_TIMEOUT_MS = 30_000;
 // message type of each messaging tool; send_message takes it from its args
 const SENT_TYPES: Partial<Record<OfficeToolName, string>> = {
   send_message: 'message',
@@ -116,6 +117,8 @@ export class RunExecutor {
   private pendingTools = new Map<string, { runId: string; resolve: (r: ToolCallResult) => void; timer: NodeJS.Timeout }>();
   // the API's approval timeout answers first; the worker's own timer is a backstop for a lost answer
   private pendingApprovals = new Map<string, { runId: string; resolve: (d: ApprovalDecision) => void; timer: NodeJS.Timeout }>();
+  // integration.check round trips, one per run, settled by integration.allowed or a 30 s timer
+  private pendingIntegrations = new Map<string, { resolve: (reason: string | null) => void; timer: NodeJS.Timeout }>();
   private worktreesDir: string;
   private reposDir: string;
 
@@ -164,6 +167,24 @@ export class RunExecutor {
     pending.resolve(decision);
   }
 
+  /** Settles a run's pending integration.check; unknown or late answers are ignored. */
+  resolveIntegration(runId: string, ok: boolean, reason?: string): void {
+    const pending = this.pendingIntegrations.get(runId);
+    if (!pending) return;
+    this.pendingIntegrations.delete(runId);
+    clearTimeout(pending.timer);
+    pending.resolve(ok ? null : (reason ?? 'lease lost'));
+  }
+
+  /** Asks the API whether this worker still holds the run's lease; resolves null if so, else the reason. */
+  private checkLease(runId: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => this.resolveIntegration(runId, false, 'lease check timed out'), INTEGRATION_CHECK_TIMEOUT_MS);
+      this.pendingIntegrations.set(runId, { resolve, timer });
+      this.send({ type: 'integration.check', runId });
+    });
+  }
+
   activeRunIds(): string[] {
     return [...this.active.keys()];
   }
@@ -177,6 +198,7 @@ export class RunExecutor {
     for (const [requestId, p] of [...this.pendingApprovals]) {
       if (p.runId === runId) this.resolveApproval(runId, { requestId, decision: 'deny', message: 'run cancelled' });
     }
+    this.resolveIntegration(runId, false, 'run cancelled');
   }
 
   accept(spec: RunSpec): void {
@@ -347,11 +369,19 @@ export class RunExecutor {
           }
         : { command: '', status: 'skipped', exitCode: null, durationMs: 0, output: '' };
       if (collected.commits.length > 0 && check.status !== 'failed' && check.status !== 'timeout') {
-        const remote = g.remote ? { credential: this.credential(), baseCommit: wt.baseCommit, runBranch: wt.branch } : undefined;
-        integration = await fastForward(wt.repo, g.missionBranch, collected.headCommit, remote, (reason) => {
+        const failed = (reason: string) => {
           integrationReason = reason;
           emit({ type: 'agent.integration.failed', payload: { reason } });
-        });
+        };
+        // a worker whose lease was lost (run reassigned) must not move the mission branch
+        const leaseProblem = await this.checkLease(spec.runId);
+        if (leaseProblem) {
+          integration = 'needs_integration';
+          failed(leaseProblem);
+        } else {
+          const remote = g.remote ? { credential: this.credential(), baseCommit: wt.baseCommit, runBranch: wt.branch } : undefined;
+          integration = await fastForward(wt.repo, g.missionBranch, collected.headCommit, remote, failed);
+        }
       }
     }
     // a suspended run resumes here; unintegrated commits stay on disk for inspection until swept

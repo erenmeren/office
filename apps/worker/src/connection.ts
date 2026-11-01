@@ -32,9 +32,9 @@ export class WorkerConnection {
   private socket?: WebSocket;
   private credential: string | null = null;
   private backoffMs: number;
-  // results produced while disconnected, sent after the next welcome
+  // results not yet acknowledged by the API (run.result.ack), re-sent after every welcome
   private unsentResults = new Map<string, WorkerToApi>();
-  // approval requests made while disconnected, sent after the next welcome; the API's timeout then applies
+  // approval requests and integration checks made while disconnected, sent after the next welcome
   private unsentApprovals = new Map<string, WorkerToApi>();
   private heartbeatTimer?: NodeJS.Timeout;
   private reconnectTimer?: NodeJS.Timeout;
@@ -168,10 +168,19 @@ export class WorkerConnection {
         return;
       case 'run.assign':
         this.log.info({ runId: msg.spec.runId }, 'run assigned');
+        // a resumed run: the API has applied its previous (suspended) result, so a stale copy must not be re-sent
+        if (this.unsentResults.delete(msg.spec.runId)) await this.outbox.delete(msg.spec.runId);
         this.executor.accept(msg.spec);
         return;
       case 'tool.result':
         this.executor.resolveTool(msg.callId, msg.result);
+        return;
+      case 'run.result.ack':
+        this.unsentResults.delete(msg.runId);
+        await this.outbox.delete(msg.runId);
+        return;
+      case 'integration.allowed':
+        this.executor.resolveIntegration(msg.runId, msg.ok, msg.reason);
         return;
       case 'approval.result':
         this.executor.resolveApproval(msg.runId, msg.decision);
@@ -208,15 +217,13 @@ export class WorkerConnection {
   private send(msg: WorkerToApi) {
     const open = this.socket?.readyState === WebSocket.OPEN;
     if (msg.type === 'run.result') {
-      // persist first, then send if the socket is open by then; the entry goes after a send
+      // persist first, then send if the socket is open by then; the entry goes on run.result.ack (or a lost-lease error)
       this.unsentResults.set(msg.runId, msg);
       void this.outbox
         .put(msg.runId, msg)
-        .then(async () => {
+        .then(() => {
           if (this.socket?.readyState !== WebSocket.OPEN || this.unsentResults.get(msg.runId) !== msg) return;
           this.socket.send(JSON.stringify(msg));
-          this.unsentResults.delete(msg.runId);
-          await this.outbox.delete(msg.runId);
         })
         .catch((err) => this.log.error({ err, runId: msg.runId }, 'result outbox failed'));
       return;
@@ -229,6 +236,11 @@ export class WorkerConnection {
     // one already sent stays pending across a reconnect; the API re-sends its decision
     if (msg.type === 'approval.request' && !open) {
       this.unsentApprovals.set(msg.request.requestId, msg);
+      return;
+    }
+    // the executor's 30 s timer bounds the wait for a reconnect
+    if (msg.type === 'integration.check' && !open) {
+      this.unsentApprovals.set(`integration:${msg.runId}`, msg);
       return;
     }
     if (open) this.socket!.send(JSON.stringify(msg));

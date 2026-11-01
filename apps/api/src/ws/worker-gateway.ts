@@ -37,6 +37,8 @@ function realOrResolved(path: string) {
   }
 }
 
+const FINAL_RUN = new Set(['succeeded', 'failed', 'cancelled']);
+
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 
 // emitted by the API itself; a worker must not forge them
@@ -288,10 +290,20 @@ export class WorkerGateway {
         if (decision) this.send(workerId, { type: 'approval.result', runId: run.id, decision });
         return;
       }
-      case 'run.result':
-        await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
+      case 'run.result': {
+        const prior = await this.prisma.taskRun.findUnique({ where: { id: msg.runId }, select: { workerId: true, status: true } });
+        // a resend after a lost ack: already final on this worker with the same outcome, so ack without applying it again
+        const resend = prior?.workerId === workerId && FINAL_RUN.has(prior.status) && prior.status === msg.result.status;
+        if (!resend) await completeRun(this.prisma, this.hub, this.config, { runId: msg.runId, workerId, result: msg.result }, this.log);
         this.releaseRun(workerId, msg.runId);
+        this.send(workerId, { type: 'run.result.ack', runId: msg.runId });
         return;
+      }
+      case 'integration.check': {
+        const run = await findLeasedRun(this.prisma, msg.runId, workerId);
+        this.send(workerId, { type: 'integration.allowed', runId: msg.runId, ...(run ? { ok: true } : { ok: false, reason: 'lease lost' }) });
+        return;
+      }
     }
   }
 }

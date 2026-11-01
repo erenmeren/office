@@ -71,7 +71,9 @@ function harness(reply?: (msg: WorkerToApi, ws: WebSocket) => void) {
   const wss = new WebSocketServer({ port: 0 });
   cleanup.push(() => new Promise((r) => wss.close(r)));
   const received: WorkerToApi[] = [];
+  const sockets: WebSocket[] = [];
   wss.on('connection', (ws) => {
+    sockets.push(ws);
     ws.on('message', (d) => {
       const msg = JSON.parse(String(d)) as WorkerToApi;
       received.push(msg);
@@ -88,11 +90,16 @@ function harness(reply?: (msg: WorkerToApi, ws: WebSocket) => void) {
     cleanup.push(() => conn.stop());
     return conn;
   };
-  return { home, received, make };
+  return { home, received, sockets, make };
 }
 
+const ack = (msg: WorkerToApi, ws: WebSocket) => {
+  if (msg.type === 'run.result') ws.send(JSON.stringify({ type: 'run.result.ack', runId: msg.runId }));
+};
+const send = (conn: WorkerConnection, m: WorkerToApi) => (conn as unknown as { send(m: WorkerToApi): void }).send(m);
+
 it('a result produced while disconnected survives a restart and is sent after the next welcome', async () => {
-  const { home, received, make } = harness();
+  const { home, received, make } = harness(ack);
   const first = make();
   (first as unknown as { send(m: WorkerToApi): void }).send(result('r9'));
   await until(() => existsSync(join(home, 'outbox', 'r9.json')), 'outbox file not written');
@@ -114,4 +121,31 @@ it('removes the outbox entry after the API rejects it for a lost lease', async (
   await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
   await until(() => !existsSync(join(home, 'outbox', 'r8.json')), 'outbox entry not removed');
   expect((second as unknown as { unsentResults: Map<string, unknown> }).unsentResults.size).toBe(0);
+});
+
+it('keeps the outbox entry until run.result.ack arrives and resends it after a reconnect', async () => {
+  let acking = false;
+  const { home, received, sockets, make } = harness((msg, ws) => acking && ack(msg, ws));
+  const conn = make();
+  await conn.start();
+  send(conn, result('r7'));
+  await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
+  // no ack: the entry stays on disk and the run stays reported as active
+  await new Promise((r) => setTimeout(r, 100));
+  expect(existsSync(join(home, 'outbox', 'r7.json'))).toBe(true);
+  acking = true;
+  sockets[0]!.terminate();
+  await until(() => received.filter((m) => m.type === 'run.result').length === 2, 'result not resent after reconnect');
+  expect(received.filter((m) => m.type === 'hello')[1]).toMatchObject({ activeRunIds: ['r7'] });
+  await until(() => !existsSync(join(home, 'outbox', 'r7.json')), 'outbox entry not removed after ack');
+});
+
+it('deletes the outbox entry on ack', async () => {
+  const { home, received, make } = harness(ack);
+  const conn = make();
+  await conn.start();
+  send(conn, result('r6'));
+  await until(() => received.some((m) => m.type === 'run.result'), 'result not sent');
+  await until(() => !existsSync(join(home, 'outbox', 'r6.json')), 'outbox entry not removed after ack');
+  expect((conn as unknown as { unsentResults: Map<string, unknown> }).unsentResults.size).toBe(0);
 });

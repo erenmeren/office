@@ -51,6 +51,8 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
     sessionId: z.string(),
     request: ApprovalRequestSchema,
   }),
+  /** Asked right before a fast-forward; the API answers `integration.allowed`. */
+  z.object({ type: z.literal('integration.check'), runId: z.string() }),
 ]);
 export type WorkerToApi = z.infer<typeof WorkerToApiSchema>;
 
@@ -60,6 +62,9 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run.cancel'), runId: z.string() }),
   z.object({ type: z.literal('tool.result'), callId: z.string(), result: ToolCallResultSchema }),
   z.object({ type: z.literal('approval.result'), runId: z.string(), decision: ApprovalDecisionSchema }),
+  /** The run.result was applied (or was already, for a resend); the worker may drop it from its outbox. */
+  z.object({ type: z.literal('run.result.ack'), runId: z.string() }),
+  z.object({ type: z.literal('integration.allowed'), runId: z.string(), ok: z.boolean(), reason: z.string().optional() }),
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type ApiToWorker = z.infer<typeof ApiToWorkerSchema>;

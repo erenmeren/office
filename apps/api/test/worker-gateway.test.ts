@@ -220,4 +220,65 @@ describe('worker gateway', () => {
     expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: lost.id } })).status).toBe('lost');
     await re.close();
   });
+  const leasedChatRun = async (workerId: string) => {
+    const project = await t.prisma.project.create({ data: { name: 'P', slug: 'p', repoPath: '/tmp/p' } });
+    const agent = await t.prisma.agent.create({ data: { name: 'dev', slug: 'dev', role: 'dev' } });
+    const version = await t.prisma.agentVersion.create({ data: { agentId: agent.id, version: 1, config: {} } });
+    const run = await t.prisma.taskRun.create({
+      data: {
+        agentId: agent.id, projectId: project.id, agentVersionId: version.id, status: 'running', kind: 'chat',
+        workerId, leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const session = await t.prisma.agentSession.create({
+      data: { runId: run.id, agentId: agent.id, projectId: project.id, model: 'sonnet', status: 'running', startedAt: new Date() },
+    });
+    return { run, session };
+  };
+  const usage = { inputTokens: 1, outputTokens: 1, costUsd: 0.01, numTurns: 1, durationMs: 1 };
+
+  it('acks an accepted run.result and a resend of an already-final run owned by this worker', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    const { run, session } = await leasedChatRun(id);
+    const result = { type: 'run.result', runId: run.id, sessionId: session.id, result: { status: 'succeeded', usage } } as const;
+
+    w.send(result);
+    expect(await w.waitFor('run.result.ack')).toEqual({ type: 'run.result.ack', runId: run.id });
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded');
+
+    // the ack was lost: the resend is acknowledged, not applied twice
+    w.send(result);
+    expect(await w.waitFor('run.result.ack')).toEqual({ type: 'run.result.ack', runId: run.id });
+    expect(await t.prisma.usageRecord.count({ where: { runId: run.id } })).toBe(1);
+
+    // a different outcome for the finished run is not a resend
+    w.send({ ...result, result: { status: 'failed', usage } });
+    expect(await w.waitFor('error')).toMatchObject({ message: `No live lease for run ${run.id} on this worker` });
+    expect(w.received.filter((m) => m.type === 'run.result.ack')).toHaveLength(2);
+
+    // a final run this worker never owned is rejected
+    const other = await t.prisma.worker.create({ data: { name: 'w2', status: 'online' } });
+    await t.prisma.taskRun.update({ where: { id: run.id }, data: { workerId: other.id } });
+    w.send(result);
+    expect(await w.waitFor('error')).toMatchObject({ message: `No live lease for run ${run.id} on this worker` });
+    await w.close();
+  });
+
+  it('answers integration.check ok only while the lease is live', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    const { run } = await leasedChatRun(id);
+
+    w.send({ type: 'integration.check', runId: run.id });
+    expect(await w.waitFor('integration.allowed')).toEqual({ type: 'integration.allowed', runId: run.id, ok: true });
+
+    await t.prisma.taskRun.update({ where: { id: run.id }, data: { leaseExpiresAt: new Date(Date.now() - 1000) } });
+    w.send({ type: 'integration.check', runId: run.id });
+    expect(await w.waitFor('integration.allowed')).toEqual({ type: 'integration.allowed', runId: run.id, ok: false, reason: 'lease lost' });
+
+    w.send({ type: 'integration.check', runId: 'unknown' });
+    expect(await w.waitFor('integration.allowed')).toMatchObject({ runId: 'unknown', ok: false });
+    await w.close();
+  });
 });
