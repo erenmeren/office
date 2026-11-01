@@ -4,7 +4,7 @@
 |-------|--------|
 | 1 | done |
 | 2 | done |
-| 3 | in progress (real-Claude acceptance attempt 2: the developer did not write `docs/db-decision.md`, which was left over from attempt 1; see "Phase 3 evidence") |
+| 3 | done |
 | 4 | not started |
 | 5 | not started |
 | 6 | not started |
@@ -29,7 +29,7 @@ Phase 2:
 Web UI (between Phase 2 and Phase 3, 2026-11-01): the web app follows the "Claude Agent Office — Web UI" design (Foundations and Mission Control artboards). Design tokens (colors, fonts, the `glass` and `aurora` utilities) live in `apps/web/src/app/globals.css`; every visual piece is a component under `apps/web/src/components/ui` in the shadcn pattern (`cva` variants, `cn`, `data-slot`), so a redesign changes tokens and components, not pages. New: `AppShell` (sidebar, header), `StatusPill`/`StatusDot`, `AgentAvatar`, `Progress`, `PageHeader`, `Kv`, `TaskNode`, `PlanGraph` (layered layout in `src/lib/plan-layout.ts`, tested), `ChiefComposer` (creates a task for the agent with slug `chief`), `TaskDetail`, and the `/mission-control` page. Not built, because their data arrives later: the approval card and the "send an instruction" box (Phase 3/4 messaging and approvals), plan versions and dependency edges (Phase 4 Chief planning; `PlanGraph` already draws `dependsOn` arrows), the budget-today bar in the header. Fonts (Bricolage Grotesque, Instrument Sans, JetBrains Mono; SIL OFL) are self-hosted variable woff2 files under `apps/web/src/app/fonts` via `next/font/local`; the UI makes no request outside localhost. A Playwright suite (`apps/web/e2e`) renders every page and fails on any console error or warning, any external request, or a broken Mission Control interaction; `/auth/me` answers 200 `{ setupRequired: false, anonymous: true }` when logged out so the login page produces no 401 in the console.
 
 Phase 3 (messaging and memory):
-- **Open acceptance item.** In acceptance attempt 2 the developer did not write `docs/db-decision.md`: the file was left in the sandbox from attempt 1 and already matched the architect's answer. Every other expectation held, `agent.waiting_reply` included. A third attempt with the file removed first, or a ruling that attempt 1's write counts, closes it.
+- Acceptance attempt 2 did not rewrite `docs/db-decision.md` because the file was left in the sandbox from attempt 1 (see "Verdict" under "Phase 3 evidence"). The owner may re-run the acceptance on a clean sandbox.
 - Fixed: `ClaudeAdapter` did not emit `agent.waiting_reply` in attempt 1; bd3d78a adds it, and attempt 2 recorded it (seq 14).
 - Fixed: the Playwright test "owner messages an agent" failed after attempt 1, because a thread switch cleared the composer after the test filled it. The test now waits for the `You and <agent>` thread heading before filling. The suite passes 8 of 8.
 - Delivery into a live session (streaming input) is not built. Messages reach a live session only through `read_inbox` or at the next run boundary.
@@ -49,7 +49,7 @@ Phase 3 (messaging and memory):
 - Known wart: `apps/worker/test/e2e-phase3.test.ts` imports the seed from `packages/db/dist/seed.js` by relative path; `@office/db` should export it.
 - The Playwright memory test no longer touches proposed entries. It opens the review filter and checks that `Needs review` entries are listed, but it never clicks `Verify`. It verifies only the entry it creates.
 - Data note for the owner: the dev database holds two agent proposals from acceptance attempt 1, `32f129b5` (decision) and `b244a807` (known issue). They are `verified` only because the earlier Playwright memory test verified them (07:25:25Z and 07:23:53Z); no person reviewed them. Re-check or reject them in Project Memory. The suite's `E2E decision` rows ("Use Postgres for everything.") are verified too and reach agents' context packs; delete them if they are not wanted.
-- The Project Memory detail pane labels a summarizer-written `task_summary` "Verified by you".
+- "Verified by you" label: task summaries written by `office-summarizer` show "Verified by you" in the Project Memory detail pane, although no person verified them.
 
 Phase 4 (Chief and orchestration): per-run git worktrees and the mission branch, dummy env template, platform-side `checkCommand`, approvals (`canUseTool` gates, `approvalTimeoutMinutes`), scheduler budgets, `waiting_reply` / `waiting_approval` lifecycle, Chief planning and evidence-based review (Phase 1 auto-moves `review` to `done`), required consultations, Mission Control.
 
@@ -171,7 +171,7 @@ Worker log note: the SDK printed `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` for the deve
 
 ### Phase 3 acceptance, attempt 2 (real Claude)
 
-Date: 2026-11-01, after bd3d78a (`ClaudeAdapter` emits `agent.waiting_reply` on suspend). The runtime `dist` was rebuilt and the worker restarted by pid; it logged `connected to API` at 07:34:36Z. Setup, driver and task text are the same as in attempt 1. One attempt, no retry. Result: **one expectation not met**. `agent.waiting_reply` is now emitted and every other expectation held, but the developer did not write `docs/db-decision.md`. The file was still in the sandbox from attempt 1, because the implementer did not remove it before this attempt. The developer read it, found that it matched the architect's answer and left it unchanged (seq 21: "The file already matches the architect's answer, so I'll leave it unchanged and propose the memory."). Attempt 1 shows that the write path works with the same code (bd3d78a changes only the adapter's suspend event). Closing this expectation needs either a third attempt with the file removed first or a ruling that attempt 1's write counts.
+Date: 2026-11-01, after bd3d78a (`ClaudeAdapter` emits `agent.waiting_reply` on suspend). The runtime `dist` was rebuilt and the worker restarted by pid; it logged `connected to API` at 07:34:36Z. Setup, driver and task text are the same as in attempt 1. One attempt, no retry. Result: **one expectation not met (see Verdict)**. `agent.waiting_reply` is now emitted and every other expectation held, but the developer did not write `docs/db-decision.md`. The file was still in the sandbox from attempt 1, because the implementer did not remove it before this attempt. The developer read it, found that it matched the architect's answer and left it unchanged (seq 21: "The file already matches the architect's answer, so I'll leave it unchanged and propose the memory."). Attempt 1 shows that the write path works with the same code (bd3d78a changes only the adapter's suspend event). The controller ruled on this (see "Verdict" below).
 
 | Run | Kind | Agent | Run id | Session | Created | Finished | Cost (USD) |
 |---|---|---|---|---|---|---|---|
@@ -230,6 +230,10 @@ Second task: `Say hello` `325ba285-12e0-439d-aa91-e9965e55ccf8`, created 07:37:1
 Cost: 0.17197469 USD for the attempt 2 chain (developer, architect inbox, summary), and 0.20916532 USD with the second task and its summary. Phase 3 acceptance total over both attempts: 0.61628532 USD.
 
 Observation: the Project Memory detail pane labels a summarizer-written `task_summary` "Verified by you", although no owner verified it.
+
+### Verdict
+
+Phase 3 is `done` by controller ruling. The spec §17 Phase 3 acceptance (two agents exchange messages, finish, memory saved, sessions closed and reopened, history and memory retrievable with sources) holds across attempts 1 and 2. The two attempts ran the same code except for the adapter's suspend event. Attempt 1 proved the file write and the tool flow. Attempt 2 proved `agent.waiting_reply` and everything else. The file expectation was not met in attempt 2 because `docs/db-decision.md` already existed in the sandbox; this is a leftover-file artifact of the sandbox, not a defect. The owner may re-run the acceptance on a clean sandbox.
 
 ## Phase 2 decisions
 

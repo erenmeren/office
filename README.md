@@ -1,6 +1,6 @@
 # Claude Agent Office
 
-A control plane that turns Claude Code sessions into a persistent AI software team. Phases 1 (foundation) and 2 (agents and skills) are done, and Phase 3 (messaging and memory) is built with one open acceptance item; see `docs/progress.md` for what is done and what is outstanding.
+A control plane that turns Claude Code sessions into a persistent AI software team. Phases 1 (foundation), 2 (agents and skills) and 3 (messaging and memory) are done; see `docs/progress.md` for what is done and what is outstanding.
 
 ## 1. What it is
 
