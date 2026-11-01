@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { skillChecksum, skillPromptSection, validateSkillFiles } from './skill.js';
+import { parseSkillFrontmatter, skillChecksum, skillPromptSection, validateSkillFiles } from './skill.js';
 
 const ok = {
   'SKILL.md': '---\nname: tdd\ndescription: "Write the test first"\n---\n# TDD\n',
@@ -50,5 +50,9 @@ describe('skillPromptSection', () => {
     expect(s).toContain('invoke the Skill tool for each of these skills and follow them: a.');
     expect(s).toContain('available when relevant: b.');
     expect(skillPromptSection([])).toBe('');
+  });
+
+  it('parseSkillFrontmatter reads model', () => {
+    expect(parseSkillFrontmatter('---\nname: a\ndescription: b\nmodel: "haiku"\n---\n')).toEqual({ name: 'a', description: 'b', model: 'haiku' });
   });
 });

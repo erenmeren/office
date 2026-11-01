@@ -173,8 +173,25 @@ export interface Skill {
   createdAt: string;
   currentVersion: SkillVersion | null;
   versions?: SkillVersion[];
+  /** list only: `model:` frontmatter of the current version, and agents whose current version pins the skill */
+  model?: string | null;
+  usedBy?: string[];
+}
+export interface MarketSkill {
+  id: string;
+  source: string;
+  skillId: string;
+  name: string;
+  installs: number;
 }
 export const useSkills = () => useQuery({ queryKey: ['skills'], queryFn: () => api<Skill[]>('/skills') });
+export const useMarketSearch = (q: string) =>
+  useQuery({
+    queryKey: ['skills', 'market', q],
+    queryFn: () => api<{ skills: MarketSkill[] }>(`/skills/market?q=${encodeURIComponent(q)}`),
+    enabled: q.trim().length > 0,
+    staleTime: 60_000,
+  });
 export const useSkill = (id: string) => useQuery({ queryKey: ['skill', id], queryFn: () => api<Skill>(`/skills/${id}`) });
 export const useRunSubagents = (runId: string, active: boolean) =>
   useQuery({

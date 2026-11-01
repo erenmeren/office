@@ -1,6 +1,6 @@
 'use client';
 
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
@@ -8,19 +8,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
-import { ApiError, post } from '@/lib/api';
+import { del, post } from '@/lib/api';
 import { useSkill } from '@/lib/queries';
-
-function errorText(err: unknown): string {
-  const b = err instanceof ApiError ? (err.body as { error?: string; code?: string; message?: string } | undefined) : undefined;
-  return b?.error === 'invalid_skill' ? `${b.code}: ${b.message}` : String(err);
-}
+import { skillErrorText, skillSourceLabel } from '@/lib/skills';
 
 const PRE = 'whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-sm';
 
 export default function SkillPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
+  const router = useRouter();
   const skill = useSkill(id);
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -40,7 +37,7 @@ export default function SkillPage() {
       await fn();
       await refresh();
     } catch (err) {
-      setError(errorText(err));
+      setError(skillErrorText(err));
     }
   };
 
@@ -60,10 +57,28 @@ export default function SkillPage() {
         <h1 className="font-mono text-xl font-semibold">{s.name}</h1>
         <Badge variant="outline">{s.status}</Badge>
         <span className="text-sm text-muted-foreground">
-          {s.source}
+          {skillSourceLabel(s.source)}
           {s.sourceRef ? ` · ${s.sourceRef}` : ''}
         </span>
         <div className="ml-auto space-x-2">
+          {s.source !== 'ui' && (
+            <Button size="sm" variant="outline" onClick={() => act(() => post(`/skills/${id}/update`))}>
+              Update from source
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              if (!window.confirm(`Delete "${s.name}" and all its versions?`)) return;
+              void act(async () => {
+                await del(`/skills/${id}`);
+                router.push('/skills');
+              });
+            }}
+          >
+            Delete
+          </Button>
           {s.status !== 'approved' && (
             <Button size="sm" onClick={() => act(() => post(`/skills/${id}/approve`))}>
               Approve

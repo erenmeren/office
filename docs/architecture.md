@@ -44,7 +44,7 @@ A run whose lease expires becomes `lost`, and the task goes back to `ready` whil
 
 ## Skills and subagents
 
-A `Skill` is a named directory of files (`SKILL.md` with `name` and `description` frontmatter, plus optional supporting files). Every change creates an immutable `SkillVersion` with a SHA-256 checksum of its files. Skills are authored in the UI (`approved` at once) or imported from a local directory or a git repository (`pending_review` until the owner approves them). Only `approved` skills can be pinned.
+A `Skill` is a named directory of files (`SKILL.md` with `name` and `description` frontmatter, plus optional supporting files). Every change creates an immutable `SkillVersion` with a SHA-256 checksum of its files. Skills are authored in the UI (`approved` at once) or imported from a local directory, a git repository or the skills.sh marketplace (`pending_review` until the owner approves them). Only `approved` skills can be pinned. A marketplace install (`POST /skills/import {source:'market', id:'<owner>/<repo>/<skill>'}`) clones `https://github.com/<owner>/<repo>` and takes the directory whose `SKILL.md` is named `<skill>`; it is stored as a `git` skill. `POST /skills/:id/update` re-reads a git or local skill from its `sourceRef` and adds a version when the content changed; `DELETE /skills/:id` hard-deletes a skill unless an agent version pins it (`409 skill_pinned`). `GET /skills/market?q=` proxies the skills.sh search so the browser never calls outside localhost. The `model:` frontmatter of a skill is shown as a badge; the SDK reads it from the materialized `SKILL.md`.
 
 An agent version pins skills (`AgentSkill`: skill, exact skill version, mode `eager` or `on_demand`) and defines native subagents (`AgentSubagent`: name, description, prompt, tools, model, turn limit and the pinned skills it may use). Both belong to the `AgentVersion` and change only by creating a new version.
 
@@ -142,7 +142,7 @@ Built in Phase 1 (Prisma schema in `packages/db/prisma/schema.prisma`, logic in 
 
 Built in Phase 2:
 
-- `Skill`, `SkillVersion`: `routes/skills.ts`, `services/skill-service.ts`; library, import (local, git), versions, approve and reject.
+- `Skill`, `SkillVersion`: `routes/skills.ts`, `services/skill-service.ts`; library, import (local, git, market), marketplace search proxy, update from source, delete, versions, approve and reject.
 - `AgentSkill`, `AgentSubagent`: `routes/agents.ts`, `services/agent-service.ts`; skill pins and subagents of an `AgentVersion`.
 - `SubagentRun`: `services/subagent-service.ts`; one row per subagent call, recorded from `agent.subagent.*` events.
 - `AgentSession.skillsSnapshot`: the pins a session ran with.
