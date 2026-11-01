@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, readlinkSync, renameSync, symlinkSync } from 'node:fs';
+import { mkdirSync, readlinkSync, renameSync, rmSync, symlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { PassThrough, type Readable } from 'node:stream';
@@ -14,7 +14,7 @@ const GIT_PATH = /^(?:info\/refs|git-upload-pack|git-receive-pack|HEAD|objects\/
 /** `<dataDir>/git-roots/<projectId>/repo` → repoPath, refreshed atomically on every request. */
 function projectRoot(dataDir: string, projectId: string, repoPath: string): string {
   const root = join(dataDir, 'git-roots', projectId);
-  mkdirSync(root, { recursive: true });
+  mkdirSync(root, { recursive: true, mode: 0o700 });
   const link = join(root, 'repo');
   let current: string | undefined;
   try {
@@ -25,7 +25,12 @@ function projectRoot(dataDir: string, projectId: string, repoPath: string): stri
   if (current !== repoPath) {
     const tmp = join(root, `.repo-${randomBytes(6).toString('hex')}`);
     symlinkSync(repoPath, tmp);
-    renameSync(tmp, link);
+    try {
+      renameSync(tmp, link);
+    } catch (err) {
+      rmSync(tmp, { force: true }); // keep `repo` the only entry
+      throw err;
+    }
   }
   return root;
 }
@@ -72,10 +77,24 @@ export async function gitRoutes(app: FastifyInstance, opts: { config: Config }) 
 
     const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdin.on('error', () => {}); // http-backend may exit before reading the whole body
-    child.stderr.on('data', (d: Buffer) => app.log.warn({ projectId, workerId, stderr: String(d).trim() }, 'git http-backend'));
+    let stderr = '';
+    child.stderr.on('data', (d: Buffer) => (stderr += String(d)));
+    child.on('close', () => {
+      if (stderr.trim()) app.log.warn({ projectId, workerId, stderr: stderr.trim() }, 'git http-backend');
+    });
+    // a client that goes away must not leave http-backend blocked on stdin or a full stdout pipe
+    const kill = () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    };
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableFinished) kill();
+    });
     const body = request.body as Readable | undefined;
-    if (body && typeof body.pipe === 'function') body.pipe(child.stdin);
-    else child.stdin.end();
+    if (body && typeof body.pipe === 'function') {
+      body.on('aborted', kill);
+      body.on('error', kill);
+      body.pipe(child.stdin);
+    } else child.stdin.end();
 
     // CGI response: headers up to the blank line, then the body
     const { status, headers, out } = await new Promise<{ status: number; headers: Record<string, string>; out: PassThrough }>(

@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { makeApp } from './helpers.js';
-import { connectFakeWorker, type FakeWorker } from './fake-worker.js';
+import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
 
 // never prompt for credentials: a 401 must fail the command, not hang it
 const env = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
@@ -170,5 +170,37 @@ describe('git endpoint', () => {
     }
     expect(await get(`/git/${projectId}/HEAD`)).toBe(200);
     expect(readdirSync(join(t.config.dataDir, 'git-roots', projectId))).toEqual(['repo']);
+  });
+
+  it('kills the git child when the client disconnects mid-push', async () => {
+    const { port } = t.app.server.address() as AddressInfo;
+    const marker = `GIT_PROJECT_ROOT=${join(t.config.dataDir, 'git-roots', projectId)}`;
+    // every live process (http-backend and anything it spawned) serving this project
+    const gitProcs = () =>
+      readdirSync('/proc')
+        .filter((p) => /^\d+$/.test(p))
+        .filter((p) => {
+          try {
+            return readFileSync(`/proc/${p}/environ`, 'utf8').split('\0').includes(marker);
+          } catch {
+            return false;
+          }
+        });
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      method: 'POST',
+      path: `/git/${projectId}/git-receive-pack`,
+      headers: {
+        authorization: `Bearer ${worker.credential}`,
+        'content-type': 'application/x-git-receive-pack-request',
+        'content-length': '100000',
+      },
+    });
+    req.on('error', () => {});
+    req.write('0000');
+    await until(() => gitProcs().length > 0, 'git child spawned');
+    req.destroy();
+    await until(() => gitProcs().length === 0, 'git child exited');
   });
 });
