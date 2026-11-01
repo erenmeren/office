@@ -17,6 +17,7 @@ import { agentRoutes } from './routes/agents.js';
 import { skillRoutes } from './routes/skills.js';
 import { taskRoutes } from './routes/tasks.js';
 import { conversationRoutes } from './routes/conversations.js';
+import { memoryRoutes } from './routes/memory.js';
 import { runRoutes } from './routes/runs.js';
 import { workerRoutes } from './routes/workers.js';
 import { EventHub } from './services/event-hub.js';
@@ -86,6 +87,7 @@ export async function buildApp(
   new UiGateway(app.prisma, hub, app.log).register(app, config.webOrigin);
   await app.register(taskRoutes);
   await app.register(conversationRoutes, { config });
+  await app.register(memoryRoutes);
   await app.register(runRoutes);
   await app.register(workerRoutes);
   app.addHook('onReady', async () => scheduler.start());
