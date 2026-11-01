@@ -67,7 +67,7 @@ export type ApiToWorker = z.infer<typeof ApiToWorkerSchema>;
 export const UiClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('subscribe'),
-    topic: z.string().regex(/^(global|run:.+|task:.+|conversation:.+|mission:.+)$/),
+    topic: z.string().regex(/^(global|run:.+|task:.+|conversation:.+|mission:.+|project:.+)$/),
     afterSeq: z.number().int().nonnegative().optional(),
   }),
   z.object({ type: z.literal('unsubscribe'), topic: z.string() }),

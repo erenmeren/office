@@ -175,6 +175,18 @@ describe('ui gateway', () => {
     expect(c.msgs.map((m) => (m.type === 'event' ? m.event.seq : m.type))).toEqual([1, 2, 3, 'replay.done', 4]);
   });
 
+  it('streams project:<id> events live without replay', async () => {
+    const topic = `project:${spec.projectId}`;
+    const c = await connect();
+    c.send({ type: 'subscribe', topic });
+    await until(() => t.app.hub.subscriberCount(topic) === 1, 'project subscription');
+    workerEvent(4);
+    await until(() => c.seqs(topic).includes(4), 'live seq 4');
+    expect(c.seqs(topic)).toEqual([4]);
+    expect(c.msgs.some((m) => m.type === 'replay.done')).toBe(false);
+    expect(c.msgs[0]).toMatchObject({ type: 'event', topic, event: { runId: spec.runId, projectId: spec.projectId } });
+  });
+
   it('removes the hub subscription when the socket closes while subscribing', async () => {
     const topic = `run:${spec.runId}`;
     const c = await connect();

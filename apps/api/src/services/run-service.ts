@@ -365,7 +365,7 @@ export async function resumeRun(
     projectId: run.projectId,
     payload: opts.reason === 'reply' ? { reason: 'reply', messageId: opts.reply.id } : { reason: 'timeout' },
   };
-  if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${runId}`, event);
+  await appendEvent(prisma, event, hub);
   hub.publish(`run:${runId}`, { type: 'run.status.changed', runId, status: 'queued' });
 
   // a mission task keeps its worktree, commands and budget across the resume
@@ -667,7 +667,7 @@ async function emitCheckEvent(prisma: PrismaClient, hub: EventHub, session: Agen
       artifactId: check.artifactId,
     },
   };
-  if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${check.runId}`, event);
+  await appendEvent(prisma, event, hub);
 }
 
 /** A plain `message` (never wakes) to the Chief in the mission conversation. */
@@ -748,7 +748,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         projectId: run.session.projectId,
         payload: { workerId: run.workerId, retried },
       };
-      if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${run.id}`, event);
+      await appendEvent(prisma, event, hub);
     }
   }
   return lost;

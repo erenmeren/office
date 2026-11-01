@@ -246,8 +246,7 @@ export class WorkerGateway {
           projectId: run.session.projectId,
           payload: redactSecrets(msg.event.payload),
         };
-        if (!(await appendEvent(this.prisma, event)).inserted) return;
-        this.hub.publish(`run:${event.runId}`, event);
+        if (!(await appendEvent(this.prisma, event, this.hub)).inserted) return;
         await recordSubagentEvent(this.prisma, event).catch((err: unknown) =>
           this.log.error({ err, runId: event.runId, seq: event.seq }, 'failed to record subagent event'),
         );

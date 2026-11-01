@@ -47,6 +47,12 @@ export class UiGateway {
     const subscribe = async (topic: string, afterSeq = 0) => {
       subs.get(topic)?.unsubscribe();
       subs.delete(topic);
+      if (topic.startsWith('project:')) {
+        // live only: the project feed carries stored events of all its runs, with no replay
+        const sub: Sub = { lastSeq: 0, unsubscribe: this.hub.subscribe(topic, (m) => send({ type: 'event', topic, event: m as OfficeEvent })) };
+        subs.set(topic, sub);
+        return;
+      }
       if (!topic.startsWith('run:')) {
         const sub: Sub = { lastSeq: 0, unsubscribe: this.hub.subscribe(topic, (m) => send({ ...(m as object), topic } as UiServerMessage)) };
         subs.set(topic, sub);
