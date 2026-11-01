@@ -153,8 +153,11 @@ describe('message bus', () => {
     await send({ type: 'message' });
     expect(await pendingWakeDeliveries(t.prisma)).toEqual([]);
     const q = await send({ type: 'question' });
-    expect(await pendingWakeDeliveries(t.prisma)).toEqual([
-      { agentId: b, projectId, conversationId: q.message.conversationId },
+    expect(await pendingWakeDeliveries(t.prisma)).toMatchObject([
+      {
+        agentId: b, projectId, conversationId: q.message.conversationId,
+        deliveries: [{ id: q.deliveries[0]!.id, conversationId: q.message.conversationId, conversationKind: 'direct' }],
+      },
     ]);
   });
 

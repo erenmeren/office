@@ -180,12 +180,78 @@ describe('run lifecycle', () => {
     const r = await s.run(spec.runId);
     expect(r).toMatchObject({ kind: 'inbox', taskId: null });
     expect(r.conversationId).toBeTruthy();
-    // the wake mail is handed to that run; b is not woken again for it, even after the run ends
-    s.result(w, spec, { status: 'succeeded', resultText: 'answered' });
-    await s.flush(w);
+    // a second tick does not wake b again while its inbox run is live
     await s.t.app.scheduler.tick();
     await sleep(100);
     expect(w.received.filter((m) => m.type === 'run.assign')).toHaveLength(1);
+  });
+
+  const ask = (from: { senderAgentId?: string; senderUserId?: string }, body = 'Which database?') =>
+    sendMessage(s.t.prisma, s.t.config.messageLimits, {
+      projectId: s.projectId, type: 'question', body, recipientAgentIds: [s.b], ...from,
+    });
+  const assigns = (w: FakeWorker) => w.received.filter((m) => m.type === 'run.assign').length;
+
+  it('a lost wake run is retried on the next tick', async () => {
+    s = await setup();
+    const w = await s.worker();
+    await ask({ senderAgentId: s.a });
+    const first = await s.assign(w);
+    await s.t.prisma.taskRun.update({ where: { id: first.runId }, data: { leaseExpiresAt: new Date(Date.now() - 1000) } });
+    const second = await s.assign(w);
+    expect((await s.run(first.runId)).status).toBe('lost');
+    expect(second).toMatchObject({ kind: 'inbox', agentId: s.b });
+    expect(second.runId).not.toBe(first.runId);
+    expect(await s.t.prisma.messageDelivery.count({ where: { status: 'pending' } })).toBe(1);
+  });
+
+  it('stops waking after two wake runs newer than the delivery', async () => {
+    s = await setup();
+    const w = await s.worker();
+    await ask({ senderAgentId: s.a });
+    for (let i = 0; i < 2; i++) {
+      const spec = await s.assign(w);
+      // ends without reading the inbox
+      s.result(w, spec, { status: 'succeeded', resultText: 'nothing' });
+      await s.flush(w);
+    }
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect(assigns(w)).toBe(2);
+    expect(await s.t.prisma.messageDelivery.count({ where: { status: 'pending' } })).toBe(1);
+  });
+
+  it('an owner question still pending after an inbox run gets its own chat run', async () => {
+    s = await setup();
+    const w = await s.worker();
+    const owner = await s.t.prisma.user.findFirstOrThrow();
+    await ask({ senderAgentId: s.a });
+    const { message: human } = await ask({ senderUserId: owner.id }, 'Status?');
+    const inbox = await s.assign(w);
+    expect(inbox.kind).toBe('inbox');
+    s.result(w, inbox, { status: 'succeeded', resultText: 'nothing' });
+    await s.flush(w);
+    const chat = await s.assign(w);
+    expect(chat).toMatchObject({ kind: 'chat', agentId: s.b });
+    expect((await s.run(chat.runId)).conversationId).toBe(human.conversationId);
+  });
+
+  it('finished runs wait for a summarizer to be seeded', async () => {
+    s = await setup();
+    await s.createTask('Pick the database');
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    s.result(w, spec, { status: 'succeeded', resultText: 'Picked Postgres', sdkSessionId: 'sdk-1' });
+    await s.flush(w);
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect(assigns(w)).toBe(1);
+    expect((await s.run(spec.runId)).summarizedAt).toBeNull();
+    const summarizer = await s.agent('office-summarizer');
+    await s.t.prisma.agent.update({ where: { id: summarizer }, data: { isSystem: true } });
+    const sum = await s.assign(w);
+    expect(sum).toMatchObject({ kind: 'summary', agentId: summarizer });
+    expect((await s.run(spec.runId)).summarizedAt).toBeTruthy();
   });
 
   it('a finished task run gets one summary run for office-summarizer', async () => {

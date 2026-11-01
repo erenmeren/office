@@ -164,42 +164,55 @@ export class Scheduler {
     }
   }
 
-  /** An idle agent with pending wake mail gets an inbox run (or a chat run for an owner conversation). */
+  /**
+   * An idle agent with pending wake mail gets an inbox run, or a chat run for an owner (`human`) conversation.
+   * Delivery status is left to read_inbox; instead each delivery allows at most two wake runs created after it
+   * (one retry after a lost, failed or unread attempt). Untried deliveries go first, then the oldest.
+   */
   private async wakeAgents() {
     for (const wake of await pendingWakeDeliveries(this.prisma)) {
       try {
         const agent = await this.prisma.agent.findUnique({ where: { id: wake.agentId } });
         if (!agent || agent.isSystem || !agent.isActive) continue;
+        const scope = { agentId: wake.agentId, projectId: wake.projectId };
         const busy = await this.prisma.taskRun.count({
-          where: {
-            agentId: wake.agentId,
-            projectId: wake.projectId,
-            status: { in: ['queued', 'running', 'waiting_reply'] },
-          },
+          where: { ...scope, status: { in: ['queued', 'running', 'waiting_reply'] } },
         });
         if (busy) continue;
+        // shortcut: one count per pending delivery; fine for small inboxes, batch it if inboxes grow large
+        const tried = await Promise.all(
+          wake.deliveries.map(async (d) => {
+            const human = d.conversationKind === 'human';
+            const attempts = await this.prisma.taskRun.count({
+              where: {
+                ...scope,
+                createdAt: { gt: d.createdAt },
+                // an inbox run covers agent mail; owner mail is answered by a chat run in its conversation
+                ...(human ? { kind: 'chat', conversationId: d.conversationId } : { kind: 'inbox' }),
+              },
+            });
+            return { d, human, attempts };
+          }),
+        );
+        const next = tried
+          .filter((x) => x.attempts < 2)
+          .sort((x, y) => x.attempts - y.attempts || x.d.createdAt.getTime() - y.d.createdAt.getTime())[0];
+        if (!next) continue;
         const [project, conversation] = await Promise.all([
           this.prisma.project.findUniqueOrThrow({ where: { id: wake.projectId } }),
-          this.prisma.conversation.findUniqueOrThrow({ where: { id: wake.conversationId } }),
+          this.prisma.conversation.findUniqueOrThrow({ where: { id: next.d.conversationId } }),
         ]);
         const worker = this.pickWorker(project.repoPath);
         if (!worker) continue;
-        const chat = conversation.kind === 'human';
         const { spec } = await createRun(this.prisma, this.hub, this.config, {
-          kind: chat ? 'chat' : 'inbox',
-          agentId: wake.agentId,
-          projectId: wake.projectId,
+          kind: next.human ? 'chat' : 'inbox',
+          ...scope,
           conversationId: conversation.id,
-          resumeSdkSessionId: chat ? (conversation.sdkSessionId ?? undefined) : undefined,
+          resumeSdkSessionId: next.human ? (conversation.sdkSessionId ?? undefined) : undefined,
           prompt: WAKE_PROMPT,
           worker,
         });
-        if (!(await this.assign(worker.workerId, spec))) continue;
-        // delivered = handed to a run; an agent that ends without reading its inbox is not woken again for it
-        await this.prisma.messageDelivery.updateMany({
-          where: { recipientAgentId: wake.agentId, status: 'pending', message: { projectId: wake.projectId } },
-          data: { status: 'delivered', deliveredAt: new Date() },
-        });
+        await this.assign(worker.workerId, spec);
       } catch (err) {
         this.log.error({ err, agentId: wake.agentId }, 'waking agent failed');
       }
@@ -215,13 +228,12 @@ export class Scheduler {
     });
     if (due.length === 0) return;
     const summarizer = await this.prisma.agent.findUnique({ where: { slug: SUMMARIZER_SLUG } });
-    if (!summarizer?.currentVersionId) {
+    if (!summarizer?.currentVersionId || !summarizer.isActive) {
+      // left unsummarized so they are picked up once the summarizer is seeded
       if (!this.warnedNoSummarizer) {
         this.warnedNoSummarizer = true;
-        this.log.warn({ slug: SUMMARIZER_SLUG }, 'no summarizer agent; finished runs are not summarized');
+        this.log.warn({ slug: SUMMARIZER_SLUG }, 'no active summarizer agent; finished runs wait for one');
       }
-      // mark them so the scheduler does not revisit them every tick
-      await this.prisma.taskRun.updateMany({ where: { id: { in: due.map((r) => r.id) } }, data: { summarizedAt: new Date() } });
       return;
     }
     for (const run of due) {

@@ -258,20 +258,31 @@ export async function markDelivered(db: Db, deliveryIds: string[]): Promise<void
   });
 }
 
+export type WakeDelivery = { id: string; conversationId: string; conversationKind: Kind; createdAt: Date };
+
+/** Pending wake mail per (agent, project); `conversationId` is the oldest one's, `deliveries` lists all, oldest first. */
 export async function pendingWakeDeliveries(
   db: Db,
-): Promise<Array<{ agentId: string; projectId: string; conversationId: string }>> {
+): Promise<Array<{ agentId: string; projectId: string; conversationId: string; deliveries: WakeDelivery[] }>> {
   const rows = await db.messageDelivery.findMany({
     where: { status: 'pending', recipientAgentId: { not: null }, message: { type: { in: WAKE_TYPES } } },
     orderBy: { createdAt: 'asc' },
-    include: { message: { select: { projectId: true, conversationId: true } } },
+    include: { message: { select: { projectId: true, conversationId: true, conversation: { select: { kind: true } } } } },
   });
-  const seen = new Map<string, { agentId: string; projectId: string; conversationId: string }>();
+  const seen = new Map<string, { agentId: string; projectId: string; conversationId: string; deliveries: WakeDelivery[] }>();
   for (const r of rows) {
     const key = `${r.recipientAgentId}:${r.message.projectId}`;
-    if (!seen.has(key)) {
-      seen.set(key, { agentId: r.recipientAgentId!, projectId: r.message.projectId, conversationId: r.message.conversationId });
+    let entry = seen.get(key);
+    if (!entry) {
+      entry = { agentId: r.recipientAgentId!, projectId: r.message.projectId, conversationId: r.message.conversationId, deliveries: [] };
+      seen.set(key, entry);
     }
+    entry.deliveries.push({
+      id: r.id,
+      conversationId: r.message.conversationId,
+      conversationKind: r.message.conversation.kind,
+      createdAt: r.createdAt,
+    });
   }
   return [...seen.values()];
 }
