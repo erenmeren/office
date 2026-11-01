@@ -4,7 +4,7 @@
 
 - `apps/api`: Fastify control plane. `src/routes` (REST), `src/ws` (worker and UI gateways), `src/services` (scheduler, runs, tasks, agents, skills, subagent runs, event store, event hub), `src/plugins` (Prisma, auth). Tests in `apps/api/test`.
 - `apps/worker`: worker process. `src/config.ts` (environment), `src/connection.ts` (WebSocket, enrollment, heartbeat, reconnect), `src/executor.ts` (runs a `RunSpec` through the adapter), `src/skills.ts` (materializes pinned skills into the run root, removes and sweeps run roots), `src/credentials.ts`. Tests in `apps/worker/test`, including the fake-adapter end-to-end test.
-- `apps/web`: Next.js UI. Pages under `src/app` (including the Skill Library at `skills/` and Agent Studio at `agents/[id]`), API client, queries and the replaying WebSocket hook under `src/lib`.
+- `apps/web`: Next.js UI. Pages under `src/app` (Dashboard, Mission Control at `mission-control/`, Skill Library at `skills/`, Agent Studio at `agents/[id]`), API client, queries, status/identity/layout helpers and the replaying WebSocket hook under `src/lib`. Design tokens in `src/app/globals.css`; visual components in `src/components/ui` (shadcn pattern: `cva` variants, `cn`, `data-slot`, Tailwind classes inside the component, no inline styles in pages); screen-level components (`app-shell`, `plan-graph`, `task-detail`, `chief-composer`) in `src/components`.
 - `packages/shared`: Zod schemas and types shared by all apps.
 - `packages/db`: Prisma schema and migrations (`prisma/`), client factory (`src/index.ts`), seed (`src/seed.ts`).
 - `packages/runtime`: `RuntimeAdapter`, `ClaudeAdapter`, `FakeAdapter`, `redactSecrets`, and `scripts/smoke-claude.ts`, `scripts/smoke-skills.ts`.

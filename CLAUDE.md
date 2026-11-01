@@ -33,6 +33,7 @@ A control plane that turns Claude Code sessions into a persistent AI software te
 - `AgentSkill` and `AgentSubagent` rows belong to an `AgentVersion` and are immutable with it.
 - `ProjectAgent` is deferred to Phase 4 (the Chief's planning needs it; nothing in Phase 2 does).
 - Skill frontmatter parsing supports single-line `key: value` only.
+- The web UI follows the Foundations artboard: tokens in `apps/web/src/app/globals.css`, every visual piece a component in `apps/web/src/components/ui` (shadcn pattern, Tailwind inside the component). Pages compose components and carry no styling of their own.
 
 ## Commands
 
