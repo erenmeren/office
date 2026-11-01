@@ -5,7 +5,7 @@
 | 1 | done |
 | 2 | done |
 | 3 | done |
-| 4 | not started |
+| 4 | in progress (real-Claude expectation 6 not met: the chat answer did not call `search_memory` / `get_task_history`; see "Phase 4 evidence") |
 | 5 | not started |
 | 6 | not started |
 
@@ -46,17 +46,105 @@ Phase 3 (messaging and memory):
 - A reply consumed by resuming a waiting run is not acknowledged, so it still counts as unread in the recipient's context pack (`inboxCount` 4 and then 5 for `developer` in the acceptance).
 - The pack header says entries are "facts verified by the owner", but task summaries from `office-summarizer` are stored `verified` without an owner action.
 - Fixed: the sidebar's team list showed the hidden `office-summarizer` agent (`isSystem`). `GET /agents` now lists only non-system agents (`GET /agents/:id` still returns it), and `POST /tasks` answers 400 `invalid_agent` for a system or inactive agent.
-- Known wart: `apps/worker/test/e2e-phase3.test.ts` imports the seed from `packages/db/dist/seed.js` by relative path; `@office/db` should export it.
+- Fixed in Phase 4: `@office/db` exports `seed`, and `apps/worker/test/e2e-phase3.test.ts` imports it from there. Also fixed in Phase 4: the scheduler resumes `waiting_reply` runs before it assigns ready tasks, so a resumed run is not starved by new work.
+- Still open after Phase 4: chat runs keep the agent version's full tool surface with no approval policy (only mission runs carry one); see Phase 4 below.
 - The Playwright memory test no longer touches proposed entries. It opens the review filter and checks that `Needs review` entries are listed, but it never clicks `Verify`. It verifies only the entry it creates.
 - Data note for the owner: the dev database holds two agent proposals from acceptance attempt 1, `32f129b5` (decision) and `b244a807` (known issue). They are `verified` only because the earlier Playwright memory test verified them (07:25:25Z and 07:23:53Z); no person reviewed them. Re-check or reject them in Project Memory. The suite's `E2E decision` rows ("Use Postgres for everything.") are verified too and reach agents' context packs; delete them if they are not wanted.
 - Fixed: "Verified by you" label: system-authored entries (task summaries from `office-summarizer`) now show "Verified by the system" in the Project Memory detail pane.
 - Data note for the owner: before the `phase3_stamp_history` migration, the dev database's 6 pre-Phase 3 task runs (created 2026-10-31) already had `summarizedAt` set, all at 2026-11-01 06:30:44Z, and no `task_summary` entry exists for any of them (the dev project holds 4 task summaries, all for acceptance runs). The migration therefore changed nothing on the dev database.
 
-Phase 4 (Chief and orchestration): per-run git worktrees and the mission branch, dummy env template, platform-side `checkCommand`, approvals (`canUseTool` gates, `approvalTimeoutMinutes`), scheduler budgets, `waiting_reply` / `waiting_approval` lifecycle, Chief planning and evidence-based review (Phase 1 auto-moves `review` to `done`), required consultations, Mission Control.
+Phase 4 (Chief and orchestration):
+- Greenfield path (a mission on a project with no repository; spec §2 secondary path) is not built.
+- Approval gates cover mission runs only. `chat`, `inbox` and non-mission `task` runs carry no approval policy, and a chat keeps the agent version's full tool surface in the project repository (Phase 3 parked item, still open).
+- The Chief's plan run has no worktree and no approval policy (the review run has a worktree but no policy either): the plan run works read-only in the project repository, and its `Read` is not checked against `sensitivePaths`, so it could read the real env file. In the Maratus run it did not (its tool calls are listed under "Phase 4 evidence").
+- Approval detection is substring matching (`git  push` with two spaces or `git -C x push` are missed; `echo "git push"` is caught); sensitive paths match the base name case-sensitively. The read-only Bash heuristic (destructive patterns, ` > `, `>>`, `tee `) is defence in depth and easy to evade; a Bash call without `command` skips it.
+- Agent commits bypass the project's own git hooks (husky and similar): the trailer hook sets a worktree-local `core.hooksPath`, which also turns on `extensions.worktreeConfig` in the repository's shared `.git/config` (seen in the Maratus run).
+- `setupCommand` and `checkCommand` run through `/bin/sh -lc`, which re-sources the worker user's login profile. A check grandchild that leaves the process group can outlive the timeout kill. Redaction runs after truncation, so a secret cut at the 200 000-character cap may leave a fragment.
+- Worktree sweep removes worktrees older than 7 days that belong to no active run, which can include a run suspended that long. A partially created worktree can leak on a failed create.
+- A task-scoped approval for a file tool matches on `file_path` only, so it covers any later content written to that path.
+- Plan and review runs bypass the budget gates; a Chief review run (`opus`) starts on every mission stall, not only at the end. Review tasks are not swept by mission cancel (`review → cancelled` is not a transition).
+- An owner reopen while a review run is live can let that run's stale decision apply to the task once it is back in review. A pending `budget_exceeded` approval can stay pending after the owner raises the cap. `PUT /missions/:id` is accepted on terminal missions.
+- A mission can stay `planning` if the API crashes between storing the plan run's result and applying the plan.
+- The Playwright suite creates missions in `office-sandbox` that stay `planning` while no worker runs; a real worker connected later starts Chief plan runs for them. Before the Maratus run four such missions started plan runs (three were cancelled at once, cost 0; see "Phase 4 evidence").
+- UI: Replan is also offered while the plan awaits approval; the approval countdown keeps ticking at 00:00; the Diff chip shows `base..head` without a file count; the Settings save is two requests (settings, then agents) and not atomic; `packageManager` cannot be unset; validation messages stay until the next save.
+- Found in the Maratus run: reopen loop. The code evidence rule looks only at the latest succeeded run, so after a reopen a run that changes no files (the Chief asked for a written report, not code) can never satisfy it, and the Chief reopens again. `add-validation-tests` reached 6 attempts (`maxAttempts` 2: reopens do not count against it) until the owner overrode it. The QA task looped the same way (3 runs) because review tasks get a read-only checkout and the Chief kept asking for a mutation check that needs writes. The Chief has no "escalate" decision, so its "ESCALATED TO OWNER" notes were reopens.
+- Found in the Maratus run: `get_task_evidence` has no run result text, and a review run can start before the summary of the run it reviews exists, so the Chief reported "recorded no summary or messages" for runs whose result text held the report.
+- Found in the Maratus run: the read-only Bash heuristic was evaded with `git worktree add` into `/tmp` by the Chief's review run `cf82fa84` (left a worktree registered in the repository; removed by the implementer afterwards) and by QA run `6f8c5d2e` (removed it itself). Agents can also read and run anything outside the worktree (`find / -name check.txt`, the run root), and `git cherry-pick` created a commit without the `git commit` approval the policy asked for.
+- Found in the Maratus run: `agent.command.executed` is emitted when the tool call starts, before the gate decides, so a command the gate denied still shows as executed (QA run `1bad71d5` seq 25 then `agent.tool.failed` seq 26).
+- Found in the Maratus run: every run keeps its run branch (19 `office/...-runs/...` branches after one mission) and the review runs' branches carry no commits; nothing deletes them.
+- Found in the Maratus run: a dummy env template must still satisfy the project's env validation. With `BETTER_AUTH_URL=dummy` and `MQTT_BROKER_PORT=dummy` 17 of 68 Maratus test files failed to load; the template was corrected to `http://localhost:3000` and `1883`.
+- The seed re-creates deleted `ProjectAgent` rows of the seeded project and fills settings only when they are `{}`. Artifacts have no size cap on store.
 
 Phase 5 (hybrid workers): remote workers, remote clone, worker capabilities.
 
 Phase 6 (observability and hardening): Agent Inspector, cost views, audit log, project membership, interactive PTY shell.
+
+## Phase 4 decisions
+
+- A `Mission` is an owner request. The Chief's `plan` run (read-only, in the project repository, `opus`) answers with plan JSON (`PlanSchema`: `summary`, `risks`, `tasks[]` with `key`, `title`, `description`, `kind` code|analysis|review, `agent`, `dependsOn`, `parallelGroup`, `requirements`, `acceptanceCriteria`, `requiredConsultations`, `approvalPoints`, `budgetUsd`). The API validates it against the project's team; the owner approves, edits, replans or rejects it (`plan` approval, policy default `ask`). Approval creates the tasks and `TaskDependency` rows.
+- `approvalPoints` live only in `Mission.plan` JSON (no `Task` column).
+- `ProjectAgent` rows list a project's team; a project with no rows is unrestricted (every active, non-system agent).
+- Approval policy per project (`settings.approvalPolicy`): `plan`, `git_push`, `merge`, `deploy`, `destructive_command`, `sensitive_path`, `budget_exceeded`, each `ask` (default), `auto` or `block`; `destructivePatterns` default `rm -rf`, `git reset --hard`, `git push`, `git push --force`, `drizzle-kit`, `npm run db:`, `pnpm db:`, `DROP TABLE`, `TRUNCATE`; `sensitivePaths` default `.env`, `.env.*`, `credentials.json`, `*.pem`, `*.key`, `id_rsa`.
+- A pending approval expires after `approvalTimeoutMinutes` (default 30) and the call is denied. The worker denies on its own at `approvalTimeoutMinutes + 5` minutes. `Approval.deliveredAt` records delivery to the worker; the API moves the run back to `running` before it sends the decision, and re-sends undelivered decisions on `hello`. A lease-less `approval.request` is answered with a deny.
+- Tool approvals are enforced by a `PreToolUse` hook (`packages/runtime/src/gate.ts`) plus removing `Bash`, `Edit`, `Write`, `MultiEdit` and `NotebookEdit` from `allowedTools` whenever a policy or a read-only checkout applies: the SDK auto-allows `allowedTools` before `canUseTool`, so `canUseTool` alone was bypassable.
+- Worktrees live under `<OFFICE_WORKER_HOME>/worktrees/<runId>`, never inside the repository. The mission branch is `office/<slug>-<id6>`. A run branch is `<missionBranch>-runs/<taskSlug>-<run8>`, not the planned `office/<mission>/<task>-<run8>`: git cannot hold both the ref `office/<m>` and `office/<m>/<x>`.
+- A code run's commits are fast-forwarded onto the mission branch only after a passed `checkCommand` (or with no check configured); otherwise the run is `needs_integration` and the owner integrates by hand. Retries and dependents start from the mission branch head.
+- A worktree-local `prepare-commit-msg` hook adds the trailer `Office-Agent: <agent name> <runId>` to every agent commit.
+- `checkCommand` runs in the worktree after every code run through `/bin/sh -lc`, with a process-group SIGKILL at `checkTimeoutSeconds` (default 900). Its `CheckResult` (status, exit code, duration, output as an `Artifact`) is the test evidence; the API emits `agent.check.completed`.
+- The real env file never enters a worktree. The project's `envTemplate` is written to `envFile` in the worktree with mode 0600 (symlinked targets refused) and excluded through `info/exclude`, which git resolves to the repository's shared `.git/info/exclude` (the Maratus run added `/.env.local` and `/.office-hooks/` there).
+- `review → done|reopen` is decided by the Chief's review run through `review_task`, from `get_task_evidence`: code needs a succeeded run with commits, `fast_forwarded` integration and a passed check; analysis needs an artifact or a memory entry; review needs a `review` artifact; and every required consultation must hold. The owner overrides with `POST /tasks/:id/done|failed`. A mission enters `review` whenever no task is runnable and returns to `running` after reopens; failed review runs are retried, bounded. A mission with undecided review tasks stays `review` with `reviewRunId` kept; when the owner decides the last one the mission settles `done` (all done) or `failed`.
+- Tasks without a mission keep the Phase 1 auto-done.
+- Budgets: `dailyBudgetUsd` is a soft per-project limit, raised by `dailyBudgetUsd` for each `budget_exceeded` approval approved that UTC day (limit = `dailyBudgetUsd * (1 + approvedCount)`). `Mission.budgetUsd` is a hard cap on the mission's spend, raised only with `PUT /missions/:id`. A task run's budget is the lower of the agent version's `maxBudgetUsd` and the task's `budgetUsd` (`defaultTaskBudgetUsd` unless the plan sets one).
+- Push, merge, deploy and PR creation are approval requests only; the platform never pushes.
+- Mission cancel is atomic and idempotent and cancels live runs.
+- `@fastify/cors` lists methods explicitly; the default list blocked `PUT` and `DELETE` from the browser.
+
+## Phase 4 evidence
+
+### Fake-adapter end-to-end
+
+`pnpm --filter @office/worker test` (2026-11-01 10:47Z, HEAD b7f66ec): 9 files, 51 tests passed. `apps/worker/test/e2e-phase4.test.ts` runs the real API in-process with the fake adapter: plan, plan approval, a code task in a worktree with a commit, the `Office-Agent:` trailer, `checkCommand`, fast-forward onto the mission branch, a review task, the Chief review closing the mission; a destructive command waiting for the owner and continuing after a deny; a run whose base went stale kept for manual integration.
+
+### Phase 4 acceptance (real Claude, Maratus)
+
+Setup (2026-11-01, all through the API with the owner's session):
+
+- Local `.env` only: `OFFICE_WORKSPACE_ROOTS=/home/meren/projects/office-workspaces:/home/meren/projects/maratus-admin` (not committed).
+- Project `maratus-admin` `1237a3fb-c6f0-4dff-821e-40f5ac38a89a` (`repoPath /home/meren/projects/maratus-admin`, `defaultBranch main`). Settings: `packageManager npm`, `setupCommand npm ci`, `checkCommand npm test`, `envFile .env.local`, `envTemplate` with all 19 names of the repository's `.env.example` set to `dummy` (`DATABASE_URL postgresql://dummy:dummy@localhost:5432/dummy`), approval policy defaults, `dailyBudgetUsd 20`, `defaultTaskBudgetUsd 3`. Project agents: `chief`, `architect`, `developer`, `qa-engineer`.
+- Expectation 7 tweak: `git commit` appended to `destructivePatterns` (policy `destructive_command: ask`).
+- At 10:55:54Z, after the first check failed on the template (see below), `BETTER_AUTH_URL` became `http://localhost:3000` and `MQTT_BROKER_PORT` `1883`, still dummy values. Maratus's `lib/env.ts` validates both.
+- One worker (`eren-pc` `e973b79e`, `OFFICE_RUNTIME=claude`, started with only the `OFFICE_*` variables). When it connected it took plan runs of four `planning` missions that the Playwright suite had left in `office-sandbox` (`5c455e91`, `4bb8075d`, `f0fb56a5`, `9a50d16b`). The implementer cancelled all four within 15 s; their plan runs `7228bd73`, `6714349e`, `dd7a14f6` cost 0 USD.
+
+Mission `92fa97f1-8666-4bae-87c5-e00cb09f4b49`, request verbatim as in the brief, branch `office/improve-the-reliability-of-the-till-to-d-92fa97`. Final status `done` (11:07:29Z). Mission spend 5.91 USD (31 runs of the project, summaries included); with the two chat runs below (0.12 + 0.19 USD) the project's `UsageRecord` sum is 6.22 USD. The 20 USD stop was not reached.
+
+| Expectation | Result | Evidence |
+|---|---|---|
+| (1) plan, owner approval through the API | PASS | Plan run `3ca3e1fb` (chief, 0.25 USD, 40 s, read-only in the repository). Tasks: `audit-mapping` (analysis, architect) → `add-validation-tests` (code, developer, `requiredConsultations: [{ agent: architect }]`) → `qa-verify` (review, qa-engineer) → `arch-review` (review, architect). The plan's developer requirement said "No commit, push, merge or deploy"; the owner's stand-in edited that one requirement to "Commit … on your run branch with git commit …; no push, merge or deploy" (`PUT /missions/:id/plan`, audit `plan.edited` 10:50:21Z), then approved plan approval `a2d5e03c` (audit `plan.approved` 10:50:25Z). |
+| (2) question to the Architect, inbox reply with a file reference, resume; two sessions | PASS | Developer run `677c6023`, session `7e1d39db`: `agent.message.sent` `question` seq 22 (message `55e21a15`, task conversation `660f84e1`, kind `task`), `agent.waiting_reply` seq 23. Architect inbox run `429dc328`, session `91b940df` (separate SDK session `521d3560`), reply `28ac0894` ("I checked lib/register-number.ts …"). `agent.resumed` (reason `reply`) seq 25 in the developer session. The developer's question asked the Architect to confirm its test plan before editing; the reply named the canonical module. |
+| (3) commits on the mission branch with tests, `CheckResult` from `npm test` | PASS | Commits `f7a47ae` ("Validate till number on register trigger route; add till-number tests", trailer `Office-Agent: Developer 677c6023-…`) and `74a4d89` ("Drop double decode …", trailer `Office-Agent: Developer 50f1059d-…`) on the mission branch, base `72bea24` (`main`). Changed: `app/api/v1/registers/[registerNumber]/trigger/route.ts` (+6/-2) and three test files (`lib/device-claim.test.ts`, `lib/actions/devices.test.ts`, `lib/register-trigger-route.test.ts`). Run `50f1059d`: `CheckResult` `b8f3ff0b` `npm test` passed, exit 0 (`agent.check.completed` seq 55, artifact `89fd4a65`), integration `fast_forwarded`. The first run `677c6023` had `CheckResult` `9b8724ba` failed, exit 1 (17 test files failed to load on the env template, see above), so its commit `01fed94` stayed on its run branch; the retry cherry-picked it. |
+| (4) QA runs the tests itself; review artifact | PASS | QA run `1bad71d5` seq 12 `agent.command.executed` `(npm test …); npx tsc --noEmit …; npm run lint …` (68 files, 680 tests passed); review artifact `7addbb89` (`review.md`). Run `6f8c5d2e` ran `npm test` again (seq 23). QA's mutation check (revert the fix, see the tests fail) was blocked by the read-only gate (`agent.tool.failed` seq 26 in `1bad71d5`, three denied `Edit`s in `6f8c5d2e`). |
+| (5) Chief review closes from evidence or reopens with reasons | PASS, with a defect | Review runs `6b4a2118` (closed `audit-mapping` done from its analysis artifact `816ac048`, audit 10:52:21Z), `cf82fa84` (reopened `add-validation-tests`: "The platform check for run 677c6023 failed (exit 1) and commit 01fed94 is not integrated …"), `220bccbf`, `08fb7112`, `9b6ec211` (reopens asking for a written report), `b789a39e`, `aa9fa5bc` (reopened `qa-verify`: mutation check unverified), `e8e09085` (closed `arch-review` done from review artifact `a555fa75`, audit 11:07:21Z; mission `done`). Defect: after the code was accepted, the Chief kept reopening `add-validation-tests` (runs `351f351c`, `708276ad`, `9e858d22` changed no files, so the code evidence rule could never pass) and `qa-verify` (read-only checkout). The owner's stand-in closed both with `POST /tasks/:id/done` (audit `task.override` 11:01:59Z and 11:06:23Z), following the Chief's own escalation options. See Outstanding. |
+| (6) after restarting the API and the worker, mission, conversation and memory remain; chat answered from `search_memory` / `get_task_history` | FAIL (chat part) | API and worker restarted at 11:08Z (killed by pid, restarted from `.env`). `GET /missions/92fa97f1…` → `done`, four tasks `done`, `add-validation-tests` check `passed`, three approvals `approved`. `GET /conversations/660f84e1…` → the question and the reply. Project memory: 33 entries (10 verified task summaries, 23 agent proposals awaiting review). Human conversation `0992a94c`, question `aca465cf` "what did we do last time on Maratus till mapping?" → chat run `2f7abd5c` (0.12 USD) answered with the task sequence, ids and commit `74a4d89`, but its events show only `Skill`, `ToolSearch`, `read_inbox` and `reply_message`: it answered from the context pack (session `contextPack.entryIds` held 8 entries, including summaries `97c7abf2`, `e8319ad6`, `5b6e49e4`, `cfdecfdb`), not from `search_memory` / `get_task_history`. The expectation as written is not met. Supplementary, not counted: a follow-up asking it to use the tools (run `e5f2c1d2`, 0.19 USD) called `search_memory` (seq 5) and `get_task_history` (seq 9) and answered. |
+| (7) a real gated tool call waits, the owner approves through the API, the run resumes | PASS | Run `677c6023` (developer, session `7e1d39db`): `agent.waiting_approval` seq 72 at 10:54:50.645Z for `git add -A app lib && git commit …` (type `destructive_command`, reason `command matches "git commit"`), approval `6aa5c686-0980-46aa-a2c0-4d73776f4ba6` listed by `GET /approvals?projectId=…&status=pending`, approved via `POST /approvals/6aa5c686…/approve {scope: once}` at 10:55:04.290Z, `deliveredAt` 10:55:04.310Z, `agent.approval.resolved` (allow) seq 73, then the commit's output (seq 75, `01fed94`) and `agent.completed` seq 77. A second one: approval `ea1e20e4` in run `50f1059d`, seq 50 → 51. |
+
+Safety, Maratus before and after:
+
+| Check | Before (baseline) | After |
+|---|---|---|
+| `main` | `72bea24`, clean | `72bea24`, clean |
+| Branches | 1 (`main`) | `main`, the mission branch and 19 run branches (`office/improve-the-reliability-of-the-till-to-d-92fa97-runs/<task>-<run8>`) |
+| Remote refs | `origin/main` | `origin/main`; no `git push` in any event of the project |
+| `.env.local` sha256 prefix | `87ec17b97a027ee9` | `87ec17b97a027ee9`; no event reads the repository's `.env.local` |
+| `~/.office-worker/worktrees` | missing | one kept worktree, `677c6023` (unintegrated commit `01fed94`) |
+| `.git/config` | no `extensions.worktreeconfig` (not recorded, inferred) | `extensions.worktreeconfig=true` (trailer hook) |
+| `.git/info/exclude` | not recorded | lists `/.office-hooks/` and `/.env.local` (from the worktrees); `/.claude/RESUME.md` was there too, origin unknown |
+| Other worktrees | none | the Chief review run `cf82fa84` registered `/tmp/tmp.CDS2gmGb1a/wt` (detached at `01fed94`); the implementer removed it with `git worktree remove --force` |
+
+Nothing was merged, pushed or deployed; no production credential and no Neon connection was used (tests mock the database; the worktrees held the dummy template).
+
+### Verdict
+
+Phase 4 stays `in progress`. Expectations 1, 2, 3, 4 and 7 hold, and 5 holds with the reopen-loop defect. Expectation 6 is not met as written: after the restart the mission, conversation and memory were intact, but the chat run answered from its context pack without calling `search_memory` or `get_task_history`.
 
 ## Phase 3 decisions
 

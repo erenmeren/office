@@ -1,6 +1,6 @@
 # Architecture
 
-This is a short overview of the design in `docs/superpowers/specs/2026-10-31-agent-office-design.md` (§5) and of what exists after Phase 3.
+This is a short overview of the design in `docs/superpowers/specs/2026-10-31-agent-office-design.md` (§5) and of what exists after Phase 4.
 
 ## Shape
 
@@ -11,7 +11,7 @@ This is a short overview of the design in `docs/superpowers/specs/2026-10-31-age
                                v
   apps/web (Next.js, :3000) -------> apps/api (Fastify, :4000)  control plane
                                        | REST: auth, projects, agents, skills, tasks, runs, workers,
-                                       |   conversations, messages, memory
+                                       |   conversations, messages, memory, missions, approvals, audit
                                        | scheduler, leases, event store, event hub, office tools
                                        | Postgres (Prisma, :5433)   Redis (:6380, unused in Phase 1)
                                        ^
@@ -37,7 +37,7 @@ The control plane owns truth and never runs Claude. The worker never decides wha
 3. **accepted.** The worker checks that `cwd` resolves (symlinks included) under an allowed root, otherwise sends `run.rejected`. It sends `run.accepted`; the run, session and task move to `running`. It then materializes the pinned skills (see below) and starts the adapter; a skill that fails validation fails the run.
 4. **events.** The adapter streams normalized events (`agent.started`, `agent.text`, `agent.tool.started`, `agent.tool.completed`, `agent.command.executed`, `agent.file.changed`, `agent.skill.invoked`, `agent.subagent.spawned`, `agent.subagent.completed`, `agent.completed`, and others). The worker redacts and sends each as `run.event`; the API redacts again, stores it as a `SessionEvent` keyed by `(sessionId, seq)` and publishes it to `run:<runId>` UI subscribers. Heartbeats renew the lease meanwhile.
 5. **result.** The worker removes the run's materialized skills and sends `run.result`. Under a live lease the API records status, result text, error, cost and the SDK session id, writes a `UsageRecord`, and moves the task.
-6. **review → done.** Until Phase 4, a succeeded run moves the task to `review` and immediately to `done`; a failed or cancelled run moves it to `failed` or `cancelled`. From Phase 4 the Chief's review session decides `review → done` from platform-recorded evidence.
+6. **review → done.** A succeeded run moves the task to `review`. A task without a mission then moves to `done` at once (Phase 1 behaviour); a mission task waits for the Chief's review run or the owner (see "Missions, git and approvals" below). A failed or cancelled run moves the task to `failed` or `cancelled`.
 
 A run whose lease expires becomes `lost`, and the task goes back to `ready` while attempts remain. Status transitions go through one module (`packages/shared/src/task-state.ts`, applied by `apps/api/src/services/task-service.ts`). The wire protocol is in `docs/worker-protocol.md`.
 
@@ -57,7 +57,7 @@ A `TaskRun` has a `kind`:
 
 - `task`: the run of a task, as above.
 - `inbox`: wakes an idle agent that has unread `question`, `help_request`, `handoff` or `escalation` mail from another agent. It has no task, gets only `Read`, `Glob` and `Grep` of the version's built-in tools, at most 8 turns and 0.25 USD, and is told to read its inbox and answer.
-- `chat`: wakes an agent for mail from the owner in a `human` conversation. It resumes the conversation's SDK session, so the owner talks to one continuous session. Unlike `inbox`, it keeps the agent version's full tool surface and budget (spec §6.3). Approval gates for `chat` and `task` runs arrive in Phase 4.
+- `chat`: wakes an agent for mail from the owner in a `human` conversation. It resumes the conversation's SDK session, so the owner talks to one continuous session. Unlike `inbox`, it keeps the agent version's full tool surface and budget (spec §6.3). It carries no approval policy (only mission runs do; see `docs/security.md`).
 - `summary`: a run of the hidden `office-summarizer` agent (`haiku`) for one finished task run. It gets only the `submit_summary` tool: no built-in tools, skills or subagents.
 
 Agents message and remember through 14 office tools (`packages/shared/src/office-tools.ts`): `send_message`, `reply_message`, `read_inbox`, `get_conversation`, `list_agents`, `request_help`, `handoff_task`, `escalate_to_chief`, `search_memory`, `read_memory`, `propose_memory`, `get_task_history`, `get_project_decisions`, and `submit_summary` (summary runs only). The Claude adapter serves them as an in-process SDK MCP server named `office`. A tool call goes from the SDK to the worker's `ToolBridge`, over the socket as `tool.call`, and the API executes it under the run's live lease. The answer comes back as `tool.result`. The API takes the agent and project from the calling session, never from the arguments.
@@ -77,6 +77,25 @@ Scheduler tick (every 2 s), in order:
 The context pack: before every run, `buildContextPack` builds a short section for the system prompt, capped at `OFFICE_CONTEXT_PACK_MAX_CHARS` (default 12000). It holds the project overview, up to 10 verified memory entries ranked by full-text match against the task text (terms OR-ed), recent task summaries, the unread inbox and the agent's own lessons. The included entry ids, summary ids, inbox count and size are stored on `AgentSession.contextPack`, and the task page shows them.
 
 Memory: agents propose entries (`proposed`). The owner verifies, rejects, edits or deletes them in Project Memory; an edit is a new row that supersedes the old one. Only verified entries reach the context pack and `search_memory`. The summarizer's `task_summary` is stored `verified` with its run and task as sources.
+
+## Missions, git and approvals (Phase 4)
+
+Run kinds added: `plan` and `review`, both run by the Chief (`opus`) with `Read`, `Glob`, `Grep` and read-only `Bash`, five read-only office tools (`search_memory`, `read_memory`, `get_task_history`, `get_project_decisions`, `list_agents`) and, for `review`, `get_task_evidence` and `review_task`. Both answer with structured output (`outputFormat` JSON schema).
+
+Mission flow (`services/mission-service.ts`, `services/review-service.ts`):
+
+1. **planning.** `POST /missions { projectId, request, title?, budgetUsd? }` creates a mission; the scheduler starts a `plan` run in the project repository (read-only, no worktree). The prompt carries the request, the project's team (`ProjectAgent` rows; none means every active, non-system agent), settings and earlier plan errors.
+2. **plan.** The plan JSON (`PlanSchema`) is validated: unique task keys, known `dependsOn` keys and no cycles, agents in the team, consultants in the team. An invalid plan (or no structured output) makes the mission `plan_failed` with the errors listed; a lost plan run is retried once. A valid plan is stored on `Mission.plan`, and the mission moves to `awaiting_approval` with a `plan` approval (or straight on with policy `auto`). The owner may edit (`PUT /missions/:id/plan`), replan (`POST /missions/:id/replan`), approve or reject.
+3. **approved / running.** Approval creates one `Task` per plan task (`key`, `kind`, `requirements`, `acceptanceCriteria`, `requiredConsultations`, `budgetUsd`, `parallelGroup`) and `TaskDependency` rows; tasks without dependencies are `ready`, the rest `planned` until their dependencies are `done`. The worker creates the mission branch `office/<slug>-<id6>` from the default branch head on the mission's first worktree run.
+4. **task runs.** A mission task run gets a worktree under `<OFFICE_WORKER_HOME>/worktrees/<runId>` on the run branch `<missionBranch>-runs/<taskSlug>-<run8>`, created from the mission branch head (so retries and dependents see integrated work), the project's `setupCommand`, the dummy env file, the `Office-Agent:` trailer hook and the project's approval policy. Analysis and review tasks get a read-only checkout. After a code run the worker collects the commits, runs `checkCommand` (`CheckResult`, the output stored as an `Artifact`), and fast-forwards the mission branch to the run head only when the check passed (or no check is configured); otherwise the run is `needs_integration` and the owner integrates by hand. The result text of a succeeded analysis or review run is stored as an artifact of that kind (`analysis.md`, `review.md`); a code run's result text is not.
+5. **review.** When no task of a running mission is runnable, the scheduler starts the Chief's `review` run on a read-only worktree of the mission branch. It reads each task's evidence (`get_task_evidence`: runs, git summary, check results, artifacts, summaries, message counts) and decides each `review` task with `review_task` (`done` or `reopen` with a note). `done` requires the evidence rule (code: a succeeded run with commits, `fast_forwarded` and a passed check; analysis: an artifact or memory entry; review: a `review` artifact) and every required consultation (a `question` from the task's agent to the consultant in the task's conversation, with a reply). Reopened or unblocked tasks send the mission back to `running`; a failed review run is retried, bounded. The owner overrides with `POST /tasks/:id/done|failed`. A mission whose review tasks stay undecided stays `review`; the owner's decision on the last one settles it `done` (all tasks done) or `failed`.
+6. **cancel.** `POST /missions/:id/cancel` is atomic and idempotent: it cancels the mission, its open tasks and their live runs.
+
+Approvals (`services/approval-service.ts`): the worker's gate sends `approval.request` for a tool call the policy marks `ask`; the API stores an `Approval` (`pending`, `expiresAt`), moves the run and task to `waiting_approval` (lease and session stay live) and publishes `approval.changed`. The owner decides (`POST /approvals/:id/approve { scope: once|task }` or `/deny`); the API moves the run back to `running`, sends `approval.result` and records `deliveredAt`. Undelivered decisions are re-sent on the worker's `hello`; pending approvals expire after `approvalTimeoutMinutes` (deny). Plan and `budget_exceeded` approvals use the same table without a run.
+
+Budgets (`services/budget-service.ts`): before assigning a mission task, the scheduler's gate checks, in order: the agent is in the project's team and active, the agent's `maxConcurrentSessions` and its own daily budget, the mission's spend against `Mission.budgetUsd`, the project's spend today against `dailyBudgetUsd` (raised by `dailyBudgetUsd` for each `budget_exceeded` approval approved that day), and the project's `maxConcurrentRuns`. A budget stop skips the task and opens at most one `budget_exceeded` approval per mission, reason and UTC day. Approving it raises today's project limit; the mission cap is raised only by the owner (`PUT /missions/:id`). `GET /projects/:id/budget` reports today's spend and limit. Plan and review runs bypass the gate.
+
+Scheduler tick additions (Phase 4): start plan runs for `planning` missions, expire pending approvals, gate mission tasks as above, and start review runs for stalled missions.
 
 ## Where each spec entity lives today
 
@@ -109,9 +128,19 @@ Built in Phase 3:
 - The context pack: `services/context-pack.ts`.
 - Conversations and Project Memory pages: `apps/web/src/app/conversations`, `apps/web/src/app/memory`.
 
+Built in Phase 4:
+
+- `Mission`, `TaskDependency`: `routes/missions.ts`, `services/mission-service.ts`; plan, plan errors, plan and review run ids, branch, base commit, budget cap.
+- `ProjectAgent`: `routes/projects.ts` (`GET`/`PUT /projects/:id/agents`); project settings (`ProjectSettingsSchema`) on `Project.settings` (`GET`/`PUT /projects/:id/settings`).
+- `Approval`, `AuditLog`: `routes/approvals.ts`, `routes/audit.ts`, `services/approval-service.ts`, `services/audit-service.ts`.
+- `GitWorkspace`, `CheckResult`, `Artifact`: `services/run-service.ts`, `services/artifact-store.ts`, `routes/artifacts.ts`; worktrees and integration in `apps/worker/src/git.ts` and `executor.ts`.
+- `Task` additions: `key`, `kind`, `missionId`, `requirements`, `acceptanceCriteria`, `requiredConsultations`, `budgetUsd`, `parallelGroup`, `reviewNote`. `TaskRun` additions: `missionId`, `reviewOfMissionId`, `branch`, `baseCommit`, `headCommit`, `integration`, `worktreePath`, `structuredOutput`.
+- The gate: `packages/runtime/src/gate.ts`; policy evaluation in `packages/shared/src/policy.ts`.
+- Mission Control (plan graph, approvals, evidence) and Settings pages: `apps/web/src/app/mission-control`, `apps/web/src/app/settings`.
+
 Not built yet:
 
 - Phase 3 leftovers: a `MemoryRevision` table (a revision is a new `MemoryEntry` row that supersedes the old one), streaming delivery into a live session, semantic memory search, the memory purge.
-- Phase 4: `ProjectAgent` (deferred from Phase 2), `Mission`, `TaskDependency`, `GitWorkspace`, `Approval`, `Artifact`, check results, mission branches and per-run worktrees, the Chief's planning and review sessions, and the `waiting_approval` lifecycle (`waiting_reply` is built in Phase 3).
+- Phase 4 leftovers: the greenfield path (a mission on a project without a repository), approval gates on chat, inbox and non-mission task runs, push and PR creation (an approval request only).
 - Phase 5: remote workers, `WorkerCapability`, remote clone.
-- Phase 6: `AuditLog`, `ProjectMember`, Agent Inspector, cost views, the interactive shell.
+- Phase 6: an audit UI, `ProjectMember`, Agent Inspector, cost views, the interactive shell.

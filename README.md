@@ -91,7 +91,7 @@ Open http://localhost:3000. On the first visit no owner exists yet, and the logi
 
 The **Agents** page lists agents with their current version and has a form to create an agent (name, slug, role, system prompt, model, allowed tools, turn and budget limits). Each agent's name links to its Agent Studio page (section 10). Every configuration change creates a new immutable agent version, and runs already started keep the version they started with.
 
-Phase 1 has no separate projects page. The **New task** page has an "Add project" form (name, slug, repository path). The repository path must be under one of the worker's allowed workspace roots, or no worker will take the task. The seeded `office-sandbox` project and `developer` agent are ready to use.
+There is no separate projects page. The **New task** page has an "Add project" form (name, slug, repository path). The repository path must be under one of the worker's allowed workspace roots, or no worker will take the task. To run missions on an existing repository, add the repository directory (or its parent) to the worker's `OFFICE_WORKSPACE_ROOTS` in your local `.env`, and fill the project's env template in Settings before the first mission. The seeded `office-sandbox` project and `developer` agent are ready to use.
 
 ## 9. Skill Library (UI)
 
@@ -149,9 +149,17 @@ Limits (messages per session and per task, escalation depth, handoff chain, repl
 
 On the **New task** page pick a project and an agent, enter a title and a description, and submit. The scheduler assigns the task to an online worker whose allowed roots contain the project's repository path. The task page then shows the run status and a live event log (`agent.started`, `agent.tool.started`, `agent.command.executed`, `agent.file.changed`, `agent.skill.invoked`, `agent.text`, `agent.completed` with cost, and so on). Events are stored in the database; reloading the page, or restarting the API, replays them from there.
 
-Until Phase 4 a successful run moves the task through `review` to `done` automatically. Evidence-based review by the Chief comes in Phase 4.
+A task without a mission still moves through `review` to `done` automatically when its run succeeds. Mission tasks wait for the Chief's evidence-based review (section 14).
 
-## 14. Remote workers on other machines
+## 14. Missions, approvals and settings (UI)
+
+**Settings** (`/settings`) edits the selected project's execution settings: package manager, `setupCommand`, `checkCommand` (its output is the test evidence of every code run), check timeout, env file name and the dummy env template (names and values written into each worktree instead of the real env file), approval policies (`ask`, `auto` or `block` for plan, git push, merge, deploy, destructive commands, sensitive paths and budget overruns, plus the destructive patterns and sensitive paths), `approvalTimeoutMinutes` (default 30; a pending approval is then denied), daily and per-task budgets, concurrency, attempts, and the project's agents (none selected means every agent).
+
+**Mission Control** (`/mission-control`): the Chief composer starts a mission from a request. The Chief's plan run reads the repository and proposes a task graph (analysis, code and review tasks, dependencies, required consultations, budgets). Review the plan, edit or replan it, then approve it. Tasks then run in per-run git worktrees under `<OFFICE_WORKER_HOME>/worktrees/` on run branches `office/<mission>-<id6>-runs/<task>-<run8>`. Code runs that commit are checked with `checkCommand` and fast-forwarded onto the mission branch `office/<mission>-<id6>` when the check passes, otherwise they are marked `needs_integration` for you to merge by hand. Nothing is pushed or merged into the default branch: a push is only ever an approval request.
+
+Pending approvals appear on Mission Control with the tool call and the reason; approve once, approve for the whole task, or deny. A run waiting for you shows `waiting_approval` and keeps its session. When no task can run, the Chief's review run reads each task's recorded evidence (commits, check results, artifacts, consultations) and marks it done or reopens it with a note. You can override with **Done** or **Failed** on a task in review, raise a mission's budget cap, or cancel the mission (this cancels its live runs).
+
+## 15. Remote workers on other machines
 
 Phase 5. The worker protocol does not assume localhost, but remote clone, remote workspace roots and multi-machine coordination are not built or tested yet. See `docs/progress.md`.
 
