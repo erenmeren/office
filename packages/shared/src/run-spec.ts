@@ -31,13 +31,17 @@ export const RunSpecSchema = z.object({
   // present for code and review task runs of a mission; the worker creates the worktree and sets cwd itself
   git: z
     .object({
-      repoPath: z.string(),
+      repoPath: z.string().optional(),
+      remote: z.object({ path: z.string().regex(/^\/git\/[0-9a-f-]{36}$/) }).optional(),
       defaultBranch: z.string(),
       missionBranch: z.string(),
       taskSlug: z.string(),
       committerName: z.string(),
       committerEmail: z.string(),
       agentName: z.string(),
+    })
+    .refine((g) => (g.repoPath === undefined) !== (g.remote === undefined), {
+      message: 'git needs exactly one of repoPath or remote',
     })
     .optional(),
   // plan, review and analysis runs: worktree created, no commit expected
@@ -76,6 +80,8 @@ export const RunResultSchema = z
       diffStat: z.string(),
       filesChanged: z.number().int(),
       integration: IntegrationStatusSchema,
+      /** Why a remote fast-forward was rejected (git's stderr), when it was. */
+      integrationReason: z.string().optional(),
       worktreePath: z.string().optional(),
     })
     .optional(),

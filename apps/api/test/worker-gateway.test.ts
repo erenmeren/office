@@ -56,6 +56,45 @@ describe('worker gateway', () => {
     await re.close();
   });
 
+  it('stores tags and canClone from hello and shows them on GET /workers with online and activeRuns', async () => {
+    const { id, enrollToken } = await enroll();
+    const pending = await enroll();
+    const w = await connectFakeWorker(t.app, {
+      enrollToken, name: 'w1', capacity: 2, tags: ['gpu', 'linux'], canClone: true, machineId: 'remote-machine-0001',
+    });
+    const row = await t.prisma.worker.findUniqueOrThrow({ where: { id } });
+    expect(row).toMatchObject({ tags: ['gpu', 'linux'], canClone: true, machineId: 'remote-machine-0001' });
+    expect(t.app.gateway.onlineWorkers()[0]).toMatchObject({ workerId: id, tags: ['gpu', 'linux'], canClone: true });
+
+    const list = (await req('GET', '/workers')).json() as Array<Record<string, unknown>>;
+    expect(list.find((x) => x.id === id)).toMatchObject({
+      name: 'w1', status: 'online', capacity: 2, allowedRoots: [], tags: ['gpu', 'linux'], canClone: true, online: true, activeRuns: 0,
+      machineId: 'remote-machine-0001',
+    });
+    expect(list.find((x) => x.id === pending.id)).toMatchObject({ online: false, activeRuns: 0, tags: [], canClone: false });
+
+    await w.close();
+    await until(async () => !t.app.gateway.onlineWorkers().length, 'worker gone');
+    const after = (await req('GET', '/workers')).json() as Array<Record<string, unknown>>;
+    expect(after.find((x) => x.id === id)).toMatchObject({ online: false, activeRuns: 0 });
+  });
+
+  it('is local only on the API machine with roots covering the repo; an unidentified worker only when trusted', async () => {
+    const local = async (machineId: string | null) => {
+      const { id, enrollToken } = await enroll();
+      const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', allowedRoots: ['/tmp'], machineId });
+      const online = t.app.gateway.onlineWorkers().find((x) => x.workerId === id)!;
+      const result = [online.local('/tmp/repo'), online.local('/srv/repo')];
+      await w.close();
+      return result;
+    };
+    expect(await local(t.config.machineId)).toEqual([true, false]);
+    expect(await local('another-machine')).toEqual([false, false]);
+    expect(await local(null)).toEqual([false, false]);
+    t.config.trustUnidentifiedWorkers = true;
+    expect(await local(null)).toEqual([true, false]);
+  });
+
   it('rejects a bad credential with an error, then closes', async () => {
     const w = await connectFakeWorker(t.app, { credential: 'nope', name: 'x' });
     expect(w.received[0]!.type).toBe('error');
@@ -131,5 +170,43 @@ describe('worker gateway', () => {
       t.prisma.taskRun.findFirst = orig;
     }
     await w.close();
+  });
+
+  it('a worker reconnecting with a run that was lost meanwhile gets run.cancel and its late result is rejected', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    await w.close();
+    const other = await t.prisma.worker.create({ data: { name: 'w2', status: 'online' } });
+    const project = await t.prisma.project.create({ data: { name: 'P', slug: 'p', repoPath: '/tmp/p' } });
+    const agent = await t.prisma.agent.create({ data: { name: 'dev', slug: 'dev', role: 'dev' } });
+    const version = await t.prisma.agentVersion.create({ data: { agentId: agent.id, version: 1, config: {} } });
+    const mk = (workerId: string, status: 'lost' | 'running') =>
+      t.prisma.taskRun.create({
+        data: {
+          agentId: agent.id, projectId: project.id, agentVersionId: version.id, kind: 'chat', workerId, status,
+          leaseExpiresAt: new Date(Date.now() - 1000),
+        },
+      });
+    const lost = await mk(id, 'lost');
+    const foreign = await mk(other.id, 'running');
+    await t.prisma.agentSession.create({
+      data: { runId: lost.id, agentId: agent.id, projectId: project.id, model: 'sonnet', status: 'lost', startedAt: new Date() },
+    });
+
+    const re = await connectFakeWorker(t.app, { credential: w.credential, name: 'w1', activeRunIds: [lost.id, foreign.id] });
+    const cancelled = [await re.waitFor('run.cancel'), await re.waitFor('run.cancel')].map((m) => m.runId).sort();
+    expect(cancelled).toEqual([lost.id, foreign.id].sort());
+    // neither lease was renewed for this worker
+    for (const r of [lost, foreign]) {
+      const row = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: r.id } });
+      expect(row.leaseExpiresAt!.getTime()).toBeLessThan(Date.now());
+    }
+    re.send({
+      type: 'run.result', runId: lost.id, sessionId: 'x',
+      result: { status: 'succeeded', usage: { inputTokens: 1, outputTokens: 1, costUsd: 0, numTurns: 1, durationMs: 1 } },
+    });
+    expect(await re.waitFor('error')).toMatchObject({ message: `No live lease for run ${lost.id} on this worker` });
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: lost.id } })).status).toBe('lost');
+    await re.close();
   });
 });

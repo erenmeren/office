@@ -3,6 +3,7 @@ import { REVIEW_JSON_SCHEMA, SAMPLE_PLAN, type Plan, type RunSpec } from '@offic
 import { makeApp } from './helpers.js';
 import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
 import { sendMessage } from '../src/services/message-service.js';
+import { expireLeases } from '../src/services/run-service.js';
 import { approveBudget } from '../src/services/budget-service.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -179,6 +180,29 @@ describe('orchestration', () => {
     expect(res.statusCode).toBe(200);
     expect(await s.statuses(m.id)).toMatchObject({ a: 'done', b: 'ready' });
     expect(await s.t.prisma.auditLog.count({ where: { action: 'task.override', targetId: k.a } })).toBe(1);
+  });
+
+  it('a retry after a lost lease starts from the mission branch head; run.lease.lost carries workerId and retried', async () => {
+    s = await setup();
+    const { w, k } = await s.approved(3);
+    const first = await s.assign(w);
+    const gw = await s.t.prisma.gitWorkspace.create({
+      data: { runId: first.runId, repoPath: '/tmp/office-ws/m1', worktreePath: '/tmp/x', branch: 'office/run-branch', baseCommit: 'b', headCommit: 'b' },
+    });
+    await expireLeases(s.t.prisma, s.t.app.hub, new Date(Date.now() + 3_600_000));
+    expect((await s.task(k.a)).status).toBe('ready');
+    const lost = await s.t.prisma.sessionEvent.findFirstOrThrow({ where: { sessionId: first.sessionId, type: 'run.lease.lost' } });
+    const workerId = (await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: first.runId } })).workerId;
+    expect(lost.payload).toEqual({ workerId, retried: true });
+    expect((await s.req('GET', `/runs/${first.runId}`)).json()).toMatchObject({ status: 'lost', retriedByRunId: null });
+
+    await s.t.app.scheduler.tick();
+    let second = (await w.waitFor('run.assign')).spec;
+    if (second.git!.taskSlug !== 'a') second = (await w.waitFor('run.assign')).spec; // c may be assigned first
+    expect(second.runId).not.toBe(first.runId);
+    expect(second.git!.missionBranch).toBe(first.git!.missionBranch);
+    expect((await s.req('GET', `/runs/${first.runId}`)).json()).toMatchObject({ retriedByRunId: second.runId });
+    expect(await s.t.prisma.gitWorkspace.findUniqueOrThrow({ where: { id: gw.id } })).toMatchObject({ removedAt: null });
   });
 
   it('needs_integration -> review with a note', async () => {

@@ -1,6 +1,6 @@
 # Architecture
 
-This is a short overview of the design in `docs/superpowers/specs/2026-10-31-agent-office-design.md` (§5) and of what exists after Phase 4.
+This is a short overview of the design in `docs/superpowers/specs/2026-10-31-agent-office-design.md` (§5) and of what exists after Phase 5.
 
 ## Shape
 
@@ -23,7 +23,8 @@ This is a short overview of the design in `docs/superpowers/specs/2026-10-31-age
                                        |   ClaudeAdapter -> Claude Agent SDK -> Claude Code
                                        |   FakeAdapter (OFFICE_RUNTIME=fake, tests)
                                        v
-                       project repository under an allowed workspace root
+                       project repository under an allowed workspace root (local worker)
+                       or a clone of it from the API's /git/<projectId> endpoint (remote worker)
 ```
 
 Packages: `packages/shared` (Zod schemas, enums, event and protocol types, the task state machine), `packages/db` (Prisma schema, migrations, client, seed), `packages/runtime` (`RuntimeAdapter`, Claude and fake adapters, event normalization, secret redaction).
@@ -33,7 +34,7 @@ The control plane owns truth and never runs Claude. The worker never decides wha
 ## Run lifecycle
 
 1. **ready.** `POST /tasks` creates a task in `ready`.
-2. **assign.** The scheduler (every 2 s) picks ready tasks by priority and age, finds an online worker with free capacity whose allowed roots contain the project's repository path, and in one transaction creates a `TaskRun` (`queued`, lease 60 s) and an `AgentSession` from the agent's current `AgentVersion`, increments the task's attempts and moves the task to `queued`. The session's `skillsSnapshot` records the version's pinned skills (`skillId`, `skillVersionId`, `name`, `version`, `checksum`, `mode`). It sends `run.assign` with the `RunSpec`, which carries the pinned skills' files and the version's subagents.
+2. **assign.** The scheduler (every 2 s) picks ready tasks by priority and age, finds an online worker with free capacity and repository access (see "Hybrid workers (Phase 5)" for local and remote placement), and in one transaction creates a `TaskRun` (`queued`, lease 60 s) and an `AgentSession` from the agent's current `AgentVersion`, increments the task's attempts and moves the task to `queued`. The session's `skillsSnapshot` records the version's pinned skills (`skillId`, `skillVersionId`, `name`, `version`, `checksum`, `mode`). It sends `run.assign` with the `RunSpec`, which carries the pinned skills' files and the version's subagents.
 3. **accepted.** The worker checks that `cwd` resolves (symlinks included) under an allowed root, otherwise sends `run.rejected`. It sends `run.accepted`; the run, session and task move to `running`. It then materializes the pinned skills (see below) and starts the adapter; a skill that fails validation fails the run.
 4. **events.** The adapter streams normalized events (`agent.started`, `agent.text`, `agent.tool.started`, `agent.tool.completed`, `agent.command.executed`, `agent.file.changed`, `agent.skill.invoked`, `agent.subagent.spawned`, `agent.subagent.completed`, `agent.completed`, and others). The worker redacts and sends each as `run.event`; the API redacts again, stores it as a `SessionEvent` keyed by `(sessionId, seq)` and publishes it to `run:<runId>` UI subscribers. Heartbeats renew the lease meanwhile.
 5. **result.** The worker removes the run's materialized skills and sends `run.result`. Under a live lease the API records status, result text, error, cost and the SDK session id, writes a `UsageRecord`, and moves the task.
@@ -97,6 +98,19 @@ Budgets (`services/budget-service.ts`): before assigning a mission task, the sch
 
 Scheduler tick additions (Phase 4): start plan runs for `planning` missions, expire pending approvals, gate mission tasks as above, and start review runs for stalled missions.
 
+## Hybrid workers (Phase 5)
+
+Workers are local or remote per project. A worker is local for a project when it runs on the API's machine (its `hello` `machineId` equals the API's) and its `allowedRoots` cover the repository path; any other worker with `canClone` is remote and works from its own clone. Matching paths alone do not make a worker local, since another host may share the path layout. Both compute the machine id the same way: `/etc/machine-id` trimmed, else a random id persisted (0600) at `<OFFICE_WORKER_HOME>/machine-id` on a worker and `<OFFICE_DATA_DIR>/machine-id` on the API. A worker that sends no `machineId` (older than Phase 5) is never local unless `OFFICE_TRUST_UNIDENTIFIED_WORKERS=true` (default false). Workers declare `tags`, `canClone` and `machineId` in `hello`.
+
+- **Git endpoint.** The API serves every project repository at `/git/<projectId>` through `git http-backend` (`routes/git.ts`), behind the worker credential as a bearer token. Its `pre-receive` hook (`apps/api/git-hooks/pre-receive`) admits only fast-forwards of `refs/heads/office/*`; the default branch is never writable.
+- **Placement.** The scheduler's `pickWorker` filters online workers by free slot and repository access, and for mission runs by the project's `requiredWorkerTags` (local-only runs ignore tags), then prefers local workers and the fewest active runs. Mission runs with a worktree (mission task runs, plan and review runs) may go to a remote worker; chat, inbox, summary and non-mission task runs are local-only, because they work in the repository itself.
+- **Remote runs.** The run spec's `git` block carries `remote { path }` instead of `repoPath`. The worker (`apps/worker/src/repos.ts`) clones into `<OFFICE_WORKER_HOME>/repos/<projectId>`, fetches `office/*`, creates the run's worktree from the mission branch, runs the agent and the check, and integrates by pushing the run branch and then the mission branch with `--force-with-lease` against the run's base. A local worker's `update-ref` compare-and-swap and a remote worker's lease push on the same mission branch race safely: one wins, the other is `needs_integration`. A rejected lease push emits `agent.integration.failed { reason }` (git's stderr), and the run result carries it as `git.integrationReason`.
+- **Resumes and leases.** A `waiting_reply` run resumes only on the worker that holds its SDK session; it stays parked while that worker is offline and fails at the reply timeout (`pinned worker offline at resume`), after which the task is retried fresh. A worker that disappears loses its runs at lease expiry (`run.lease.lost { workerId, retried }`), and the task is retried on any eligible worker from the mission branch head.
+- **Results survive restarts.** The worker writes each result to `<OFFICE_WORKER_HOME>/outbox/<runId>.json` before sending it and re-sends it after a restart while the lease is live; once the run is `lost`, the API rejects it with `No live lease` and the worker drops it.
+- **Remote container.** `infra/docker/worker.Dockerfile` and the Compose service `worker-remote` (profile `remote`) run a worker with no host mounts, its state in the named volume `office-worker-remote`, tag `remote`, `canClone`. `infra/compose.hostnet.yaml` optionally shares the host network.
+
+The Workers page shows each worker's mode (local, remote or none), the first 8 characters of its machine id, tags, active runs against capacity and last heartbeat; Settings edits `requiredWorkerTags`.
+
 ## Where each spec entity lives today
 
 Built in Phase 1 (Prisma schema in `packages/db/prisma/schema.prisma`, logic in `apps/api/src`):
@@ -138,9 +152,17 @@ Built in Phase 4:
 - The gate: `packages/runtime/src/gate.ts`; policy evaluation in `packages/shared/src/policy.ts`.
 - Mission Control (plan graph, approvals, evidence) and Settings pages: `apps/web/src/app/mission-control`, `apps/web/src/app/settings`.
 
+Built in Phase 5:
+
+- `Worker` additions: `tags`, `canClone`, `machineId` (the spec's `WorkerCapability` is these two columns plus `allowedRoots`, not a table). `GET /workers` adds `tags`, `canClone`, `machineId`, `online` and `activeRuns`; `GET /runs/:id` adds `retriedByRunId`.
+- The git endpoint: `routes/git.ts`, `plugins/worker-bearer.ts`, `apps/api/git-hooks/pre-receive`.
+- Placement and pinned resumes: `services/scheduler.ts` (`pickWorker`, `resumeWaiting`), `services/run-service.ts` (remote specs, `run.lease.lost`).
+- Remote clone and integration: `apps/worker/src/repos.ts`, `apps/worker/src/git.ts`; the result outbox: `apps/worker/src/outbox.ts`.
+- The remote worker container: `infra/docker/worker.Dockerfile`, `infra/docker/worker-entrypoint.sh`, the `worker-remote` service in `infra/compose.yaml`, `infra/compose.hostnet.yaml`.
+- Workers page and the Settings field for `requiredWorkerTags`: `apps/web/src/app/workers`, `apps/web/src/app/settings`.
+
 Not built yet:
 
 - Phase 3 leftovers: a `MemoryRevision` table (a revision is a new `MemoryEntry` row that supersedes the old one), streaming delivery into a live session, semantic memory search, the memory purge.
 - Phase 4 leftovers: the greenfield path (a mission on a project without a repository), push and PR creation (an approval request only), worktree confinement for chat, inbox and non-mission task runs (they are gated by the approval policy but work in the project repository).
-- Phase 5: remote workers, `WorkerCapability`, remote clone.
 - Phase 6: an audit UI, `ProjectMember`, Agent Inspector, cost views, the interactive shell.

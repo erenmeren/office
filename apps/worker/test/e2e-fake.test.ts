@@ -7,7 +7,7 @@ import type { WebSocket } from 'ws';
 import pino from 'pino';
 import { buildApp, loadConfig } from '@office/api';
 import { createPrisma } from '@office/db';
-import { FakeAdapter, type RuntimeAdapter } from '@office/runtime';
+import { FakeAdapter, machineId, type RuntimeAdapter } from '@office/runtime';
 import type { WorkerToApi } from '@office/shared';
 import { WorkerConnection } from '../src/connection.js';
 import { loadCredential } from '../src/credentials.js';
@@ -57,7 +57,7 @@ describe('worker end to end with the fake runtime', () => {
     const c = new WorkerConnection(
       {
         apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken, workspaceRoots: [tempRoot],
-        runtime: 'fake', capacity: 1, name: 'e2e',
+        runtime: 'fake', capacity: 1, name: 'e2e', tags: [], canClone: false, machineId: machineId(process.env.OFFICE_DATA_DIR!),
       },
       { adapter, heartbeatMs: 200, reconnectBaseMs: 300, logger: pino({ level: 'silent' }) },
     );

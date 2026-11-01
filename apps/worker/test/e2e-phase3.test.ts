@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import { buildApp, loadConfig } from '@office/api';
 import { createPrisma, seed } from '@office/db';
-import { FakeAdapter } from '@office/runtime';
+import { FakeAdapter, machineId } from '@office/runtime';
 import { WorkerConnection } from '../src/connection.js';
 
 async function until<T>(fn: () => Promise<T> | T, what: string, ms = 10_000): Promise<T> {
@@ -64,7 +64,7 @@ describe('phase 3 end to end with the fake runtime', () => {
     connection = new WorkerConnection(
       {
         apiUrl: `ws://127.0.0.1:${port}`, home, enrollToken, workspaceRoots: [tempRoot],
-        runtime: 'fake', capacity: 2, name: 'e2e',
+        runtime: 'fake', capacity: 2, name: 'e2e', tags: [], canClone: false, machineId: machineId(process.env.OFFICE_DATA_DIR!),
       },
       { adapter: new FakeAdapter(), heartbeatMs: 200, reconnectBaseMs: 300, logger: pino({ level: 'silent' }) },
     );

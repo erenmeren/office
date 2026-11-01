@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ProjectSettingsSchema } from '@office/shared';
-import { changedKeys, linesToList, listToLines, policyRows, validateSettingsDraft } from './settings';
+import { changedKeys, commaToList, linesToList, listToLines, policyRows, validateSettingsDraft } from './settings';
 
 describe('settings helpers', () => {
   it('converts between lines and lists', () => {
@@ -22,6 +22,15 @@ describe('settings helpers', () => {
     expect(validateSettingsDraft(ok)).toEqual([]);
     const bad = { ...ok, maxConcurrentRuns: 0, defaultMaxAttempts: 1.5, dailyBudgetUsd: NaN, envTemplate: [{ name: 'OK_1', value: '' }, { name: 'bad name', value: '' }] };
     expect(validateSettingsDraft(bad).map((p) => p.field)).toEqual(['maxConcurrentRuns', 'defaultMaxAttempts', 'dailyBudgetUsd', 'envTemplate.1']);
+  });
+
+  it('validates required worker tags', () => {
+    const ok = ProjectSettingsSchema.parse({});
+    expect(commaToList(' gpu, remote,, ')).toEqual(['gpu', 'remote']);
+    expect(validateSettingsDraft({ ...ok, requiredWorkerTags: commaToList('gpu, remote') })).toEqual([]);
+    expect(validateSettingsDraft({ ...ok, requiredWorkerTags: commaToList('GPU') })).toEqual([
+      { field: 'requiredWorkerTags', message: 'tags are lowercase letters, digits and dashes' },
+    ]);
   });
 
   it('defines the six policy rows, git push and merge together', () => {

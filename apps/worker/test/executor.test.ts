@@ -410,4 +410,82 @@ describe('RunExecutor', () => {
       expect(result().check).toBeUndefined();
     });
   });
+
+  describe('remote clone', () => {
+    const PROJECT = '00000000-0000-0000-0000-00000000000c';
+    const ID = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid'];
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', [...ID, ...args], { cwd, encoding: 'utf8' }).trim();
+    let server: string;
+    const remoteSpec = () =>
+      spec({
+        projectId: PROJECT,
+        cwd: 'remote',
+        prompt: 'COMMIT:a.txt:a',
+        taskKind: 'code',
+        checkCommand: 'true',
+        git: {
+          remote: { path: `/git/${PROJECT}` }, defaultBranch: 'main', missionBranch: 'office/t', taskSlug: 'a',
+          committerName: 'Office', committerEmail: 'o@example.invalid', agentName: 'developer',
+        },
+      });
+    const result = () => (sent.at(-1) as Extract<WorkerToApi, { type: 'run.result' }>).result;
+
+    beforeEach(() => {
+      // the "API": a non-bare repo over file://
+      server = join(root, 'git', PROJECT);
+      mkdirSync(server, { recursive: true });
+      git(server, 'init', '-q', '-b', 'main');
+      writeFileSync(join(server, 'README.md'), 'hi\n');
+      git(server, 'add', '-A');
+      git(server, 'commit', '-q', '-m', 'init');
+    });
+
+    it('runs a remote spec in a worktree of the clone and pushes the run branch', async () => {
+      const seen: RunSpec[] = [];
+      const inner = new FakeAdapter();
+      const rec: RuntimeAdapter = { name: 'fake', run: (s, sink, sig, t) => (seen.push(s), inner.run(s, sink, sig, t)) };
+      const clone = { apiUrl: `file://${root}`, canClone: true, credential: () => 'cred' };
+      // no workspace roots: a remote spec needs none
+      new RunExecutor(rec, (m) => sent.push(m), [], runsDir, undefined, undefined, clone).accept(remoteSpec());
+      await until(done, 'result');
+      const r = result();
+      expect(r.status).toBe('succeeded');
+      expect(seen[0]!.cwd).toBe(join(root, 'worktrees', 'run-1'));
+      expect(r.git).toMatchObject({ integration: 'fast_forwarded', filesChanged: 1 });
+      expect(git(server, 'rev-parse', 'refs/heads/office/t')).toBe(r.git!.headCommit);
+      expect(git(server, 'rev-parse', `refs/heads/${r.git!.branch}`)).toBe(r.git!.headCommit);
+      const cloneDir = join(root, 'repos', PROJECT);
+      expect(git(cloneDir, 'worktree', 'list')).not.toContain('run-1');
+      expect(git(cloneDir, 'branch', '--list', r.git!.branch)).toBe('');
+    });
+
+    it('emits agent.integration.failed with the push rejection when the mission branch moved meanwhile', async () => {
+      const inner = new FakeAdapter();
+      const rec: RuntimeAdapter = {
+        name: 'fake',
+        run: async (s, sink, sig, t) => {
+          const r = await inner.run(s, sink, sig, t);
+          // another run fast-forwards the mission branch on the API before this one integrates
+          const moved = git(server, 'commit-tree', 'main^{tree}', '-p', 'main', '-m', 'moved');
+          git(server, 'update-ref', 'refs/heads/office/t', moved);
+          return r;
+        },
+      };
+      const clone = { apiUrl: `file://${root}`, canClone: true, credential: () => 'cred' };
+      new RunExecutor(rec, (m) => sent.push(m), [], runsDir, undefined, undefined, clone).accept(remoteSpec());
+      await until(done, 'result');
+      const r = result();
+      expect(r.git).toMatchObject({ integration: 'needs_integration' });
+      expect(r.git!.integrationReason).toMatch(/rejected|stale info|failed to push/);
+      const failed = sent.flatMap((m) => (m.type === 'run.event' && m.event.type === 'agent.integration.failed' ? [m.event] : []));
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.payload.reason).toBe(r.git!.integrationReason);
+    });
+
+    it('rejects a remote spec when the worker cannot clone', async () => {
+      executor.accept(remoteSpec());
+      await until(done, 'rejected');
+      expect(sent).toEqual([{ type: 'run.rejected', runId: 'run-1', reason: 'worker cannot clone' }]);
+    });
+  });
 });

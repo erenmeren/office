@@ -100,6 +100,24 @@ authed.describe('every page renders without console noise', () => {
     expectQuiet(noise);
   });
 
+  authed('workers: a pending worker shows no mode; a remote worker shows its mode and tag', async ({ page, request: api, noise }) => {
+    const name = `e2e-worker-${Date.now()}`;
+    expect((await api.post(`${API}/workers`, { data: { name } })).ok()).toBe(true);
+    await page.route(`${API}/workers`, async (route) => {
+      const real = (await (await route.fetch()).json()) as Record<string, unknown>[];
+      const fixture = { id: 'w-fixture', name: 'e2e-remote', status: 'online', capacity: 2, allowedRoots: [], tags: ['gpu'], canClone: true, lastHeartbeatAt: new Date().toISOString(), online: true, activeRuns: 1 };
+      await route.fulfill({ json: [...real, fixture] });
+    });
+    await page.goto('/workers');
+    const pending = page.getByRole('row').filter({ hasText: name });
+    await expect(pending.getByText('Pending')).toBeVisible();
+    const remote = page.getByRole('row').filter({ hasText: 'e2e-remote' });
+    await expect(remote.getByText('remote', { exact: true })).toBeVisible();
+    await expect(remote.getByText('gpu', { exact: true })).toBeVisible();
+    await expect(remote.getByText('1/2')).toBeVisible();
+    expectQuiet(noise);
+  });
+
   authed('owner messages an agent', async ({ page, noise }) => {
     await page.goto('/conversations');
     await page.waitForLoadState('networkidle');

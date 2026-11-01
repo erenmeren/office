@@ -1,6 +1,6 @@
 # Security
 
-This describes what Phases 1 to 4 enforce and what they do not yet. The target model is spec §14.
+This describes what Phases 1 to 5 enforce and what they do not yet. The target model is spec §14.
 
 ## Owner authentication
 
@@ -21,7 +21,7 @@ This describes what Phases 1 to 4 enforce and what they do not yet. The target m
 
 ## Workspace roots
 
-- Each worker declares allowed workspace roots (`OFFICE_WORKSPACE_ROOTS`). The scheduler only assigns a task to a worker when the project's repository path is under one of that worker's roots.
+- Each worker declares allowed workspace roots (`OFFICE_WORKSPACE_ROOTS`). The scheduler assigns a run to a worker whose roots cover the project's repository path on the same machine as the API (its `hello` `machineId` equals the API's; a worker without one is never local unless `OFFICE_TRUST_UNIDENTIFIED_WORKERS=true`), or, for mission runs, to a `canClone` worker, which works from its own clone and never receives the repository path.
 - The worker checks again before running: the run's `cwd` is resolved with symlinks followed and must be an allowed root or inside one, compared by path segment (`/a/bc` is not under `/a/b`). Otherwise the run is rejected with `cwd outside allowed roots`.
 - Task, inbox and chat runs without a mission run in the project repository. From Phase 4 every mission task run and the Chief's review run work in their own git worktree under `<OFFICE_WORKER_HOME>/worktrees/<runId>`, outside the repository (see "Approvals, worktrees and secrets" below). The Chief's plan run has no worktree: it runs read-only in the project repository itself.
 
@@ -74,10 +74,20 @@ This describes what Phases 1 to 4 enforce and what they do not yet. The target m
 - **Audit log.** `AuditLog` rows (`GET /audit`) record owner and system decisions: `plan.approved`, `plan.rejected`, `plan.edited`, `plan.replan`, `approval.decided`, `approval.expired`, `budget.approved`, `mission.updated`, `mission.cancelled`, `task.reviewed` (the Chief's review or the owner), `task.override`, `task.retry`, `settings.updated`, `project_agents.updated`, `agent.updated`, `skill.approved`, `skill.rejected`, `memory.verified` and `memory.rejected`.
 - **CORS.** `@fastify/cors` lists its methods explicitly (`GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`); the default list blocked `PUT` and `DELETE` from the browser.
 
+## Remote workers and the git endpoint (Phase 5)
+
+- **Bearer auth.** `/git/:projectId/*` accepts only `Authorization: Bearer <worker credential>`; the credential is matched by its hash on every request, so a revoked worker (or one whose credential is unknown) gets 401 `worker_unauthorized` at its next fetch or push, also in the middle of a session. Owner session cookies are not accepted there, and worker credentials are not accepted on owner routes.
+- **Repository resolution.** The endpoint serves only the repository the database names for the project: the API links `<OFFICE_DATA_DIR>/git-roots/<projectId>/repo` to `Project.repoPath` and runs `git http-backend` with that directory as `GIT_PROJECT_ROOT`. Only the smart-HTTP paths are passed through; `..` and `.` segments answer 404. The child gets `PATH` and `HOME` only, plus the CGI and git variables, and is killed when the client disconnects.
+- **The pre-receive hook.** Workers can write only fast-forwards of `refs/heads/office/*`. Any other ref, a delete, a tag or a non-fast-forward rejects the whole push, and the project's default branch is never writable, so a worker cannot change `main` or rewrite a mission branch. Nothing is pushed to the project's own `origin`.
+- **Remote workers never see the control plane's filesystem.** A worker that clones receives `git.remote { path: '/git/<projectId>' }` and never `repoPath`; runs without a worktree (chat, inbox, summary, non-mission task) go only to workers whose roots cover the repository. The remote worker container mounts no host path: its credential, clones and worktrees live in the named volume `office-worker-remote` (the Phase 5 acceptance checked `docker inspect` `Mounts`). The context pack is still plain text, so it can carry a control-plane path from memory or a summary; the remote worker cannot open it.
+- **Credential handling in git commands.** The worker passes the credential to git only through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0=http.extraHeader`/`GIT_CONFIG_VALUE_0` environment variables, with `GIT_TERMINAL_PROMPT=0`. It never goes into a URL, `.git/config`, a log line or an event. The credential file and the result outbox files are mode 0600.
+- **What remote workers still get.** The worker credential lets a worker fetch every project's repository through the endpoint (projects are not scoped per worker), push `office/*` branches, and call the office tools for runs it holds. Revoke a worker you no longer trust. The enroll token stays in the container's environment after enrollment (it is single-use, so it no longer authenticates).
+- **Network.** `API_HOST=0.0.0.0`, needed for a container or another machine to reach the API, exposes every route (including the first-run `/auth/setup`) on all interfaces. The git endpoint and `/ws/worker` are plain HTTP and WebSocket; put them behind TLS before a worker connects over an untrusted network. The host-network override `infra/compose.hostnet.yaml` shares the host's network stack with the container, so use it only where the firewall blocks the Docker bridge, and prefer a firewall rule otherwise. Postgres (5433) and Redis (6380) are published on `127.0.0.1` only (`infra/compose.yaml`); the containerised remote worker never needs them, it talks only to the API.
+
 ## Not yet enforced
 
 - **Worker environment**: the agent's child process inherits the worker's whole environment apart from the keys above. Start the worker with only the variables it needs; any other secret in its environment (for example one added to `.env`, which `scripts/dev-all.sh` exports whole for convenience) reaches the agent. Use this only with throwaway local values.
-- **Worktree confinement** (Phase 5/6 sandbox): `chat`, `inbox` and non-mission task runs work in the project repository itself, and no run is confined to its worktree; the approval policy gates their calls but does not sandbox them.
+- **Worktree confinement** (Phase 6 sandbox): `chat`, `inbox` and non-mission task runs work in the project repository itself, and no run is confined to its worktree; the approval policy gates their calls but does not sandbox them.
 - **Approval detection** is substring matching: `git push` and the destructive patterns are matched case-insensitively anywhere in the command (`git  push` with two spaces or `git -C x push` are missed; `echo "git push"` is caught), and sensitive paths match the file's base name only, case-sensitively.
 - **Project authorization and membership** (Phase 6): there is one owner, who can see every project. `ProjectMember` and per-project authorization are not built.
 - **Audit log**: worker enrollment and revocation are not audited yet, and there is no audit UI (Phase 6).

@@ -5,6 +5,7 @@ import type { RuntimeAdapter } from '@office/runtime';
 import { ApiToWorkerSchema, type ApiToWorker, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import type { WorkerConfig } from './config.js';
 import { loadCredential, saveCredential } from './credentials.js';
+import { Outbox } from './outbox.js';
 import { RunExecutor } from './executor.js';
 import { sweepRunRoots } from './skills.js';
 
@@ -39,6 +40,7 @@ export class WorkerConnection {
   private reconnectTimer?: NodeJS.Timeout;
   private stopped = false;
   private runsDir: string;
+  private outbox: Outbox;
   private started?: { resolve: () => void; reject: (err: Error) => void };
 
   constructor(
@@ -46,16 +48,22 @@ export class WorkerConnection {
     opts: ConnectionOptions,
   ) {
     this.runsDir = join(config.home, 'runs');
+    this.outbox = new Outbox(join(config.home, 'outbox'));
     this.log = opts.logger ?? pino({ level: process.env.LOG_LEVEL ?? 'info' });
     this.heartbeatMs = opts.heartbeatMs ?? 10_000;
     this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
     this.backoffMs = this.reconnectBaseMs;
-    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log);
+    this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log, {
+      apiUrl: config.apiUrl,
+      canClone: config.canClone,
+      credential: () => this.credential,
+    });
   }
 
   /** Connects and resolves once the API welcomes this worker. */
   async start(): Promise<void> {
     await sweepRunRoots(this.runsDir, []); // no runs are active at start
+    for (const [runId, msg] of await this.outbox.load((file, err) => this.log.warn({ file, err }, 'skipping unreadable outbox entry'))) this.unsentResults.set(runId, msg);
     this.credential = await loadCredential(this.config.home);
     if (!this.credential && !this.config.enrollToken) {
       throw new Error('No saved credential and no enroll token (OFFICE_ENROLL_TOKEN)');
@@ -98,6 +106,9 @@ export class WorkerConnection {
         allowedRoots: this.config.workspaceRoots,
         // reattach: the API renews leases of runs still executing here
         activeRunIds: this.activeRunIds(),
+        tags: this.config.tags,
+        canClone: this.config.canClone,
+        machineId: this.config.machineId,
       });
     });
     socket.on('message', (data) => {
@@ -169,9 +180,16 @@ export class WorkerConnection {
         this.log.info({ runId: msg.runId }, 'run cancelled by API');
         this.executor.cancel(msg.runId);
         return;
-      case 'error':
+      case 'error': {
         this.log.warn({ message: msg.message }, 'API reported an error');
+        // the lease is gone: the API will retry the run, so the stored result is dead weight
+        const lost = /^No live lease for run (\S+) on this worker/.exec(msg.message)?.[1];
+        if (lost) {
+          this.unsentResults.delete(lost);
+          await this.outbox.delete(lost);
+        }
         return;
+      }
     }
   }
 
@@ -190,11 +208,18 @@ export class WorkerConnection {
   private send(msg: WorkerToApi) {
     const open = this.socket?.readyState === WebSocket.OPEN;
     if (msg.type === 'run.result') {
-      if (!open) {
-        this.unsentResults.set(msg.runId, msg);
-        return;
-      }
-      this.unsentResults.delete(msg.runId);
+      // persist first, then send if the socket is open by then; the entry goes after a send
+      this.unsentResults.set(msg.runId, msg);
+      void this.outbox
+        .put(msg.runId, msg)
+        .then(async () => {
+          if (this.socket?.readyState !== WebSocket.OPEN || this.unsentResults.get(msg.runId) !== msg) return;
+          this.socket.send(JSON.stringify(msg));
+          this.unsentResults.delete(msg.runId);
+          await this.outbox.delete(msg.runId);
+        })
+        .catch((err) => this.log.error({ err, runId: msg.runId }, 'result outbox failed'));
+      return;
     }
     // tool calls are not buffered: a call made while disconnected fails at once
     if (msg.type === 'tool.call' && !open) {

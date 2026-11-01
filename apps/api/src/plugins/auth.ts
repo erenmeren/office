@@ -20,7 +20,8 @@ export function registerAuth(app: FastifyInstance) {
       request.user = { id: session.user.id, email: session.user.email };
     }
     // /auth/me is public so it can report setupRequired
-    if (PUBLIC_PATHS.has(path) || (request.method === 'GET' && path === '/auth/me')) return;
+    // /git/ authenticates workers by bearer in its own route, never by cookie
+    if (PUBLIC_PATHS.has(path) || path.startsWith('/git/') || (request.method === 'GET' && path === '/auth/me')) return;
     if (!request.user) return reply.code(401).send({ error: 'unauthorized' });
   });
 }

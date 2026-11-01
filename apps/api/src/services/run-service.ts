@@ -20,7 +20,7 @@ import { getSettings } from './project-service.js';
 import { storeArtifact } from './artifact-store.js';
 import { queueMessageCreated, sendMessage, toMessageView } from './message-service.js';
 import { expireRunApprovals, lockRun } from './approval-service.js';
-import type { WorkerGateway } from '../ws/worker-gateway.js';
+import type { OnlineWorker, WorkerGateway } from '../ws/worker-gateway.js';
 
 export class LeaseError extends Error {
   constructor(runId: string) {
@@ -31,6 +31,17 @@ export class LeaseError extends Error {
 
 // a waiting_approval run keeps its lease and worker slot; the worker keeps heartbeating it
 const LEASED = ['queued', 'running', 'waiting_approval'] as const;
+/** The chosen worker of a mission run: `local` decides between the repo path and the git endpoint. */
+export type RunWorker = Pick<OnlineWorker, 'workerId' | 'local'>;
+
+/** How a mission run's worker reaches the repo: its own checkout when local, else the API's git endpoint. */
+export function repoAccess(project: { id: string; repoPath: string }, worker: RunWorker) {
+  return worker.local(project.repoPath) ? { repoPath: project.repoPath } : { remote: { path: `/git/${project.id}` } };
+}
+
+// a remote worker never learns a control-plane path; it sets cwd to its own worktree
+const remoteCwd = (git: RunSpec['git']) => (git?.remote ? { cwd: 'remote' } : {});
+
 const leaseUntil = (config: Config) => new Date(Date.now() + config.leaseSeconds * 1000);
 
 function queueRunStatus(outbox: Outbox, runId: string, status: RunStatusChanged['status']) {
@@ -199,6 +210,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
     const spec = RunSpecSchema.parse({
       ...base.spec,
       ...input.spec,
+      ...remoteCwd(input.spec?.git),
       ...(input.taskBudgetUsd !== undefined && { maxBudgetUsd: Math.min(base.spec.maxBudgetUsd, input.taskBudgetUsd) }),
       ...(input.allowedToolsOverride && { allowedTools: input.allowedToolsOverride }),
       outputFormat: input.outputFormat,
@@ -220,7 +232,7 @@ export async function createRunForTask(
   prisma: PrismaClient,
   hub: EventHub,
   task: Task,
-  worker: { workerId: string },
+  worker: RunWorker,
   config: Config,
 ) {
   const input: CreateRunInput = {
@@ -232,7 +244,7 @@ export async function createRunForTask(
     worker,
   };
   if (!task.missionId) return createRun(prisma, hub, config, input);
-  const fields = await missionRunFields(prisma, task as Task & { missionId: string });
+  const fields = await missionRunFields(prisma, task as Task & { missionId: string }, worker);
   // the first run of the mission fixes its branch name
   await prisma.mission.updateMany({ where: { id: task.missionId, branch: null }, data: { branch: fields.spec.git.missionBranch } });
   return createRun(prisma, hub, config, {
@@ -251,7 +263,7 @@ export async function createRunForTask(
 }
 
 /** The run spec fields of a mission task: worktree (git), commands, env, kind and budget. */
-async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: string }) {
+async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: string }, worker: RunWorker) {
   const [mission, project, agent, settings] = await Promise.all([
     prisma.mission.findUniqueOrThrow({ where: { id: task.missionId } }),
     prisma.project.findUniqueOrThrow({ where: { id: task.projectId } }),
@@ -265,7 +277,7 @@ async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: 
     taskBudgetUsd: task.budgetUsd ?? settings.defaultTaskBudgetUsd,
     spec: {
       git: {
-        repoPath: project.repoPath,
+        ...repoAccess(project, worker),
         defaultBranch: project.defaultBranch,
         missionBranch: missionBranch(mission),
         taskSlug: task.key ?? task.id.slice(0, 8),
@@ -288,6 +300,7 @@ export type ResumeReason =
 /**
  * waiting_reply -> queued on `worker`: the same run and session continue, resuming the SDK session.
  * Returns false when the run is no longer waiting (cancelled, or resumed concurrently).
+ * Only the run's own worker may resume it: the SDK session and worktree live there.
  */
 export async function resumeRun(
   prisma: PrismaClient,
@@ -295,11 +308,12 @@ export async function resumeRun(
   config: Config,
   gateway: Pick<WorkerGateway, 'send'>,
   runId: string,
-  opts: ResumeReason & { worker: { workerId: string } },
+  opts: ResumeReason & { worker: RunWorker },
   log?: { warn: (obj: object, msg: string) => void },
 ) {
   const run = await prisma.taskRun.findUnique({ where: { id: runId }, include: { session: true, task: true } });
   if (!run?.session || run.status !== 'waiting_reply') return false;
+  if (run.workerId !== opts.worker.workerId) throw new Error(`run ${runId} is pinned to worker ${run.workerId}`);
   const session = run.session;
   const prompt =
     opts.reason === 'reply'
@@ -355,7 +369,10 @@ export async function resumeRun(
   hub.publish(`run:${runId}`, { type: 'run.status.changed', runId, status: 'queued' });
 
   // a mission task keeps its worktree, commands and budget across the resume
-  const mission = run.kind === 'task' && run.task?.missionId ? await missionRunFields(prisma, run.task as Task & { missionId: string }) : null;
+  const mission =
+    run.kind === 'task' && run.task?.missionId
+      ? await missionRunFields(prisma, run.task as Task & { missionId: string }, opts.worker)
+      : null;
   // the worker numbers its next event startSeq + 1, after agent.resumed
   const spec = RunSpecSchema.parse({
     ...base.spec,
@@ -364,6 +381,7 @@ export async function resumeRun(
       taskKind: mission.taskKind,
       readOnlyCheckout: mission.readOnlyCheckout,
       maxBudgetUsd: Math.min(base.spec.maxBudgetUsd, mission.taskBudgetUsd),
+      ...remoteCwd(mission.spec.git),
     }),
     runId,
     sessionId: session.id,
@@ -388,6 +406,33 @@ export async function resumeRun(
     return false;
   }
   return true;
+}
+
+/**
+ * waiting_reply -> failed when the run cannot resume (its pinned worker is offline at the reply timeout).
+ * Its task is retried per maxAttempts; the retry is a new run with a fresh SDK session.
+ */
+export async function failWaitingRun(prisma: PrismaClient, hub: EventHub, runId: string, error: string) {
+  const now = new Date();
+  const outbox: Outbox = [];
+  const failed = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.taskRun.updateMany({
+      where: { id: runId, status: 'waiting_reply' },
+      data: { status: 'failed', finishedAt: now, error },
+    });
+    if (count === 0) return false;
+    await tx.agentSession.updateMany({ where: { runId }, data: { status: 'failed', endedAt: now } });
+    const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId }, include: { task: true, mission: true } });
+    if (run.kind === 'task' && run.task) {
+      if (run.task.status === 'waiting_reply') await setTaskStatus(tx, outbox, run.task.id, 'running');
+      const next = run.mission?.status === 'cancelled' ? 'cancelled' : run.task.attempts < run.task.maxAttempts ? 'ready' : 'failed';
+      await setTaskStatus(tx, outbox, run.task.id, next);
+    }
+    queueRunStatus(outbox, runId, 'failed');
+    return true;
+  });
+  hub.publishAll(outbox);
+  return failed;
 }
 
 /**
@@ -664,6 +709,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
   const lost: Array<{ runId: string; workerId: string | null }> = [];
   for (const run of expired) {
     const outbox: Outbox = [];
+    let retried = false;
     const changed = await prisma.$transaction(async (tx) => {
       // re-check inside the transaction so a concurrent result or renewal wins
       const { count } = await tx.taskRun.updateMany({
@@ -679,7 +725,8 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
         // a resumed run lost before accept (waiting_reply) or a run lost while asking: neither can go to ready
         if (task.status === 'waiting_reply' || task.status === 'waiting_approval') await setTaskStatus(tx, outbox, task.id, 'running');
-        await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
+        retried = task.attempts < task.maxAttempts;
+        await setTaskStatus(tx, outbox, task.id, retried ? 'ready' : 'failed');
       }
       if (run.kind === 'plan') await onPlanRunLost(tx, outbox, run);
       if (run.kind === 'review') await reviewRunFailed(tx, outbox, { ...run, status: 'lost' });
@@ -699,7 +746,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         runId: run.id,
         agentId: run.session.agentId,
         projectId: run.session.projectId,
-        payload: { workerId: run.workerId },
+        payload: { workerId: run.workerId, retried },
       };
       if ((await appendEvent(prisma, event)).inserted) hub.publish(`run:${run.id}`, event);
     }

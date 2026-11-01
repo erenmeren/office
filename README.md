@@ -161,7 +161,29 @@ Pending approvals appear on Mission Control with the tool call and the reason; a
 
 ## 15. Remote workers on other machines
 
-Phase 5. The worker protocol does not assume localhost, but remote clone, remote workspace roots and multi-machine coordination are not built or tested yet. See `docs/progress.md`.
+A worker is local for a project when it runs on the same machine as the API (its `hello` `machineId`, read from `/etc/machine-id`, equals the API's) and its `OFFICE_WORKSPACE_ROOTS` cover the project's repository; only local workers receive the repository path and take chat, inbox, summary and non-mission task runs. A worker that sends no `machineId` (one built before Phase 5) is never local unless the API runs with `OFFICE_TRUST_UNIDENTIFIED_WORKERS=true`, so restart every worker after upgrading. Project `requiredWorkerTags` apply only to mission runs (plan, code, review); a worker started with `OFFICE_WORKER_CAN_CLONE=true` can also work on projects it cannot see, from its own clone. It clones from the API's git endpoint (`/git/<projectId>`, authenticated with the worker's credential) into `<OFFICE_WORKER_HOME>/repos/<projectId>` and pushes only `office/*` branches back, fast-forward only; the project's default branch and its own `origin` are never touched. Mission task, plan and review runs can go to such a worker; chat, inbox and summary runs stay on local workers. The scheduler prefers local workers. Tag workers with `OFFICE_WORKER_TAGS` (comma-separated, lowercase) and require tags per project under Settings, "Required worker tags".
+
+On any other machine:
+
+1. Start the API with `API_HOST=0.0.0.0` and make port 4000 reachable from that machine (put it behind TLS on an untrusted network).
+2. Create a worker on the Workers page and copy its enroll token.
+3. On the other machine: `OFFICE_API_URL=ws://<api-host>:4000 OFFICE_WORKER_CAN_CLONE=true OFFICE_WORKSPACE_ROOTS= OFFICE_WORKER_TAGS=<tags> OFFICE_ENROLL_TOKEN=<token> pnpm --filter @office/worker dev` (the token only on the first start; the credential is saved to `$OFFICE_WORKER_HOME/credentials.json`). The machine needs `git` and, for `OFFICE_RUNTIME=claude`, its own Claude login.
+
+The Workers page shows each worker's mode (local, remote or none), tags, active runs, last heartbeat and a Revoke button; revoking also locks the worker out of the git endpoint at its next request.
+
+### Remote worker container
+
+`pnpm worker:remote` builds `infra/docker/worker.Dockerfile` and starts the `worker-remote` service (Compose profile `remote`). The container mounts nothing from the host: it clones project repositories from the API git endpoint (`OFFICE_WORKER_CAN_CLONE=true`, no workspace roots), keeps its credential and clones in the named volume `office-worker-remote` (`/office-worker`), and registers with the tag `remote`.
+
+1. Start the API with `API_HOST=0.0.0.0` (the default `127.0.0.1` is not reachable from the container, which connects to `ws://host.docker.internal:4000`). This also exposes the API, including the first-run `/auth/setup`, on every interface.
+2. A host firewall with default deny (for example ufw) drops the Docker bridge's traffic to port 4000. Choose one:
+   - allow it: `sudo ufw allow from 172.16.0.0/12 to any port 4000 proto tcp` (the owner's choice; a system change), or
+   - run the container on the host network with the opt-in override: add `-f infra/compose.hostnet.yaml` to the Compose command (step 4). The container then shares the host's network stack, so it is isolated from the host's filesystem but not from its network.
+3. Create a worker (`POST /workers` or the Workers page) and copy its enroll token.
+4. `OFFICE_REMOTE_ENROLL_TOKEN=<token> pnpm worker:remote`, or with the override `OFFICE_REMOTE_ENROLL_TOKEN=<token> docker compose -f infra/compose.yaml -f infra/compose.hostnet.yaml --profile remote up -d --build worker-remote`. Later starts need no token; the saved credential in the volume is used. Without a token or a saved credential the container exits with code 2 and `OFFICE_ENROLL_TOKEN required on first start`.
+5. Check: the Workers page lists the worker `online` in mode remote with the tag `remote`; `docker inspect infra-worker-remote-1 --format '{{json .Mounts}}'` lists only the `office-worker-remote` volume. Stop it with `docker compose -f infra/compose.yaml --profile remote stop worker-remote`.
+
+The runtime defaults to `fake`: its tasks need the `COMMIT:<path>:<text>` marker in their description to change files, and since plan and review runs can land on the container too, a fake container next to a real local worker can take the Chief's review (seen in the Phase 5 acceptance). `OFFICE_REMOTE_RUNTIME=claude` runs real Claude sessions, which needs the owner to provide Claude credentials inside the container; nothing is mounted or baked in for that. `OFFICE_REMOTE_WORKER_NAME` overrides the name (`remote-1`).
 
 ## Claude authentication
 

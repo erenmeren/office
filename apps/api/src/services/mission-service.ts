@@ -18,7 +18,7 @@ import { closeTask, evidenceFor, evidenceRule } from './review-service.js';
 import type { EventHub, Outbox } from './event-hub.js';
 import { findOrCreateConversation } from './message-service.js';
 import { agentAllowed, getSettings } from './project-service.js';
-import { createRun } from './run-service.js';
+import { createRun, repoAccess, type RunWorker } from './run-service.js';
 import { cancelLiveRuns, cancelTask, notifyCancelled, setTaskStatus, type Db } from './task-service.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 
@@ -161,7 +161,7 @@ export async function startPlanRun(
   hub: EventHub,
   config: Config,
   mission: Mission & { project: Project },
-  worker: { workerId: string },
+  worker: RunWorker,
 ) {
   const chief = await prisma.agent.findFirst({ where: { slug: CHIEF_SLUG, isActive: true } });
   if (!chief) throw new Error('no active chief agent');
@@ -178,7 +178,7 @@ export async function startPlanRun(
     // a read-only worktree, never the real repo: untracked secrets such as .env.local are not in a checkout
     spec: {
       git: {
-        repoPath: mission.project.repoPath,
+        ...repoAccess(mission.project, worker),
         defaultBranch: mission.project.defaultBranch,
         missionBranch: missionBranch(mission),
         taskSlug: 'plan',
@@ -555,7 +555,7 @@ export async function startReviewRun(
   hub: EventHub,
   config: Config,
   mission: Mission & { project: Project },
-  worker: { workerId: string },
+  worker: RunWorker,
 ) {
   const chief = await prisma.agent.findFirst({ where: { slug: CHIEF_SLUG, isActive: true } });
   if (!chief) throw new Error('no active chief agent');
@@ -572,7 +572,7 @@ export async function startReviewRun(
     allowedToolsOverride: PLAN_TOOLS,
     spec: {
       git: {
-        repoPath: mission.project.repoPath,
+        ...repoAccess(mission.project, worker),
         defaultBranch: mission.project.defaultBranch,
         missionBranch: missionBranch(mission),
         taskSlug: 'review',

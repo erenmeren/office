@@ -15,7 +15,7 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { put } from '@/lib/api';
 import { useAgents, useBudget, useRuntimeSettings } from '@/lib/queries';
-import { changedKeys, validateSettingsDraft } from '@/lib/settings';
+import { changedKeys, commaToList, validateSettingsDraft } from '@/lib/settings';
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
@@ -38,6 +38,7 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
   // raw text while typing, so a cleared field stays empty instead of turning into 0
   const rawOf = (s: ProjectSettings) => Object.fromEntries(numKeys.map((k) => [k, String(s[k])])) as Record<NumKey, string>;
   const [raw, setRaw] = useState(() => rawOf(settings));
+  const [tagsText, setTagsText] = useState(settings.requiredWorkerTags.join(', '));
   const problem = (field: string) => problems.find((p) => p.field === field)?.message;
 
   const keys = changedKeys(original, draft);
@@ -69,6 +70,7 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
     setIds(originalIds);
     setResetKey((k) => k + 1);
     setRaw(rawOf(original));
+    setTagsText(original.requiredWorkerTags.join(', '));
     setProblems([]);
     setError(undefined);
     setSaved(false);
@@ -201,6 +203,17 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
             </Field>
             <Field label="Check timeout (seconds)" htmlFor="checkTimeoutSeconds" error={problem('checkTimeoutSeconds')}>
               <Input {...num('checkTimeoutSeconds')} />
+            </Field>
+            <Field label="Required worker tags" htmlFor="requiredWorkerTags" hint="Comma-separated. Only workers with all of these tags run this project." error={problem('requiredWorkerTags')}>
+              <Input
+                id="requiredWorkerTags"
+                value={tagsText}
+                aria-invalid={!!problem('requiredWorkerTags') || undefined}
+                onChange={(e) => {
+                  setTagsText(e.target.value);
+                  set('requiredWorkerTags', commaToList(e.target.value));
+                }}
+              />
             </Field>
             <Field label="Committer name" htmlFor="committerName">
               <Input {...text('committerName')} />

@@ -15,12 +15,50 @@ export async function git(cwd: string, ...args: string[]): Promise<string> {
 
 const succeeds = (cwd: string, ...args: string[]) => git(cwd, ...args).then(() => true, () => false);
 
-/** Creates `branch` from `defaultBranch` when missing; returns its head commit. */
-export async function ensureMissionBranch(repoPath: string, branch: string, defaultBranch: string): Promise<string> {
+/**
+ * git against the API remote: the worker credential goes in as `http.extraHeader` through the environment,
+ * so it is never in argv (`ps`), the URL (stderr) or a file. No prompts.
+ */
+export async function gitAuth(cwd: string, credential: string, ...args: string[]): Promise<string> {
+  const env = {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.extraHeader',
+    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${credential}`,
+  };
+  const { stdout } = await execFile('git', args, { cwd, env, maxBuffer: 64 * 1024 * 1024 });
+  return stdout.trim();
+}
+
+/** Push context for a clone of the API repository (remote `office`). */
+export interface RemoteAuth {
+  credential: string;
+  // the worktree's recorded base: the mission head the run started from
+  baseCommit: string;
+  runBranch: string;
+}
+
+/**
+ * Creates `branch` from `defaultBranch` when missing; returns its head commit.
+ * With `credential` (a clone): created from `office/<defaultBranch>` and pushed; if the API already has it, its copy wins.
+ */
+export async function ensureMissionBranch(repoPath: string, branch: string, defaultBranch: string, credential?: string): Promise<string> {
   const ref = `refs/heads/${branch}`;
   // a concurrent run may create it between the check and the create; rev-parse then still answers
   if (!(await succeeds(repoPath, 'rev-parse', '--verify', '-q', ref))) {
-    await git(repoPath, 'branch', branch, defaultBranch).catch(() => {});
+    if (credential === undefined) {
+      await git(repoPath, 'branch', branch, defaultBranch).catch(() => {});
+    } else {
+      await git(repoPath, 'branch', branch, `refs/remotes/office/${defaultBranch}`);
+      await gitAuth(repoPath, credential, 'push', '-q', 'office', `${ref}:${ref}`)
+        .catch(() => gitAuth(repoPath, credential, 'fetch', '-q', 'office', `+${ref}:${ref}`))
+        .catch(async (err) => {
+          // unpublished: drop the local branch so the next run creates and publishes it again
+          await git(repoPath, 'branch', '-D', branch).catch(() => {});
+          throw err;
+        });
+    }
   }
   return git(repoPath, 'rev-parse', '--verify', ref);
 }
@@ -79,9 +117,42 @@ export async function collectResult(worktreePath: string, baseCommit: string) {
   return { headCommit, commits, diffStat, filesChanged: names ? names.split('\n').length : 0 };
 }
 
-/** Moves the mission branch to `headCommit` only when that is a fast-forward of its current head. */
-export async function fastForward(repoPath: string, missionBranch: string, headCommit: string): Promise<IntegrationStatus> {
+/**
+ * Moves the mission branch to `headCommit` only when that is a fast-forward of its current head.
+ * With `remote` (a clone) the CAS is a push to the API leased on the run's base commit; the run branch is pushed
+ * first so a needs_integration run keeps its commits reachable on the API side. A rejected lease push reports
+ * git's stderr through `onRejected`.
+ */
+export async function fastForward(
+  repoPath: string,
+  missionBranch: string,
+  headCommit: string,
+  remote?: RemoteAuth,
+  onRejected?: (reason: string) => void,
+): Promise<IntegrationStatus> {
   const ref = `refs/heads/${missionBranch}`;
+  if (remote) {
+    const run = `refs/heads/${remote.runBranch}`;
+    await gitAuth(repoPath, remote.credential, 'push', '-q', 'office', `${run}:${run}`);
+    // the lease implies force: a rewritten history (amend, reset) must never reach the mission branch
+    if (!(await succeeds(repoPath, 'merge-base', '--is-ancestor', remote.baseCommit, headCommit))) return 'needs_integration';
+    let stderr = '';
+    const pushed = await gitAuth(repoPath, remote.credential, 'push', '-q', 'office', `${headCommit}:${ref}`, `--force-with-lease=${ref}:${remote.baseCommit}`).then(
+      () => true,
+      (err: { stderr?: string; message?: string }) => {
+        stderr = String(err.stderr || err.message || '').trim().slice(0, 2000);
+        // the server may have applied the push and the response got lost
+        return gitAuth(repoPath, remote.credential, 'ls-remote', 'office', ref).then((out) => out.split('\t')[0] === headCommit, () => false);
+      },
+    );
+    if (!pushed) {
+      onRejected?.(stderr || 'push to the mission branch was rejected');
+      return 'needs_integration';
+    }
+    // mirror the API locally, so removeWorktree sees the run branch as integrated; a late update never moves it back
+    await git(repoPath, 'update-ref', ref, headCommit, remote.baseCommit).catch(() => {});
+    return 'fast_forwarded';
+  }
   const current = await git(repoPath, 'rev-parse', '--verify', ref);
   if (!(await succeeds(repoPath, 'merge-base', '--is-ancestor', current, headCommit))) return 'needs_integration';
   // compare-and-swap: a concurrent fast-forward in between makes this fail instead of being overwritten

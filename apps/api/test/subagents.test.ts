@@ -24,7 +24,7 @@ describe('subagent runs', () => {
     ).json().id;
     const task = await t.prisma.task.create({ data: { projectId, agentId, title: 'T' } });
     const config = loadConfig({ ...process.env, DATABASE_URL: process.env.DATABASE_URL_TEST });
-    spec = (await createRunForTask(t.prisma, t.app.hub, task, { workerId }, config)).spec;
+    spec = (await createRunForTask(t.prisma, t.app.hub, task, { workerId, local: () => true }, config)).spec;
   });
   afterAll(() => t.close());
 

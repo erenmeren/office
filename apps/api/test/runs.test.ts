@@ -142,6 +142,55 @@ describe('run lifecycle', () => {
     expect(resumed.prompt).toBe('No reply was received within 0 minutes. Continue or escalate.');
   });
 
+  const offline = async (w: FakeWorker) => {
+    const id = (w.received[0] as { workerId: string }).workerId;
+    await w.close();
+    await until(async () => !s.t.app.gateway.onlineWorkers().some((x) => x.workerId === id), 'worker offline');
+  };
+  const assignsOf = (w: FakeWorker, runId: string) =>
+    w.received.filter((m) => m.type === 'run.assign' && m.spec.runId === runId);
+
+  it('resumes a waiting_reply run only on its original worker', async () => {
+    s = await setup();
+    const { w, spec, question } = await s.suspended();
+    const other = await s.worker();
+    await offline(w);
+    await sendMessage(s.t.prisma, s.t.config.messageLimits, {
+      projectId: s.projectId, type: 'reply', body: 'Use Postgres.', senderAgentId: s.b, inReplyToId: question.id, recipientAgentIds: [],
+    });
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect(assignsOf(other, spec.runId)).toHaveLength(0);
+    expect((await s.run(spec.runId)).status).toBe('waiting_reply');
+
+    const back = await connectFakeWorker(s.t.app, { credential: w.credential, name: 'w', capacity: 1, allowedRoots: ['/tmp/office-ws'] });
+    try {
+      const resumed = await s.assign(back);
+      expect(resumed).toMatchObject({ runId: spec.runId, resumeSdkSessionId: 'sdk-1', prompt: 'Reply from b:\nUse Postgres.' });
+      expect((await s.run(spec.runId)).workerId).toBe((w.received[0] as { workerId: string }).workerId);
+      expect(assignsOf(other, spec.runId)).toHaveLength(0);
+    } finally {
+      await back.close();
+    }
+  });
+
+  it('fails a resume whose pinned worker is still offline at the timeout and retries fresh', async () => {
+    process.env.OFFICE_REPLY_TIMEOUT_MINUTES = '0';
+    s = await setup();
+    const { task, w, spec } = await s.suspended();
+    await offline(w);
+    const other = await s.worker();
+    await sleep(5);
+    const retry = await s.assign(other);
+    const failed = await s.run(spec.runId);
+    expect(failed).toMatchObject({ status: 'failed', error: 'pinned worker offline at resume' });
+    expect(failed.finishedAt).toBeTruthy();
+    expect(failed.session?.status).toBe('failed');
+    expect(retry.runId).not.toBe(spec.runId);
+    expect(retry.resumeSdkSessionId).toBeUndefined();
+    expect(await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'queued', attempts: 2 });
+  });
+
   it('a cancelled waiting run is not resumed', async () => {
     s = await setup();
     const { task, w, spec, question } = await s.suspended();
