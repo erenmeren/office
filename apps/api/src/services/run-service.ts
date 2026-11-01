@@ -384,7 +384,8 @@ export async function completeRun(
             error: r.error,
             finishedAt: now,
             costUsd: { increment: r.usage.costUsd },
-            structuredOutput: r.structuredOutput as Prisma.InputJsonValue | undefined,
+            // Prisma rejects a raw null for a Json column
+            structuredOutput: (r.structuredOutput ?? undefined) as Prisma.InputJsonValue | undefined,
           },
     });
     if (count === 0) throw new LeaseError(runId);
@@ -422,7 +423,7 @@ export async function completeRun(
   });
   hub.publishAll(outbox);
   if (run.kind === 'plan' && status === 'succeeded') {
-    await onPlanRunFinished(prisma, hub, { ...run, structuredOutput: r.structuredOutput as TaskRun['structuredOutput'] });
+    await onPlanRunFinished(prisma, hub, { ...run, structuredOutput: (r.structuredOutput ?? null) as TaskRun['structuredOutput'] });
   }
 }
 

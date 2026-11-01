@@ -239,8 +239,11 @@ describe('missions', () => {
     const { m } = await s.planned();
     const fixed = clone(SAMPLE_PLAN);
     fixed.tasks = fixed.tasks.filter((x) => x.key !== 'typo-fix');
+    const seen: unknown[] = [];
+    s.t.app.hub.subscribe(`mission:${m.id}`, (msg) => seen.push(msg));
     const res = await s.req('PUT', `/missions/${m.id}/plan`, { plan: fixed });
     expect(res.statusCode).toBe(200);
+    expect(seen).toEqual([expect.objectContaining({ type: 'mission.status.changed' })]);
     const after = await s.mission(m.id);
     expect(after).toMatchObject({ status: 'awaiting_approval', planVersion: 2 });
     expect((await s.tasks(m.id)).map((x) => [x.key, x.status])).toEqual([
@@ -271,12 +274,64 @@ describe('missions', () => {
     expect((await s.tasks(m.id)).filter((x) => x.status === 'ready').map((x) => x.key)).toEqual(['analysis', 'typo-fix']);
   });
 
-  it('POST /missions/:id/cancel cancels the mission and its tasks', async () => {
+  it('cancel: idle and running tasks cancelled, worker gets run.cancel; a second cancel is a 200 no-op', async () => {
     s = await setup();
-    const { m } = await s.planned();
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { approvalPolicy: { plan: 'auto' } });
+    const { w, m } = await s.planned();
+    const spec = await s.assign(w); // one ready root starts on the freed worker slot
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    const running = await until(
+      async () => s.t.prisma.task.findFirst({ where: { missionId: m.id, status: 'running' } }),
+      'task running',
+    );
+    expect((await s.tasks(m.id)).filter((x) => x.status === 'ready')).toHaveLength(1);
+
     const res = await s.req('POST', `/missions/${m.id}/cancel`);
     expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe('cancelled');
+    expect((await w.waitFor('run.cancel')).runId).toBe(spec.runId);
     expect((await s.mission(m.id)).status).toBe('cancelled');
-    expect((await s.tasks(m.id)).every((x) => x.status === 'cancelled')).toBe(true);
+    expect((await s.tasks(m.id)).map((x) => x.status)).toEqual(['cancelled', 'cancelled', 'cancelled', 'cancelled']);
+    expect((await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('cancelled');
+    expect(running.id).toBeTruthy();
+
+    const again = await s.req('POST', `/missions/${m.id}/cancel`);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().status).toBe('cancelled');
+    expect(await s.t.prisma.auditLog.count({ where: { action: 'mission.cancelled', targetId: m.id } })).toBe(1);
+  });
+
+  it('cancel: a task already done does not break the sweep; the pending approval expires', async () => {
+    s = await setup();
+    const { m } = await s.planned();
+    const ts = await s.tasks(m.id);
+    await s.t.prisma.task.update({ where: { id: ts[3]!.id }, data: { status: 'done' } });
+    const res = await s.req('POST', `/missions/${m.id}/cancel`);
+    expect(res.statusCode).toBe(200);
+    expect((await s.tasks(m.id)).map((x) => x.status)).toEqual(['cancelled', 'cancelled', 'cancelled', 'done']);
+    expect((await s.t.prisma.approval.findFirstOrThrow({ where: { missionId: m.id } })).status).toBe('expired');
+  });
+
+  it('a mission cancelled before its plan result arrives gets no tasks and no approval', async () => {
+    s = await setup();
+    const w = await s.worker();
+    const m = await s.createMission();
+    const spec = await s.assign(w);
+    expect((await s.req('POST', `/missions/${m.id}/cancel`)).statusCode).toBe(200);
+    expect((await w.waitFor('run.cancel')).runId).toBe(spec.runId);
+    s.result(w, spec, { status: 'succeeded', structuredOutput: SAMPLE_PLAN });
+    w.send({ type: 'bogus' });
+    await w.waitFor('error');
+    expect((await s.mission(m.id)).status).toBe('cancelled');
+    expect(await s.t.prisma.task.count({ where: { missionId: m.id } })).toBe(0);
+    expect(await s.t.prisma.approval.count()).toBe(0);
+  });
+
+  it('structuredOutput null -> plan_failed, no crash', async () => {
+    s = await setup();
+    const { m, spec } = await s.planned(null);
+    expect(m.status).toBe('plan_failed');
+    expect(m.planErrors).toEqual(['plan run returned no structured output']);
+    expect((await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status).toBe('succeeded');
   });
 });

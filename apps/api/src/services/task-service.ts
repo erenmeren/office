@@ -34,39 +34,47 @@ export async function setTaskStatus(db: Db, outbox: Outbox, taskId: string, to: 
   return task;
 }
 
-export async function cancelTask(prisma: PrismaClient, hub: EventHub, gateway: WorkerGateway, taskId: string) {
-  const outbox: Outbox = [];
+const LIVE_RUN = ['queued', 'running', 'waiting_reply'] as const;
+
+/** Cancels the live runs matching `where` (guarded, so a run finishing concurrently keeps its result). */
+export async function cancelLiveRuns(tx: Prisma.TransactionClient, outbox: Outbox, where: Prisma.TaskRunWhereInput) {
   const now = new Date();
-  const { task, cancelled } = await prisma.$transaction(async (tx) => {
-    const current = await tx.task.findUniqueOrThrow({ where: { id: taskId } });
-    transitionTask(current.status, 'cancelled'); // fail before touching runs
-    const live = ['queued', 'running', 'waiting_reply'] as const;
-    const runs = await tx.taskRun.findMany({ where: { taskId, kind: 'task', status: { in: [...live] } } });
-    const cancelled: typeof runs = [];
-    for (const run of runs) {
-      // guarded so a run that finishes concurrently keeps its result
-      const { count } = await tx.taskRun.updateMany({
-        where: { id: run.id, status: { in: [...live] } },
-        data: { status: 'cancelled', finishedAt: now },
-      });
-      if (count === 0) continue;
-      await tx.agentSession.updateMany({ where: { runId: run.id }, data: { status: 'cancelled', endedAt: now } });
-      outbox.push({
-        topic: `run:${run.id}`,
-        message: { type: 'run.status.changed', runId: run.id, status: 'cancelled' },
-      });
-      cancelled.push(run);
-    }
-    // a running task whose run just finished elsewhere is left to that result
-    if (cancelled.length === 0 && current.status === 'running') return { task: current, cancelled };
-    return { task: await setTaskStatus(tx, outbox, taskId, 'cancelled'), cancelled };
-  });
-  hub.publishAll(outbox);
-  for (const run of cancelled) {
+  const runs = await tx.taskRun.findMany({ where: { ...where, status: { in: [...LIVE_RUN] } } });
+  const cancelled: typeof runs = [];
+  for (const run of runs) {
+    const { count } = await tx.taskRun.updateMany({
+      where: { id: run.id, status: { in: [...LIVE_RUN] } },
+      data: { status: 'cancelled', finishedAt: now },
+    });
+    if (count === 0) continue;
+    await tx.agentSession.updateMany({ where: { runId: run.id }, data: { status: 'cancelled', endedAt: now } });
+    outbox.push({ topic: `run:${run.id}`, message: { type: 'run.status.changed', runId: run.id, status: 'cancelled' } });
+    cancelled.push(run);
+  }
+  return cancelled;
+}
+
+/** Tells each worker to stop the cancelled runs it holds; call after the transaction commits. */
+export function notifyCancelled(gateway: WorkerGateway, runs: Array<{ id: string; workerId: string | null; status: string }>) {
+  for (const run of runs) {
     // a waiting run holds no worker slot
     if (!run.workerId || run.status === 'waiting_reply') continue;
     gateway.send(run.workerId, { type: 'run.cancel', runId: run.id });
     gateway.releaseRun(run.workerId, run.id);
   }
+}
+
+export async function cancelTask(prisma: PrismaClient, hub: EventHub, gateway: WorkerGateway, taskId: string) {
+  const outbox: Outbox = [];
+  const { task, cancelled } = await prisma.$transaction(async (tx) => {
+    const current = await tx.task.findUniqueOrThrow({ where: { id: taskId } });
+    transitionTask(current.status, 'cancelled'); // fail before touching runs
+    const cancelled = await cancelLiveRuns(tx, outbox, { taskId, kind: 'task' });
+    // a running task whose run just finished elsewhere is left to that result
+    if (cancelled.length === 0 && current.status === 'running') return { task: current, cancelled };
+    return { task: await setTaskStatus(tx, outbox, taskId, 'cancelled'), cancelled };
+  });
+  hub.publishAll(outbox);
+  notifyCancelled(gateway, cancelled);
   return task;
 }

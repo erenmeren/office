@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ApprovalStatusSchema, canTransitionTask, PlanSchema } from '@office/shared';
+import { ApprovalStatusSchema, PlanSchema } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import {
   approvePlan,
@@ -10,7 +10,6 @@ import {
   rejectPlan,
   replan,
 } from '../services/mission-service.js';
-import { cancelTask } from '../services/task-service.js';
 
 const CreateMission = z.object({
   projectId: z.string().min(1),
@@ -83,16 +82,7 @@ export async function missionRoutes(app: FastifyInstance) {
 
   app.post('/missions/:id/cancel', async (req) => {
     const { id } = req.params as { id: string };
-    const { mission, planRun } = await cancelMission(app.prisma, app.hub, id, req.user!.id);
-    if (planRun?.workerId) {
-      app.gateway.send(planRun.workerId, { type: 'run.cancel', runId: planRun.id });
-      app.gateway.releaseRun(planRun.workerId, planRun.id);
-    }
-    const tasks = await app.prisma.task.findMany({ where: { missionId: id } });
-    for (const t of tasks) {
-      if (canTransitionTask(t.status, 'cancelled')) await cancelTask(app.prisma, app.hub, app.gateway, t.id);
-    }
-    return mission;
+    return cancelMission(app.prisma, app.hub, app.gateway, id, req.user!.id, app.log);
   });
 
   app.get('/approvals', async (req) => {

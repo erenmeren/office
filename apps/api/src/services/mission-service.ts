@@ -14,7 +14,8 @@ import type { EventHub, Outbox } from './event-hub.js';
 import { findOrCreateConversation } from './message-service.js';
 import { agentAllowed, getSettings } from './project-service.js';
 import { createRun } from './run-service.js';
-import { setTaskStatus, type Db } from './task-service.js';
+import { cancelLiveRuns, cancelTask, notifyCancelled, setTaskStatus, type Db } from './task-service.js';
+import type { WorkerGateway } from '../ws/worker-gateway.js';
 
 const CHIEF_SLUG = 'chief';
 const PLAN_TOOLS = ['Read', 'Glob', 'Grep', 'Bash'];
@@ -259,13 +260,15 @@ export async function onPlanRunFinished(prisma: PrismaClient, hub: EventHub, run
       const result = await validate(tx, mission.projectId, plan);
       if (!result.ok) return planRunFailed(tx, outbox, run, result.errors);
       const settings = await getSettings(tx, mission.projectId);
-      await createPlanTasks(tx, mission, plan, settings);
-      await moveMission(tx, outbox, mission.id, ['planning'], {
+      const moved = await moveMission(tx, outbox, mission.id, ['planning'], {
         status: 'awaiting_approval',
         plan,
         planVersion: { increment: 1 },
         planErrors: [],
       });
+      // cancelled (or replanned) concurrently: write nothing under it
+      if (!moved) return;
+      await createPlanTasks(tx, mission, plan, settings);
       if (settings.approvalPolicy.plan === 'auto') {
         await approveMissionPlan(tx, outbox, mission.id);
         await audit(tx, { action: 'plan.approved', targetType: 'mission', targetId: mission.id, detail: { auto: true } });
@@ -346,9 +349,16 @@ export async function editPlan(prisma: PrismaClient, hub: EventHub, missionId: s
     if (current.status !== 'awaiting_approval') throw new HttpError(409, 'plan_locked');
     const result = await validate(tx, current.projectId, plan);
     if (!result.ok) throw new HttpError(400, 'invalid_plan', result.errors.join('; '));
+    // guarded so an approval or replan that committed after the read wins
+    const { count } = await tx.mission.updateMany({
+      where: { id: missionId, status: 'awaiting_approval' },
+      data: { plan, planVersion: { increment: 1 } },
+    });
+    if (count === 0) throw new HttpError(409, 'plan_locked');
     await deletePlannedTasks(tx, missionId);
     await createPlanTasks(tx, current, plan, await getSettings(tx, current.projectId));
-    const mission = await tx.mission.update({ where: { id: missionId }, data: { plan, planVersion: { increment: 1 } } });
+    const mission = await tx.mission.findUniqueOrThrow({ where: { id: missionId } });
+    queueMissionStatus(outbox, mission);
     await audit(tx, { userId, action: 'plan.edited', targetType: 'mission', targetId: missionId, detail: { planVersion: mission.planVersion } });
     return mission;
   });
@@ -377,39 +387,52 @@ export async function replan(prisma: PrismaClient, hub: EventHub, missionId: str
   return mission;
 }
 
-const OPEN: MissionStatus[] = ['planning', 'plan_failed', 'awaiting_approval', 'approved', 'running', 'review'];
+const CANCELLABLE: MissionStatus[] = ['planning', 'plan_failed', 'awaiting_approval', 'approved', 'running', 'review'];
+const IDLE_TASK = ['planned', 'ready', 'blocked'] as const;
+const LIVE_TASK = ['queued', 'running', 'waiting_reply', 'waiting_approval'] as const;
 
 /**
- * Any open mission -> cancelled. Pending approvals are denied, a live plan run is cancelled and returned
- * (the caller tells its worker); tasks are left to the caller's cancelTask.
+ * Open mission -> cancelled; idempotent on an already cancelled mission (the task sweep runs again).
+ * In one transaction: pending approvals expire, a live plan run and every idle task are cancelled.
+ * After commit, tasks with a live run go through cancelTask one by one; a failure is logged and skipped.
  */
-export async function cancelMission(prisma: PrismaClient, hub: EventHub, missionId: string, userId: string) {
+export async function cancelMission(
+  prisma: PrismaClient,
+  hub: EventHub,
+  gateway: WorkerGateway,
+  missionId: string,
+  userId: string,
+  log: { error: (obj: object, msg: string) => void },
+) {
   const outbox: Outbox = [];
-  const now = new Date();
-  const out = await prisma.$transaction(async (tx) => {
-    if (!(await tx.mission.findUnique({ where: { id: missionId } }))) throw new HttpError(404, 'not_found');
-    const mission = await moveMission(tx, outbox, missionId, OPEN, { status: 'cancelled' });
-    if (!mission) throw new HttpError(409, 'invalid_transition');
-    const pending = await tx.approval.findMany({ where: { missionId, status: 'pending' } });
-    for (const a of pending) await decide(tx, outbox, a.id, 'denied', userId);
-    let planRun: TaskRun | null = null;
-    if (mission.planRunId) {
-      const { count } = await tx.taskRun.updateMany({
-        where: { id: mission.planRunId, status: { in: ['queued', 'running'] } },
-        data: { status: 'cancelled', finishedAt: now },
-      });
-      if (count) {
-        await tx.agentSession.updateMany({ where: { runId: mission.planRunId }, data: { status: 'cancelled', endedAt: now } });
-        outbox.push({
-          topic: `run:${mission.planRunId}`,
-          message: { type: 'run.status.changed', runId: mission.planRunId, status: 'cancelled' },
-        });
-        planRun = await tx.taskRun.findUniqueOrThrow({ where: { id: mission.planRunId } });
-      }
+  const { mission, planRuns } = await prisma.$transaction(async (tx) => {
+    const current = await tx.mission.findUnique({ where: { id: missionId } });
+    if (!current) throw new HttpError(404, 'not_found');
+    let mission = current;
+    if (current.status !== 'cancelled') {
+      const moved = await moveMission(tx, outbox, missionId, CANCELLABLE, { status: 'cancelled' });
+      if (!moved) throw new HttpError(409, 'invalid_transition');
+      mission = moved;
+      await audit(tx, { userId, action: 'mission.cancelled', targetType: 'mission', targetId: missionId });
     }
-    await audit(tx, { userId, action: 'mission.cancelled', targetType: 'mission', targetId: missionId });
-    return { mission, planRun };
+    const pending = await tx.approval.findMany({ where: { missionId, status: 'pending' } });
+    for (const a of pending) {
+      queueApproval(outbox, await tx.approval.update({ where: { id: a.id }, data: { status: 'expired', decidedAt: new Date() } }));
+    }
+    const planRuns = await cancelLiveRuns(tx, outbox, { missionId, kind: 'plan' });
+    const idle = await tx.task.findMany({ where: { missionId, status: { in: [...IDLE_TASK] } } });
+    for (const t of idle) await setTaskStatus(tx, outbox, t.id, 'cancelled');
+    return { mission, planRuns };
   });
   hub.publishAll(outbox);
-  return out;
+  notifyCancelled(gateway, planRuns);
+  const live = await prisma.task.findMany({ where: { missionId, status: { in: [...LIVE_TASK] } } });
+  for (const t of live) {
+    try {
+      await cancelTask(prisma, hub, gateway, t.id);
+    } catch (err) {
+      log.error({ err, taskId: t.id, missionId }, 'cancelling mission task failed');
+    }
+  }
+  return mission;
 }
