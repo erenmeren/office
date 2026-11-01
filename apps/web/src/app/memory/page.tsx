@@ -3,7 +3,6 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { X } from 'lucide-react';
 import { MemoryDetail } from '@/components/memory-detail';
 import { MemoryForm } from '@/components/memory-form';
 import { MemoryList, MemorySearch } from '@/components/memory-list';
@@ -80,13 +79,17 @@ function MemoryView() {
 
       <Card>
         <CardContent>
-          <MemorySearch q={q} onQ={setQ} type={type} onType={setType} proposed={proposed} reviewing={reviewing} onReview={setReviewing} />
-          {taskId && (
-            <Button variant="secondary" size="sm" className="mt-3 font-mono" aria-label={`Task ${taskId.slice(0, 8)}, clear filter`} onClick={() => select(undefined, null)}>
-              Task {taskId.slice(0, 8)}
-              <X data-icon="inline-end" aria-hidden />
-            </Button>
-          )}
+          <MemorySearch
+            q={q}
+            onQ={setQ}
+            type={type}
+            onType={setType}
+            proposed={proposed}
+            reviewing={reviewing}
+            onReview={setReviewing}
+            taskId={taskId}
+            onClearTask={() => select(undefined, null)}
+          />
         </CardContent>
       </Card>
 

@@ -39,7 +39,8 @@ function TaskChips({ label, ids, tasks }: { label: string; ids: string[]; tasks:
   );
 }
 
-function TestOutput({ artifactId }: { artifactId: string }) {
+/** A stored artifact's text (check output, mission review). */
+export function ArtifactOutput({ artifactId }: { artifactId: string }) {
   const artifact = useArtifact(artifactId);
   if (artifact.isPending) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (artifact.isError) return <p className="text-sm text-destructive">{String(artifact.error)}</p>;
@@ -112,7 +113,7 @@ function Evidence({ t }: { t: TaskDetailView }) {
             $ {check.command}
             {check.exitCode !== null && ` · exit ${check.exitCode}`}
           </p>
-          {check.artifactId ? <TestOutput artifactId={check.artifactId} /> : <p className="text-sm text-muted-foreground">No output recorded.</p>}
+          {check.artifactId ? <ArtifactOutput artifactId={check.artifactId} /> : <p className="text-sm text-muted-foreground">No output recorded.</p>}
         </div>
       )}
     </Kv>
@@ -192,6 +193,9 @@ export function TaskDetail({ taskId }: { taskId: string }) {
                 </Button>
                 <Button variant="secondary" size="lg" disabled={busy} onClick={act('reopen')}>
                   Reopen
+                </Button>
+                <Button variant="destructive" size="lg" disabled={busy} onClick={act('failed')}>
+                  Failed
                 </Button>
               </>
             )}

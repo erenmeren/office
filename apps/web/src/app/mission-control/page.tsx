@@ -4,11 +4,9 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApprovalCard } from '@/components/approval-card';
 import { ChiefComposer } from '@/components/chief-composer';
-import { PlanCard, PlanLegend } from '@/components/plan-card';
-import { PlanGraph } from '@/components/plan-graph';
+import { PlanCard, TaskGraphCard } from '@/components/plan-card';
 import { TaskDetail, taskCode } from '@/components/task-detail';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
+import { Field } from '@/components/ui/field';
 import { NativeSelect } from '@/components/ui/native-select';
 import { PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { statusLabel } from '@/lib/status';
@@ -75,10 +73,7 @@ export default function MissionControlPage() {
       ))}
 
       {(missions.data?.length ?? 0) > 0 && (
-        <div className="flex max-w-xl flex-col gap-1.5">
-          <Label htmlFor="mission-select" className="text-[12.5px] text-ink-2">
-            Mission
-          </Label>
+        <Field label="Mission" htmlFor="mission-select">
           <NativeSelect
             id="mission-select"
             value={missionId ?? ''}
@@ -93,7 +88,7 @@ export default function MissionControlPage() {
               </option>
             ))}
           </NativeSelect>
-        </div>
+        </Field>
       )}
 
       {mission.data && (
@@ -101,19 +96,12 @@ export default function MissionControlPage() {
       )}
 
       {loose.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Tasks without a mission</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <PlanLegend />
-            <PlanGraph
-              nodes={loose.map((t) => ({ id: t.id, code: taskCode(t.id), title: t.title, assignee: agentName(t.agentId), status: t.status, dependsOn: [] }))}
-              selectedId={selectedId}
-              onSelect={setPicked}
-            />
-          </CardContent>
-        </Card>
+        <TaskGraphCard
+          title="Tasks without a mission"
+          nodes={loose.map((t) => ({ id: t.id, code: taskCode(t.id), title: t.title, assignee: agentName(t.agentId), status: t.status, dependsOn: [] }))}
+          selectedId={selectedId}
+          onSelect={setPicked}
+        />
       )}
 
       {selectedId && <TaskDetail key={selectedId} taskId={selectedId} />}

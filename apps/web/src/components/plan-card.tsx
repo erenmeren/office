@@ -2,9 +2,13 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { PlanGraph } from '@/components/plan-graph';
+import { Activity, FileText } from 'lucide-react';
+import { PlanGraph, type PlanGraphNode } from '@/components/plan-graph';
+import { RunEvents } from '@/components/run-events';
+import { ArtifactOutput } from '@/components/task-detail';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { EvidenceChip } from '@/components/ui/evidence-chip';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { StatusDot, StatusPill } from '@/components/ui/status-pill';
@@ -43,6 +47,52 @@ export function PlanLegend() {
           {label}
         </span>
       ))}
+    </div>
+  );
+}
+
+/** A titled dependency graph of tasks with the status legend. */
+export function TaskGraphCard({ title, nodes, selectedId, onSelect }: { title: string; nodes: PlanGraphNode[]; selectedId?: string; onSelect: (id: string) => void }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <PlanLegend />
+        <PlanGraph nodes={nodes} selectedId={selectedId} onSelect={onSelect} />
+      </CardContent>
+    </Card>
+  );
+}
+
+const noop = () => {};
+
+/** The Chief's verdict on a finished mission: its summary and the review run's events and mission-review.md. */
+function MissionVerdict({ m }: { m: Mission }) {
+  const [open, setOpen] = useState<'events' | 'review'>();
+  const toggle = (k: 'events' | 'review') => setOpen((cur) => (cur === k ? undefined : k));
+  const finished = (m.status === 'done' || m.status === 'failed') && m.reviewRunId;
+  if (!m.summary && !finished) return null;
+  return (
+    <div className="space-y-2">
+      {m.summary && <p className="text-sm whitespace-pre-wrap text-ink-2">{m.summary}</p>}
+      {finished && (
+        <div className="flex flex-wrap gap-2">
+          <EvidenceChip tone={m.status === 'done' ? 'passed' : 'failed'} aria-expanded={open === 'events'} onClick={() => toggle('events')}>
+            <Activity aria-hidden />
+            Review run events
+          </EvidenceChip>
+          {m.reviewArtifactId && (
+            <EvidenceChip aria-expanded={open === 'review'} onClick={() => toggle('review')}>
+              <FileText aria-hidden />
+              mission-review.md
+            </EvidenceChip>
+          )}
+        </div>
+      )}
+      {open === 'events' && m.reviewRunId && <RunEvents runId={m.reviewRunId} onStatus={noop} />}
+      {open === 'review' && m.reviewArtifactId && <ArtifactOutput artifactId={m.reviewArtifactId} />}
     </div>
   );
 }
@@ -96,6 +146,12 @@ export function PlanCard({ mission: m, agents, selectedId, onSelect }: { mission
         </CardAction>
       </CardHeader>
       <CardContent className="space-y-4">
+        <MissionVerdict m={m} />
+        {m.budgetUsd != null && m.spentUsd >= m.budgetUsd && (
+          <p className="text-sm text-amber">
+            Budget cap reached: ${m.spentUsd.toFixed(2)} of ${m.budgetUsd.toFixed(2)}. Tasks wait until the cap is raised.
+          </p>
+        )}
         {m.planErrors.length > 0 && (
           <ul className="list-disc space-y-1 pl-5 text-sm text-rose">
             {m.planErrors.map((e, i) => (

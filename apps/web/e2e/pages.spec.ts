@@ -78,6 +78,28 @@ authed.describe('every page renders without console noise', () => {
     }
   });
 
+  authed('mission control: a done mission shows its summary and links to the review evidence', async ({ page, request: api, noise }) => {
+    const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string }[];
+    const created = await api.post(`${API}/missions`, { data: { projectId: project.id, request: `E2E verdict ${Date.now()}` } });
+    expect(created.ok()).toBe(true);
+    const { id } = (await created.json()) as { id: string };
+    // cancelled at once so no worker ever plans it; the detail is then served as a done mission fixture
+    expect((await api.post(`${API}/missions/${id}/cancel`)).ok()).toBe(true);
+    await page.route(`${API}/missions/${id}`, async (route) => {
+      const real = await (await route.fetch()).json();
+      await route.fulfill({
+        json: { ...real, status: 'done', summary: 'E2E verdict: all tasks done', reviewRunId: 'run-fixture', reviewArtifactId: 'artifact-fixture' },
+      });
+    });
+    await page.goto('/mission-control');
+    await page.waitForLoadState('networkidle');
+    await page.getByLabel('Mission', { exact: true }).selectOption(id);
+    await expect(page.getByText('E2E verdict: all tasks done')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Review run events' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'mission-review.md' })).toBeVisible();
+    expectQuiet(noise);
+  });
+
   authed('owner messages an agent', async ({ page, noise }) => {
     await page.goto('/conversations');
     await page.waitForLoadState('networkidle');

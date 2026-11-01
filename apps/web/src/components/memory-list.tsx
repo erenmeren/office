@@ -1,6 +1,7 @@
 'use client';
 
 import { cva } from 'class-variance-authority';
+import { X } from 'lucide-react';
 import { AgentAvatar, OwnerAvatar } from '@/components/ui/agent-avatar';
 import { Button } from '@/components/ui/button';
 import { SearchInput } from '@/components/ui/search-input';
@@ -30,6 +31,8 @@ export function MemorySearch({
   proposed,
   reviewing,
   onReview,
+  taskId,
+  onClearTask,
 }: {
   q: string;
   onQ: (q: string) => void;
@@ -38,6 +41,9 @@ export function MemorySearch({
   proposed: number;
   reviewing: boolean;
   onReview: (on: boolean) => void;
+  /** the task filter from `?taskId=`, shown as a chip that clears it */
+  taskId?: string | null;
+  onClearTask: () => void;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -50,6 +56,12 @@ export function MemorySearch({
             {reviewing ? 'Show all' : 'Review now'}
           </Button>
         </div>
+      )}
+      {taskId && (
+        <Button variant="secondary" size="sm" className="self-start font-mono" aria-label={`Task ${taskId.slice(0, 8)}, clear filter`} onClick={onClearTask}>
+          Task {taskId.slice(0, 8)}
+          <X data-icon="inline-end" aria-hidden />
+        </Button>
       )}
     </div>
   );

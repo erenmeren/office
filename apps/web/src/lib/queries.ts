@@ -279,6 +279,11 @@ export interface Mission extends Omit<MissionSummary, 'taskCounts'> {
   planErrors: string[];
   summary: string | null;
   budgetUsd: number | null;
+  /** the mission's spend across all its runs; the cap holds its tasks once reached */
+  spentUsd: number;
+  reviewRunId: string | null;
+  /** mission-review.md of the review run */
+  reviewArtifactId: string | null;
   tasks: (Task & TaskPlanFields)[];
   approvals: ApprovalView[];
   planRun: { id: string; status: RunStatus; costUsd: number; error: string | null } | null;
