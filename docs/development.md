@@ -72,6 +72,10 @@ With an empty database the suite creates the owner from those values.
 
 The suite writes to the database it runs against: it sends owner messages and creates and verifies memory entries. Its memory test verifies the first entry that needs review, which may be an agent's real proposal. Run it against a database whose memory you do not mind changing.
 
+### Migrations
+
+`prisma migrate dev --create-only` emits drift SQL for the `MemoryEntry.search` column and the `MemoryEntry_search_idx` index, because Prisma cannot express a generated tsvector column. Before applying any generated migration, delete every statement that touches `MemoryEntry.search` or `MemoryEntry_search_idx` (the DROP INDEX and the ALTER COLUMN lines). After applying, confirm both still exist with `SELECT indexname FROM pg_indexes WHERE tablename = 'MemoryEntry'`. `prisma migrate dev` may hang after it has applied the migration; if it does not return within about a minute, stop it and confirm with `pnpm --filter @office/db exec prisma migrate deploy`. Then run `pnpm --filter @office/db migrate:test`.
+
 ## Before committing
 
 ```bash

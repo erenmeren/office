@@ -5,11 +5,9 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import pino from 'pino';
 import { buildApp, loadConfig } from '@office/api';
-import { createPrisma } from '@office/db';
+import { createPrisma, seed } from '@office/db';
 import { FakeAdapter } from '@office/runtime';
 import { WorkerConnection } from '../src/connection.js';
-// `seed` is not exported from the @office/db entry point, so it is imported from the built file
-import { seed } from '../../../packages/db/dist/seed.js';
 
 async function until<T>(fn: () => Promise<T> | T, what: string, ms = 10_000): Promise<T> {
   const deadline = Date.now() + ms;
@@ -49,7 +47,7 @@ describe('phase 3 end to end with the fake runtime', () => {
     });
     prisma = createPrisma(config.databaseUrl);
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "MemorySource","MemoryEntry","MessageDelivery","Message","Conversation","SubagentRun","SessionEvent","UsageRecord","AgentSession","TaskRun","Task","AgentSubagent","AgentSkill","AgentVersion","Agent","SkillVersion","Skill","Worker","Project","UserSession","User" CASCADE',
+      'TRUNCATE TABLE "AuditLog","CheckResult","Artifact","GitWorkspace","Approval","TaskDependency","ProjectAgent","MemorySource","MemoryEntry","MessageDelivery","Message","Conversation","SubagentRun","SessionEvent","UsageRecord","AgentSession","TaskRun","Task","Mission","AgentSubagent","AgentSkill","AgentVersion","Agent","SkillVersion","Skill","Worker","Project","UserSession","User" CASCADE',
     );
     app = await buildApp(config, { prisma, logger: false });
     await app.listen({ port: 0, host: '127.0.0.1' });

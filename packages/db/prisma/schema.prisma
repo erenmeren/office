@@ -94,6 +94,59 @@ enum MemorySourceKind {
   task
 }
 
+enum TaskKind {
+  code
+  analysis
+  review
+}
+
+enum MissionStatus {
+  planning
+  plan_failed
+  awaiting_approval
+  approved
+  running
+  review
+  done
+  failed
+  cancelled
+}
+
+enum ApprovalType {
+  plan
+  git_push
+  merge
+  deploy
+  destructive_command
+  sensitive_path
+  budget_exceeded
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  denied
+  expired
+}
+
+enum ApprovalScope {
+  once
+  task
+}
+
+enum CheckStatus {
+  passed
+  failed
+  timeout
+  skipped
+}
+
+enum IntegrationStatus {
+  none
+  fast_forwarded
+  needs_integration
+}
+
 enum WorkerStatus {
   pending
   online
@@ -131,23 +184,31 @@ model Project {
   sessions      AgentSession[]
   usage         UsageRecord[]
   runs          TaskRun[]
+  settings      Json           @default("{}")
+  agents        ProjectAgent[]
+  missions      Mission[]
+  approvals     Approval[]
+  artifacts     Artifact[]
 }
 
 model Agent {
-  id               String         @id @default(uuid())
-  createdAt        DateTime       @default(now())
-  name             String
-  slug             String         @unique
-  role             String
-  description      String         @default("")
-  isActive         Boolean        @default(true)
-  isSystem         Boolean        @default(false)
-  currentVersionId String?
-  versions         AgentVersion[]
-  tasks            Task[]
-  sessions         AgentSession[]
-  usage            UsageRecord[]
-  runs             TaskRun[]
+  id                    String         @id @default(uuid())
+  createdAt             DateTime       @default(now())
+  name                  String
+  slug                  String         @unique
+  role                  String
+  description           String         @default("")
+  isActive              Boolean        @default(true)
+  isSystem              Boolean        @default(false)
+  currentVersionId      String?
+  maxConcurrentSessions Int            @default(1)
+  dailyBudgetUsd        Float?
+  versions              AgentVersion[]
+  tasks                 Task[]
+  sessions              AgentSession[]
+  usage                 UsageRecord[]
+  runs                  TaskRun[]
+  projectAgents         ProjectAgent[]
 }
 
 model AgentVersion {
@@ -179,54 +240,227 @@ model Worker {
 }
 
 model Task {
-  id          String     @id @default(uuid())
-  createdAt   DateTime   @default(now())
-  projectId   String
-  agentId     String
-  title       String
-  description String     @default("")
-  status      TaskStatus @default(ready)
-  priority    Int        @default(0)
-  maxAttempts Int        @default(2)
-  attempts    Int        @default(0)
-  updatedAt   DateTime   @updatedAt
-  project     Project    @relation(fields: [projectId], references: [id])
-  agent       Agent      @relation(fields: [agentId], references: [id])
-  runs        TaskRun[]
+  id                    String           @id @default(uuid())
+  createdAt             DateTime         @default(now())
+  projectId             String
+  agentId               String
+  title                 String
+  description           String           @default("")
+  status                TaskStatus       @default(ready)
+  priority              Int              @default(0)
+  maxAttempts           Int              @default(2)
+  attempts              Int              @default(0)
+  updatedAt             DateTime         @updatedAt
+  project               Project          @relation(fields: [projectId], references: [id])
+  agent                 Agent            @relation(fields: [agentId], references: [id])
+  runs                  TaskRun[]
+  missionId             String?
+  key                   String?
+  kind                  TaskKind         @default(code)
+  requirements          String[]
+  acceptanceCriteria    String[]
+  parallelGroup         String?
+  requiredConsultations Json             @default("[]")
+  budgetUsd             Float?
+  parentTaskId          String?
+  reviewNote            String?
+  mission               Mission?         @relation(fields: [missionId], references: [id])
+  dependencies          TaskDependency[] @relation("TaskDeps")
+  dependents            TaskDependency[] @relation("TaskDependents")
+  approvals             Approval[]
+  artifacts             Artifact[]
+  checkResults          CheckResult[]
 
+  @@unique([missionId, key])
   @@index([projectId])
+  @@index([agentId])
+  @@index([missionId])
+}
+
+model TaskDependency {
+  id          String @id @default(uuid())
+  taskId      String
+  dependsOnId String
+  task        Task   @relation("TaskDeps", fields: [taskId], references: [id])
+  dependsOn   Task   @relation("TaskDependents", fields: [dependsOnId], references: [id])
+
+  @@unique([taskId, dependsOnId])
+  @@index([dependsOnId])
+}
+
+model ProjectAgent {
+  id        String  @id @default(uuid())
+  projectId String
+  agentId   String
+  project   Project @relation(fields: [projectId], references: [id])
+  agent     Agent   @relation(fields: [agentId], references: [id])
+
+  @@unique([projectId, agentId])
   @@index([agentId])
 }
 
-model TaskRun {
+model Mission {
   id             String        @id @default(uuid())
   createdAt      DateTime      @default(now())
-  taskId         String?
-  agentId        String
+  updatedAt      DateTime      @updatedAt
   projectId      String
-  kind           RunKind       @default(task)
+  title          String
+  request        String
+  status         MissionStatus @default(planning)
+  branch         String?
+  baseCommit     String?
+  planRunId      String?
+  reviewRunId    String?
+  plan           Json?
+  planVersion    Int           @default(0)
+  planErrors     String[]
+  summary        String?
+  budgetUsd      Float?
   conversationId String?
-  waitingSince   DateTime?
-  waitingForMessageId String?
-  summaryOfRunId String?
-  summarizedAt   DateTime?
-  agentVersionId String
-  workerId       String?
-  status         RunStatus     @default(queued)
-  leaseExpiresAt DateTime?
-  startedAt      DateTime?
-  finishedAt     DateTime?
-  resultText     String?
-  error          String?
-  costUsd        Float         @default(0)
-  task           Task?         @relation(fields: [taskId], references: [id])
-  agent          Agent         @relation(fields: [agentId], references: [id])
   project        Project       @relation(fields: [projectId], references: [id])
-  conversation   Conversation? @relation(fields: [conversationId], references: [id])
-  agentVersion   AgentVersion  @relation(fields: [agentVersionId], references: [id])
-  worker         Worker?       @relation(fields: [workerId], references: [id])
-  session        AgentSession?
-  usage          UsageRecord[]
+  tasks          Task[]
+  approvals      Approval[]
+  runs           TaskRun[]
+
+  @@index([projectId, status])
+}
+
+model Approval {
+  id              String         @id @default(uuid())
+  createdAt       DateTime       @default(now())
+  projectId       String
+  missionId       String?
+  taskId          String?
+  runId           String?
+  type            ApprovalType
+  status          ApprovalStatus @default(pending)
+  scope           ApprovalScope?
+  requestId       String?        @unique
+  toolName        String?
+  input           Json?
+  reason          String
+  decidedAt       DateTime?
+  decidedByUserId String?
+  expiresAt       DateTime?
+  message         String?
+  project         Project        @relation(fields: [projectId], references: [id])
+  mission         Mission?       @relation(fields: [missionId], references: [id])
+  task            Task?          @relation(fields: [taskId], references: [id])
+  run             TaskRun?       @relation(fields: [runId], references: [id])
+
+  @@index([projectId, status])
+  @@index([missionId])
+  @@index([taskId])
+  @@index([runId])
+}
+
+model Artifact {
+  id           String        @id @default(uuid())
+  createdAt    DateTime      @default(now())
+  projectId    String
+  runId        String?
+  taskId       String?
+  kind         String
+  name         String
+  path         String
+  bytes        Int
+  contentType  String        @default("text/plain")
+  checkResults CheckResult[]
+  project      Project       @relation(fields: [projectId], references: [id])
+  run          TaskRun?      @relation(fields: [runId], references: [id])
+  task         Task?         @relation(fields: [taskId], references: [id])
+
+  @@index([projectId])
+  @@index([runId])
+  @@index([taskId])
+}
+
+model CheckResult {
+  id         String      @id @default(uuid())
+  createdAt  DateTime    @default(now())
+  runId      String      @unique
+  taskId     String?
+  command    String
+  status     CheckStatus
+  exitCode   Int?
+  durationMs Int
+  artifactId String?
+  run        TaskRun     @relation(fields: [runId], references: [id])
+  task       Task?       @relation(fields: [taskId], references: [id])
+  artifact   Artifact?   @relation(fields: [artifactId], references: [id])
+
+  @@index([taskId])
+  @@index([artifactId])
+}
+
+model GitWorkspace {
+  id           String    @id @default(uuid())
+  createdAt    DateTime  @default(now())
+  runId        String    @unique
+  repoPath     String
+  worktreePath String
+  branch       String
+  baseCommit   String
+  headCommit   String?
+  removedAt    DateTime?
+  run          TaskRun   @relation(fields: [runId], references: [id])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  createdAt  DateTime @default(now())
+  userId     String?
+  action     String
+  targetType String
+  targetId   String
+  detail     Json?
+
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+model TaskRun {
+  id                  String            @id @default(uuid())
+  createdAt           DateTime          @default(now())
+  taskId              String?
+  agentId             String
+  projectId           String
+  kind                RunKind           @default(task)
+  conversationId      String?
+  waitingSince        DateTime?
+  waitingForMessageId String?
+  summaryOfRunId      String?
+  summarizedAt        DateTime?
+  agentVersionId      String
+  workerId            String?
+  status              RunStatus         @default(queued)
+  leaseExpiresAt      DateTime?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  resultText          String?
+  error               String?
+  costUsd             Float             @default(0)
+  worktreePath        String?
+  branch              String?
+  baseCommit          String?
+  headCommit          String?
+  integration         IntegrationStatus @default(none)
+  missionId           String?
+  reviewOfMissionId   String?
+  structuredOutput    Json?
+  mission             Mission?          @relation(fields: [missionId], references: [id])
+  approvals           Approval[]
+  artifacts           Artifact[]
+  checkResult         CheckResult?
+  gitWorkspace        GitWorkspace?
+  task                Task?             @relation(fields: [taskId], references: [id])
+  agent               Agent             @relation(fields: [agentId], references: [id])
+  project             Project           @relation(fields: [projectId], references: [id])
+  conversation        Conversation?     @relation(fields: [conversationId], references: [id])
+  agentVersion        AgentVersion      @relation(fields: [agentVersionId], references: [id])
+  worker              Worker?           @relation(fields: [workerId], references: [id])
+  session             AgentSession?
+  usage               UsageRecord[]
 
   @@index([taskId])
   @@index([agentId])
@@ -234,6 +468,7 @@ model TaskRun {
   @@index([conversationId])
   @@index([agentVersionId])
   @@index([workerId])
+  @@index([missionId])
 }
 
 model AgentSession {

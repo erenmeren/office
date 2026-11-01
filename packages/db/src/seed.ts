@@ -92,8 +92,10 @@ export async function seed(
   }
 
   const agentsDir = join(templatesDir, 'agents');
+  const teamSlugs: string[] = [];
   for (const file of readdirSync(agentsDir).filter((f) => f.endsWith('.json')).sort()) {
     const t = readJson(join(agentsDir, file)) as AgentTemplate;
+    if (!t.isSystem) teamSlugs.push(t.slug);
     const existing = await prisma.agent.findUnique({ where: { slug: t.slug } });
     if (existing) {
       log.push(`agent ${t.slug} exists ${existing.id}`);
@@ -136,6 +138,28 @@ export async function seed(
       return tx.agent.update({ where: { id: a.id }, data: { currentVersionId: v.id } });
     });
     log.push(`agent ${t.slug} created ${created.id}`);
+  }
+
+  const sandbox = await prisma.project.findUniqueOrThrow({ where: { slug: 'office-sandbox' } });
+  if (Object.keys(sandbox.settings as object).length === 0) {
+    await prisma.project.update({
+      where: { id: sandbox.id },
+      data: { settings: { checkCommand: 'node --test', envFile: '.env.local', envTemplate: [] } },
+    });
+    log.push('project office-sandbox settings set');
+  } else {
+    log.push('project office-sandbox settings exists ' + sandbox.id);
+  }
+  const team = await prisma.agent.findMany({ where: { slug: { in: teamSlugs } }, select: { id: true, slug: true } });
+  for (const a of team) {
+    const where = { projectId_agentId: { projectId: sandbox.id, agentId: a.id } };
+    const link = await prisma.projectAgent.findUnique({ where });
+    if (link) {
+      log.push(`project agent ${a.slug} exists ${link.id}`);
+    } else {
+      const c = await prisma.projectAgent.create({ data: { projectId: sandbox.id, agentId: a.id } });
+      log.push(`project agent ${a.slug} created ${c.id}`);
+    }
   }
   return log;
 }

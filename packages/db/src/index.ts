@@ -6,3 +6,4 @@ export function createPrisma(connectionString: string) {
 }
 export type { PrismaClient };
 export * from './generated/prisma/client.js';
+export { seed } from './seed.js';
