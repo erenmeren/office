@@ -31,6 +31,8 @@ export function ApprovalCard({ approval, agentName }: { approval: ApprovalView; 
       await Promise.all([qc.invalidateQueries({ queryKey: ['approvals'] }), qc.invalidateQueries({ queryKey: ['missions'] })]);
     } catch (err) {
       setError(String(err));
+      // e.g. 409 already_decided: refetch so a stale card disappears
+      void qc.invalidateQueries({ queryKey: ['approvals'] });
     } finally {
       setBusy(false);
     }

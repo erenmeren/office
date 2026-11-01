@@ -121,7 +121,7 @@ export function PlanCard({ mission: m, agents, selectedId, onSelect }: { mission
             </Button>
           )}
           {CANCELLABLE.includes(m.status) && (
-            <Button variant="destructive" disabled={busy} onClick={act(() => post(`/missions/${m.id}/cancel`))}>
+            <Button variant="destructive" disabled={busy} onClick={() => window.confirm('Cancel this mission? Running tasks are stopped.') && act(() => post(`/missions/${m.id}/cancel`))()}>
               Cancel mission
             </Button>
           )}

@@ -77,7 +77,7 @@ function Evidence({ t }: { t: TaskDetailView }) {
             Tests {check.status}
           </EvidenceChip>
         )}
-        <EvidenceChip render={<Link href="/memory" />}>
+        <EvidenceChip render={<Link href={`/memory?taskId=${t.id}`} />}>
           <Database aria-hidden />
           Memory {memory}
         </EvidenceChip>
@@ -144,9 +144,12 @@ export function TaskDetail({ taskId }: { taskId: string }) {
   const agents = useAgents();
   const workers = useWorkers();
   const all = useTasks();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const refresh = useCallback(() => {
     void qc.invalidateQueries({ queryKey: ['task', taskId] });
     void qc.invalidateQueries({ queryKey: ['tasks'] });
+    void qc.invalidateQueries({ queryKey: ['missions'] });
   }, [qc, taskId]);
 
   if (task.isPending) return <p className="text-sm text-muted-foreground">Loading…</p>;
@@ -157,7 +160,18 @@ export function TaskDetail({ taskId }: { taskId: string }) {
   const worker = workers.data?.find((w) => w.id === latest?.workerId);
   const cost = t.runs.reduce((sum, r) => sum + r.costUsd, 0);
   const cap = t.budgetUsd ?? agent?.currentVersion?.config.maxBudgetUsd;
-  const act = (path: string) => () => post(`/tasks/${t.id}/${path}`).then(refresh);
+  const act = (path: string) => async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await post(`/tasks/${t.id}/${path}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
 
   return (
     <div className="flex flex-wrap gap-5">
@@ -173,16 +187,16 @@ export function TaskDetail({ taskId }: { taskId: string }) {
           <CardAction className="flex flex-wrap gap-2">
             {t.status === 'review' && (
               <>
-                <Button size="lg" onClick={act('done')}>
+                <Button size="lg" disabled={busy} onClick={act('done')}>
                   Mark done
                 </Button>
-                <Button variant="secondary" size="lg" onClick={act('reopen')}>
+                <Button variant="secondary" size="lg" disabled={busy} onClick={act('reopen')}>
                   Reopen
                 </Button>
               </>
             )}
             {t.status === 'failed' && (
-              <Button variant="secondary" size="lg" onClick={act('retry')}>
+              <Button variant="secondary" size="lg" disabled={busy} onClick={act('retry')}>
                 Retry
               </Button>
             )}
@@ -190,13 +204,14 @@ export function TaskDetail({ taskId }: { taskId: string }) {
               <ArrowUpRight />
             </Button>
             {canTransitionTask(t.status, 'cancelled') && (
-              <Button variant="destructive" size="icon-lg" aria-label="Cancel task" onClick={() => post(`/tasks/${t.id}/cancel`).then(refresh)}>
+              <Button variant="destructive" size="icon-lg" aria-label="Cancel task" disabled={busy} onClick={act('cancel')}>
                 <Ban />
               </Button>
             )}
           </CardAction>
         </CardHeader>
         <CardContent className="space-y-6">
+          {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="grid gap-x-4 gap-y-[18px] [grid-template-columns:repeat(auto-fit,minmax(min(170px,100%),1fr))]">
             <Kv>
               <KvLabel>Assigned to</KvLabel>

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
+import { X } from 'lucide-react';
 import { MemoryDetail } from '@/components/memory-detail';
 import { MemoryForm } from '@/components/memory-form';
 import { MemoryList, MemorySearch } from '@/components/memory-list';
@@ -28,9 +29,15 @@ function MemoryView() {
   const list = useMemory(project?.id, { q, status: reviewing ? 'proposed' : undefined });
   const total = useMemory(project?.id).data?.length ?? 0;
   const proposed = useMemoryCounts(project?.id).data?.proposed ?? 0;
-  const entries = (list.data ?? []).filter((e) => matchesType(e, type));
+  const taskId = params.get('taskId');
+  const entries = (list.data ?? []).filter((e) => matchesType(e, type) && (!taskId || e.taskId === taskId));
   const selectedId = params.get('id') ?? entries[0]?.id;
-  const select = (id?: string) => router.replace(id ? `/memory?id=${id}` : '/memory');
+  const select = (id?: string, task = taskId) => {
+    const qs = new URLSearchParams();
+    if (id) qs.set('id', id);
+    if (task) qs.set('taskId', task);
+    router.replace(qs.size ? `/memory?${qs}` : '/memory');
+  };
 
   useEffect(
     () =>
@@ -74,6 +81,12 @@ function MemoryView() {
       <Card>
         <CardContent>
           <MemorySearch q={q} onQ={setQ} type={type} onType={setType} proposed={proposed} reviewing={reviewing} onReview={setReviewing} />
+          {taskId && (
+            <Button variant="secondary" size="sm" className="mt-3 font-mono" aria-label={`Task ${taskId.slice(0, 8)}, clear filter`} onClick={() => select(undefined, null)}>
+              Task {taskId.slice(0, 8)}
+              <X data-icon="inline-end" aria-hidden />
+            </Button>
+          )}
         </CardContent>
       </Card>
 
