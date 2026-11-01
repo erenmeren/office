@@ -10,6 +10,7 @@ import { isUnderRoot } from '../lib/paths.js';
 import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
 import { appendEvent } from '../services/event-store.js';
+import { audit } from '../services/audit-service.js';
 import { completeRun, findLeasedRun, markRunning, renewLeases } from '../services/run-service.js';
 import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
@@ -179,6 +180,12 @@ export class WorkerGateway {
       },
     });
     if (count === 0) return fail();
+    if (credential) {
+      await audit(this.prisma, {
+        action: 'worker.enrolled', targetType: 'worker', targetId: worker.id,
+        detail: { name: msg.name, ...(msg.machineId ? { machineId: msg.machineId } : {}) },
+      });
+    }
     await renewLeases(this.prisma, worker.id, msg.activeRunIds, this.config);
     const activeRuns = await this.leasedRuns(worker.id);
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');

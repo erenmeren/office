@@ -1,11 +1,13 @@
 import type { AgentSession, CheckResult, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
 import { RunSpecSchema, skillPromptSection, type OfficeEvent, type RunResult, type RunSpec } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
+import { HttpError } from '../lib/errors.js';
 import type { Config } from '../config.js';
 import type { EventHub, Outbox, RunStatusChanged } from './event-hub.js';
 import { loadVersion } from './agent-service.js';
 import { appendEvent } from './event-store.js';
-import { setTaskStatus } from './task-service.js';
+import { audit } from './audit-service.js';
+import { cancelLiveRuns, notifyCancelled, setTaskStatus } from './task-service.js';
 import { buildContextPack } from './context-pack.js';
 import { toolsForKind } from './tool-service.js';
 import {
@@ -483,6 +485,43 @@ export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: str
     queueRunStatus(outbox, runId, 'lost');
   });
   hub.publishAll(outbox);
+}
+
+/**
+ * Owner stops a live run (409 run_not_live otherwise). A mission task returns to ready without using an attempt
+ * (or is cancelled with `cancelTaskToo`); a plan/review run is handled like a lost one.
+ */
+export async function cancelRun(
+  prisma: PrismaClient, hub: EventHub, gateway: WorkerGateway, runId: string, userId: string, cancelTaskToo: boolean,
+) {
+  const outbox: Outbox = [];
+  const cancelled = await prisma.$transaction(async (tx) => {
+    const [run] = await cancelLiveRuns(tx, outbox, { id: runId });
+    if (!run) return null;
+    await audit(tx, {
+      userId, action: 'run.cancelled', targetType: 'run', targetId: runId,
+      detail: { by: userId, ...(run.taskId ? { taskId: run.taskId } : {}), ...(run.missionId ? { missionId: run.missionId } : {}) },
+    });
+    if (run.kind === 'task' && run.taskId) {
+      const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
+      if (['queued', 'running', 'waiting_reply', 'waiting_approval'].includes(task.status)) {
+        const mission = task.missionId ? await tx.mission.findUnique({ where: { id: task.missionId } }) : null;
+        // a task of a stopped mission must not go ready; the attempt is given back like in abandonRun
+        const stopped = mission && !['approved', 'running', 'review'].includes(mission.status);
+        if (task.status === 'waiting_reply' || task.status === 'waiting_approval') await setTaskStatus(tx, outbox, task.id, 'running');
+        const to = cancelTaskToo || stopped ? 'cancelled' : 'ready';
+        if (to === 'ready') await tx.task.update({ where: { id: task.id }, data: { attempts: { decrement: 1 } } });
+        await setTaskStatus(tx, outbox, task.id, to);
+      }
+    }
+    if (run.kind === 'plan') await onPlanRunLost(tx, outbox, { ...run, status: 'cancelled' });
+    if (run.kind === 'review') await reviewRunFailed(tx, outbox, { ...run, status: 'cancelled' });
+    return run;
+  });
+  if (!cancelled) throw new HttpError(409, 'run_not_live');
+  hub.publishAll(outbox);
+  notifyCancelled(gateway, [cancelled]);
+  return { id: runId, status: 'cancelled' as const };
 }
 
 export async function markRunning(prisma: PrismaClient, hub: EventHub, runId: string, workerId: string) {

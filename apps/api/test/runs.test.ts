@@ -191,6 +191,37 @@ describe('run lifecycle', () => {
     expect(await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'queued', attempts: 2 });
   });
 
+  it('owner cancels a live run; the task is ready again and an audit row exists', async () => {
+    s = await setup();
+    const task = await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    const res = await s.req('POST', `/runs/${spec.runId}/cancel`);
+    expect(res.json()).toEqual({ id: spec.runId, status: 'cancelled' });
+    expect((await w.waitFor('run.cancel')).runId).toBe(spec.runId);
+    expect(await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'ready', attempts: 0 });
+    expect(await s.t.prisma.auditLog.findFirst({ where: { action: 'run.cancelled', targetId: spec.runId } })).toMatchObject({
+      targetType: 'run', detail: { taskId: task.id },
+    });
+    s.result(w, spec, { status: 'succeeded', summary: 'late' });
+    await s.flush(w);
+    expect((await s.run(spec.runId)).status).toBe('cancelled');
+  });
+
+  it('cancel of a finished run is 409; ?task=true cancels the task', async () => {
+    s = await setup();
+    const task = await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    const res = await s.req('POST', `/runs/${spec.runId}/cancel?task=true`);
+    expect(res.statusCode).toBe(200);
+    expect((await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('cancelled');
+    const again = await s.req('POST', `/runs/${spec.runId}/cancel`);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toBe('run_not_live');
+  });
+
   it('a cancelled waiting run is not resumed', async () => {
     s = await setup();
     const { task, w, spec, question } = await s.suspended();

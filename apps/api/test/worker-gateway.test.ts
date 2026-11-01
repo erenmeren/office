@@ -56,6 +56,17 @@ describe('worker gateway', () => {
     await re.close();
   });
 
+  it('enrollment and revocation are audited', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', machineId: 'remote-machine-0001' });
+    expect(await t.prisma.auditLog.findFirst({ where: { action: 'worker.enrolled', targetId: id } })).toMatchObject({
+      targetType: 'worker', detail: { name: 'w1', machineId: 'remote-machine-0001' },
+    });
+    await req('DELETE', `/workers/${id}`);
+    expect(await t.prisma.auditLog.count({ where: { action: 'worker.revoked', targetId: id } })).toBe(1);
+    await w.close();
+  });
+
   it('stores tags and canClone from hello and shows them on GET /workers with online and activeRuns', async () => {
     const { id, enrollToken } = await enroll();
     const pending = await enroll();

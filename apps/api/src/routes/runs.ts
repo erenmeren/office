@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { HttpError } from '../lib/errors.js';
+import { cancelRun } from '../services/run-service.js';
 import { listEvents } from '../services/event-store.js';
 
 export async function runRoutes(app: FastifyInstance) {
@@ -15,6 +16,12 @@ export async function runRoutes(app: FastifyInstance) {
         })
       : null;
     return { ...run, retriedByRunId: retry?.id ?? null };
+  });
+
+  app.post('/runs/:id/cancel', async (req) => {
+    const { id } = req.params as { id: string };
+    const { task } = z.object({ task: z.enum(['true', 'false']).optional() }).parse(req.query);
+    return cancelRun(app.prisma, app.hub, app.gateway, id, req.user!.id, task === 'true');
   });
 
   app.get('/runs/:id/events', async (req) => {
