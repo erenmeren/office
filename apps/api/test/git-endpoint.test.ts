@@ -203,4 +203,62 @@ describe('git endpoint', () => {
     req.destroy();
     await until(() => gitProcs().length === 0, 'git child exited');
   });
+
+  it('forwards Git-Protocol to http-backend (protocol v2)', async () => {
+    const url = `${base}/git/${projectId}/info/refs?service=git-upload-pack`;
+    const headers = { authorization: `Bearer ${worker.credential}` };
+    expect(await (await fetch(url, { headers })).text()).not.toContain('version 2');
+    expect(await (await fetch(url, { headers: { ...headers, 'git-protocol': 'version=2' } })).text()).toContain('version 2');
+    const out = await run('git', ['-c', `http.extraHeader=${auth()}`, '-c', 'protocol.version=2', 'ls-remote', `${base}/git/${projectId}`], { env });
+    expect(out.stdout).toContain('refs/heads/main');
+  });
+
+  it('kills a stalled child after the timeout and answers 504', async () => {
+    (t.config as { gitTimeoutSeconds: number }).gitTimeoutSeconds = 1;
+    const { port } = t.app.server.address() as AddressInfo;
+    const marker = `GIT_PROJECT_ROOT=${join(t.config.dataDir, 'git-roots', projectId)}`;
+    const gitProcs = () =>
+      readdirSync('/proc')
+        .filter((p) => /^\d+$/.test(p))
+        .filter((p) => {
+          try {
+            return readFileSync(`/proc/${p}/environ`, 'utf8').split('\0').includes(marker);
+          } catch {
+            return false;
+          }
+        });
+    const started = Date.now();
+    // http-backend sends its CGI headers before reading an rpc body, so a stalled upload usually has a 200 already
+    // in flight: then the kill truncates the stream. Either way the client is released within the timeout.
+    const outcome = await new Promise<string>((resolve) => {
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port,
+          method: 'POST',
+          path: `/git/${projectId}/git-receive-pack`,
+          headers: {
+            authorization: `Bearer ${worker.credential}`,
+            'content-type': 'application/x-git-receive-pack-request',
+            'content-length': '100000',
+          },
+        },
+        (res) => {
+          res.on('end', () => resolve('ended'));
+          res.on('close', () => resolve('closed'));
+          res.on('error', () => resolve('aborted'));
+          res.resume();
+        },
+      );
+      req.on('error', () => resolve('aborted'));
+      req.write('0000'); // body never completes
+      setTimeout(() => {
+        resolve('stuck');
+        req.destroy();
+      }, 4000);
+    });
+    expect(outcome).not.toBe('stuck');
+    expect(Date.now() - started).toBeLessThan(3500);
+    await until(() => gitProcs().length === 0, 'git child exited');
+  });
 });

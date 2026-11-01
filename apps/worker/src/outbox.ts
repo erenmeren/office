@@ -21,6 +21,11 @@ export class Outbox {
     await rm(this.file(runId), { force: true });
   }
 
+  /** Rename to `<name>.corrupt` so the warning does not repeat on every start; `.corrupt` is never loaded. */
+  private async quarantine(name: string): Promise<void> {
+    await rename(join(this.dir, name), join(this.dir, `${name}.corrupt`)).catch(() => {});
+  }
+
   async load(onSkip: (file: string, err: unknown) => void = () => {}): Promise<Map<string, WorkerToApi>> {
     const out = new Map<string, WorkerToApi>();
     let names: string[];
@@ -34,9 +39,13 @@ export class Outbox {
       try {
         const parsed = WorkerToApiSchema.safeParse(JSON.parse(await readFile(join(this.dir, name), 'utf8')));
         if (parsed.success) out.set(name.slice(0, -5), parsed.data);
-        else onSkip(name, parsed.error);
+        else {
+          onSkip(name, parsed.error);
+          await this.quarantine(name);
+        }
       } catch (err) {
-        onSkip(name, err); // left in place; a corrupt entry must not stop the worker starting
+        onSkip(name, err); // a corrupt entry must not stop the worker starting
+        await this.quarantine(name);
       }
     }
     return out;

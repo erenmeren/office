@@ -36,6 +36,11 @@ it('skips a corrupt entry instead of throwing', async () => {
     const skipped: string[] = [];
     expect(await box.load((f) => skipped.push(f))).toEqual(new Map([['ok', msg]]));
     expect(skipped).toEqual(['bad.json']);
+    expect(existsSync(join(dir, 'bad.json'))).toBe(false);
+    expect(existsSync(join(dir, 'bad.json.corrupt'))).toBe(true);
+    skipped.length = 0;
+    await box.load((f) => skipped.push(f));
+    expect(skipped).toEqual([]); // warned once
   } finally {
     rmSync(dirname(dir), { recursive: true, force: true });
   }

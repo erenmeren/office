@@ -186,6 +186,9 @@ describe('run lifecycle', () => {
     expect(failed).toMatchObject({ status: 'failed', error: 'pinned worker offline at resume' });
     expect(failed.finishedAt).toBeTruthy();
     expect(failed.session?.status).toBe('failed');
+    const ev = await s.t.prisma.sessionEvent.findMany({ where: { sessionId: failed.session!.id, type: 'run.resume.failed' } });
+    expect(ev).toHaveLength(1);
+    expect(ev[0]!.payload).toMatchObject({ reason: 'pinned worker offline at resume' });
     expect(retry.runId).not.toBe(spec.runId);
     expect(retry.resumeSdkSessionId).toBeUndefined();
     expect(await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).toMatchObject({ status: 'queued', attempts: 2 });

@@ -439,6 +439,22 @@ export async function failWaitingRun(prisma: PrismaClient, hub: EventHub, runId:
     return true;
   });
   hub.publishAll(outbox);
+  if (failed) {
+    const session = await prisma.agentSession.findUnique({ where: { runId } });
+    if (session) {
+      const max = await prisma.sessionEvent.aggregate({ where: { sessionId: session.id }, _max: { seq: true } });
+      await appendEvent(prisma, {
+        type: 'run.resume.failed',
+        seq: (max._max.seq ?? 0) + 1,
+        ts: now.toISOString(),
+        sessionId: session.id,
+        runId,
+        agentId: session.agentId,
+        projectId: session.projectId,
+        payload: { reason: error },
+      }, hub);
+    }
+  }
   return failed;
 }
 

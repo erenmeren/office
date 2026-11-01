@@ -44,6 +44,7 @@ type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 // emitted by the API itself; a worker must not forge them
 const SERVER_ONLY_EVENTS = new Set([
   'run.lease.lost',
+  'run.resume.failed',
   'run.status.changed',
   'task.status.changed',
   'agent.resumed',

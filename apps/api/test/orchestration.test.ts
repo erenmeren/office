@@ -195,6 +195,11 @@ describe('orchestration', () => {
     const workerId = (await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: first.runId } })).workerId;
     expect(lost.payload).toEqual({ workerId, retried: true });
     expect((await s.req('GET', `/runs/${first.runId}`)).json()).toMatchObject({ status: 'lost', retriedByRunId: null });
+    // a later non-task run on the same task is not its retry
+    const { id: _id, ...base } = await s.t.prisma.taskRun.findUniqueOrThrow({ where: { id: first.runId } });
+    const fake = await s.t.prisma.taskRun.create({ data: { ...base, kind: 'review', status: 'cancelled', createdAt: new Date(Date.now() + 1000) } as never });
+    expect((await s.req('GET', `/runs/${first.runId}`)).json()).toMatchObject({ retriedByRunId: null });
+    await s.t.prisma.taskRun.delete({ where: { id: fake.id } });
 
     await s.t.app.scheduler.tick();
     let second = (await w.waitFor('run.assign')).spec;

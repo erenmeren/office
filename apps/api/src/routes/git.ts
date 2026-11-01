@@ -71,6 +71,7 @@ export async function gitRoutes(app: FastifyInstance, opts: { config: Config }) 
       REQUEST_METHOD: request.method,
       QUERY_STRING: request.url.includes('?') ? request.url.slice(request.url.indexOf('?') + 1) : '',
     };
+    if (typeof h['git-protocol'] === 'string') env.GIT_PROTOCOL = h['git-protocol'];
     if (h['content-type']) env.CONTENT_TYPE = h['content-type'];
     if (h['content-length']) env.CONTENT_LENGTH = h['content-length'];
     if (typeof h['content-encoding'] === 'string') env.HTTP_CONTENT_ENCODING = h['content-encoding'];
@@ -86,6 +87,12 @@ export async function gitRoutes(app: FastifyInstance, opts: { config: Config }) 
     const kill = () => {
       if (child.exitCode === null && child.signalCode === null) child.kill();
     };
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
+    }, config.gitTimeoutSeconds * 1000);
+    child.on('close', () => clearTimeout(timer));
     reply.raw.on('close', () => {
       if (!reply.raw.writableFinished) kill();
     });
@@ -122,7 +129,7 @@ export async function gitRoutes(app: FastifyInstance, opts: { config: Config }) 
         };
         child.stdout.on('data', onData);
         child.on('error', reject);
-        child.on('close', (code) => reject(new Error(`git http-backend exited ${code} before sending headers`)));
+        child.on('close', (code) => reject(timedOut ? new HttpError(504, 'git_timeout') : new Error(`git http-backend exited ${code} before sending headers`)));
       },
     );
     return reply.code(status).headers(headers).send(out);

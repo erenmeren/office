@@ -20,6 +20,8 @@ const EnvSchema = z.object({
   OFFICE_MSG_PER_TASK: z.coerce.number().int().positive().optional(),
   OFFICE_ESCALATION_DEPTH: z.coerce.number().int().positive().optional(),
   OFFICE_HANDOFF_CHAIN: z.coerce.number().int().positive().optional(),
+  OFFICE_MACHINE_ID: z.string().min(1).max(128).optional(),
+  OFFICE_GIT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(600),
   OFFICE_REPLY_TIMEOUT_MINUTES: z.coerce.number().int().nonnegative().default(60),
   OFFICE_CONTEXT_PACK_MAX_CHARS: z.coerce.number().int().positive().default(12000),
   OFFICE_TRUST_UNIDENTIFIED_WORKERS: z.enum(['true', 'false']).default('false'),
@@ -44,6 +46,7 @@ export interface Config {
   gitHooksDir: string;
   /** This host's identity; only a worker reporting the same id may use the repo checkout directly. */
   machineId: string;
+  gitTimeoutSeconds: number;
   /** Treat workers that send no machineId (pre-Phase 5) as on this machine when their roots cover the repo. */
   trustUnidentifiedWorkers: boolean;
 }
@@ -96,7 +99,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     replyTimeoutMinutes: e.OFFICE_REPLY_TIMEOUT_MINUTES,
     contextPackMaxChars: e.OFFICE_CONTEXT_PACK_MAX_CHARS,
     gitHooksDir: join(packageDir(), 'git-hooks'),
-    machineId: machineId(e.OFFICE_DATA_DIR),
+    machineId: machineId(e.OFFICE_DATA_DIR, undefined, e.OFFICE_MACHINE_ID),
+    gitTimeoutSeconds: e.OFFICE_GIT_TIMEOUT_SECONDS,
     trustUnidentifiedWorkers: e.OFFICE_TRUST_UNIDENTIFIED_WORKERS === 'true',
     cookieSecure: env.NODE_ENV === 'production',
     skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot]).map(realOrGiven),
