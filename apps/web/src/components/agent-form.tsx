@@ -1,18 +1,18 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
-import type { AgentConfigInput } from '@office/shared';
+import { ALWAYS_ON_TOOLS, type AgentConfigInput } from '@office/shared';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { ToolPicker } from '@/components/ui/tool-picker';
 import { useSkill, useSkills, type AgentVersionView, type SkillMode } from '@/lib/queries';
 
 const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
-const NATIVE = 'h-8 rounded-md border border-input bg-transparent px-2 text-sm';
 const CHECK = 'size-4 accent-primary';
 
 export interface AgentFormBody {
@@ -34,23 +34,29 @@ export interface AgentFormInitial {
 
 // versionId '' means "latest": the API then pins the skill's current version
 type Pin = { mode: SkillMode; versionId: string };
-type SubagentDraft = { name: string; description: string; prompt: string; model: string; tools: string; skills: string[]; maxTurns?: number };
+type SubagentDraft = { name: string; description: string; prompt: string; model: string; tools: string[]; skills: string[]; maxTurns?: number };
 
-const NEW_SUBAGENT: SubagentDraft = { name: '', description: '', prompt: '', model: '', tools: 'Read,Glob,Grep', skills: [] };
-const split = (s: string) => s.split(',').map((t) => t.trim()).filter(Boolean);
+const NEW_SUBAGENT: SubagentDraft = { name: '', description: '', prompt: '', model: '', tools: [...ALWAYS_ON_TOOLS], skills: [] };
+const isAlwaysOn = (t: string) => (ALWAYS_ON_TOOLS as readonly string[]).includes(t);
 
 function VersionSelect({ skillId, value, onChange }: { skillId: string; value: string; onChange: (v: string) => void }) {
   const skill = useSkill(skillId);
   const latest = skill.data?.currentVersion?.version;
+  // '' (latest) is not a valid Select value; 'latest' stands in for it
   return (
-    <select className={NATIVE} value={value} onChange={(e) => onChange(e.target.value)} aria-label="Skill version">
-      <option value="">latest{latest !== undefined ? ` (v${latest})` : ''}</option>
-      {skill.data?.versions?.map((v) => (
-        <option key={v.id} value={v.id}>
-          v{v.version}
-        </option>
-      ))}
-    </select>
+    <Select value={value || 'latest'} onValueChange={(v) => onChange(v === 'latest' ? '' : String(v))}>
+      <SelectTrigger size="sm" aria-label="Skill version">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="latest">latest{latest !== undefined ? ` (v${latest})` : ''}</SelectItem>
+        {skill.data?.versions?.map((v) => (
+          <SelectItem key={v.id} value={v.id}>
+            v{v.version}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
@@ -73,9 +79,9 @@ export function AgentForm({
     systemPrompt: cfg?.systemPrompt ?? '',
     model: cfg?.model ?? 'sonnet',
     effort: cfg?.effort ?? 'unset',
-    tools: cfg?.allowedTools.join(',') ?? 'Read,Glob,Grep,Bash,Edit,Write',
+    tools: cfg?.allowedTools.filter((t) => !isAlwaysOn(t)) ?? ['Bash', 'Edit', 'Write'],
     maxTurns: String(cfg?.maxTurns ?? 50),
-    maxBudgetUsd: String(cfg?.maxBudgetUsd ?? 2),
+    maxBudgetUsd: String(cfg?.maxBudgetUsd ?? 0),
     maxConcurrentSubagents: String(cfg?.maxConcurrentSubagents ?? 4),
     maxSubagentDepth: String(cfg?.maxSubagentDepth ?? 1),
   });
@@ -89,7 +95,7 @@ export function AgentForm({
       description: s.description,
       prompt: s.prompt,
       model: s.model ?? '',
-      tools: s.tools?.join(',') ?? '',
+      tools: s.tools ?? [],
       skills: s.skills,
       maxTurns: s.maxTurns,
     })),
@@ -120,7 +126,7 @@ export function AgentForm({
       systemPrompt: form.systemPrompt,
       model: form.model,
       ...(form.effort !== 'unset' && { effort: form.effort as (typeof EFFORTS)[number] }),
-      allowedTools: split(form.tools),
+      allowedTools: [...ALWAYS_ON_TOOLS, ...form.tools],
       maxTurns: Number(form.maxTurns),
       maxBudgetUsd: Number(form.maxBudgetUsd),
       maxConcurrentSubagents: Number(form.maxConcurrentSubagents),
@@ -133,7 +139,7 @@ export function AgentForm({
           return versionId && versionId !== s.currentVersion?.id ? { skillId: s.id, skillVersionId: versionId, mode } : { skillId: s.id, mode };
         }),
       subagents: subagents.map((s) => {
-        const tools = split(s.tools);
+        const tools = s.tools;
         return {
           name: s.name,
           description: s.description,
@@ -218,14 +224,14 @@ export function AgentForm({
         </div>
       </div>
       <div className="space-y-1">
-        <Label htmlFor="tools">Allowed tools (comma-separated)</Label>
-        <Input id="tools" value={form.tools} onChange={set('tools')} />
+        <Label>Allowed tools</Label>
+        <ToolPicker lockAlwaysOn value={form.tools} onChange={(tools) => setForm({ ...form, tools })} />
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {(
           [
             ['maxTurns', 'Max turns', '1'],
-            ['maxBudgetUsd', 'Max budget (USD)', '0.01'],
+            ['maxBudgetUsd', 'Max budget (USD, 0 = no cap)', '0.01'],
             ['maxConcurrentSubagents', 'Max concurrent subagents', '1'],
             ['maxSubagentDepth', 'Max subagent depth', '1'],
           ] as const
@@ -255,15 +261,15 @@ export function AgentForm({
                 </label>
                 {pin && (
                   <>
-                    <select
-                      className={NATIVE}
-                      value={pin.mode}
-                      onChange={(e) => setPin(s.id, { mode: e.target.value as SkillMode })}
-                      aria-label="Skill mode"
-                    >
-                      <option value="eager">eager</option>
-                      <option value="on_demand">on_demand</option>
-                    </select>
+                    <Select value={pin.mode} onValueChange={(v) => setPin(s.id, { mode: v as SkillMode })}>
+                      <SelectTrigger size="sm" aria-label="Skill mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="eager">eager</SelectItem>
+                        <SelectItem value="on_demand">on_demand</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <VersionSelect skillId={s.id} value={pin.versionId} onChange={(v) => setPin(s.id, { versionId: v })} />
                   </>
                 )}
@@ -286,8 +292,19 @@ export function AgentForm({
                   <Input id={`sa-name-${i}`} required value={s.name} onChange={(e) => setSub(i, { name: e.target.value })} />
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor={`sa-model-${i}`}>Model (optional)</Label>
-                  <Input id={`sa-model-${i}`} value={s.model} onChange={(e) => setSub(i, { model: e.target.value })} />
+                  <Label>Model</Label>
+                  <Select value={s.model || 'inherit'} onValueChange={(v) => setSub(i, { model: v === 'inherit' ? '' : String(v) })}>
+                    <SelectTrigger className="w-full" aria-label="Subagent model">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {['inherit', ...MODELS].map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <div className="space-y-1">
@@ -299,8 +316,8 @@ export function AgentForm({
                 <Textarea id={`sa-prompt-${i}`} rows={3} required value={s.prompt} onChange={(e) => setSub(i, { prompt: e.target.value })} />
               </div>
               <div className="space-y-1">
-                <Label htmlFor={`sa-tools-${i}`}>Tools (comma-separated)</Label>
-                <Input id={`sa-tools-${i}`} value={s.tools} onChange={(e) => setSub(i, { tools: e.target.value })} />
+                <Label>Tools (none = inherit from the agent)</Label>
+                <ToolPicker value={s.tools} onChange={(tools) => setSub(i, { tools })} />
               </div>
               <div className="space-y-1">
                 <Label>Skills (pinned only)</Label>

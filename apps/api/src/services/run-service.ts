@@ -1,5 +1,5 @@
 import type { AgentSession, CheckResult, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
-import { RunSpecSchema, skillPromptSection, type OfficeEvent, type RunResult, type RunSpec } from '@office/shared';
+import { RunSpecSchema, minBudget, skillPromptSection, type OfficeEvent, type RunResult, type RunSpec } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import { HttpError } from '../lib/errors.js';
 import type { Config } from '../config.js';
@@ -123,7 +123,7 @@ async function specBase(
       effort: cfg.effort,
       allowedTools: summary ? [] : inbox ? cfg.allowedTools.filter((t) => INBOX_TOOLS.includes(t)) : cfg.allowedTools,
       maxTurns: inbox ? Math.min(cfg.maxTurns, 8) : cfg.maxTurns,
-      maxBudgetUsd: inbox ? Math.min(cfg.maxBudgetUsd, 0.25) : cfg.maxBudgetUsd,
+      maxBudgetUsd: inbox ? minBudget(cfg.maxBudgetUsd, 0.25) : cfg.maxBudgetUsd,
       maxConcurrentSubagents: cfg.maxConcurrentSubagents,
       maxSubagentDepth: cfg.maxSubagentDepth,
       kind: a.kind,
@@ -168,8 +168,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
     kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt,
   });
 
-  const maxBudgetUsd =
-    input.taskBudgetUsd !== undefined ? Math.min(base.spec.maxBudgetUsd, input.taskBudgetUsd) : base.spec.maxBudgetUsd;
+  const maxBudgetUsd = minBudget(base.spec.maxBudgetUsd, input.taskBudgetUsd);
   const outbox: Outbox = [];
   const created = await prisma.$transaction(async (tx) => {
     const run = await tx.taskRun.create({
@@ -387,7 +386,7 @@ export async function resumeRun(
       ...mission.spec,
       taskKind: mission.taskKind,
       readOnlyCheckout: mission.readOnlyCheckout,
-      maxBudgetUsd: Math.min(base.spec.maxBudgetUsd, mission.taskBudgetUsd),
+      maxBudgetUsd: minBudget(base.spec.maxBudgetUsd, mission.taskBudgetUsd),
       ...remoteCwd(mission.spec.git),
     }),
     runId,
