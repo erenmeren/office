@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { ProjectSettingsSchema } from '@office/shared';
+import { ProjectSettingsSchema, type ProjectSettings } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
@@ -34,8 +34,10 @@ export async function projectRoutes(app: FastifyInstance) {
 
   app.put('/projects/:id/settings', async (req) => {
     const { id } = req.params as { id: string };
-    const patch = ProjectSettingsSchema.partial().parse(req.body);
-    const settings = await updateSettings(app.prisma, id, patch);
+    // Zod applies defaults inside .partial(); keep only keys actually sent so they don't overwrite stored values.
+    const parsed = ProjectSettingsSchema.partial().parse(req.body) as Record<string, unknown>;
+    const patch = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in (req.body as object)));
+    const settings = await updateSettings(app.prisma, id, patch as Partial<ProjectSettings>);
     await audit(app.prisma, { userId: req.user!.id, action: 'settings.updated', targetType: 'project', targetId: id, detail: { keys: Object.keys(patch) } });
     return settings;
   });

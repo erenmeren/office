@@ -1,4 +1,4 @@
-import { stat, readFile } from 'node:fs/promises';
+import { rm, stat, readFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentAllowed } from '../src/services/project-service.js';
 import { storeArtifact, readArtifact } from '../src/services/artifact-store.js';
@@ -33,6 +33,27 @@ describe('project settings, agents, audit, artifacts', () => {
     expect(again.approvalTimeoutMinutes).toBe(30);
     expect((await call('PUT', `/projects/${projectId}/settings`, { dailyBudgetUsd: -1 })).statusCode).toBe(400);
     expect((await call('PUT', '/projects/nope/settings', {})).statusCode).toBe(404);
+  });
+
+  it('partial settings patch keeps unrelated stored values; audit lists only sent keys', async () => {
+    const p = (await t.prisma.project.create({ data: { name: 'R', slug: 'r', repoPath: '/tmp/r' } })).id;
+    const cur = (await call('GET', `/projects/${p}/settings`)).json();
+    await call('PUT', `/projects/${p}/settings`, { envTemplate: [{ name: 'A', value: '1' }], approvalPolicy: { ...cur.approvalPolicy, plan: 'auto' } });
+    await call('PUT', `/projects/${p}/settings`, { checkCommand: 'x' });
+    const s = (await call('GET', `/projects/${p}/settings`)).json();
+    expect(s.envTemplate).toEqual([{ name: 'A', value: '1' }]);
+    expect(s.approvalPolicy.plan).toBe('auto');
+    expect(s.checkCommand).toBe('x');
+    const rows = (await call('GET', `/audit?targetType=project&targetId=${p}&limit=1`)).json();
+    expect(rows[0].detail.keys).toEqual(['checkCommand']);
+  });
+
+  it('missing artifact file is 404 artifact_file_missing', async () => {
+    const art = await storeArtifact(t.prisma, t.config, { projectId, kind: 'k', name: 'n', content: 'x' });
+    await rm(art.path);
+    const res = await call('GET', `/artifacts/${art.id}`);
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('artifact_file_missing');
   });
 
   it('project agents set/replace, system rejected, agentAllowed', async () => {

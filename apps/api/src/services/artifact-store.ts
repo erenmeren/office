@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Artifact, PrismaClient } from '@office/db';
 import { redactSecrets } from '@office/runtime';
+import { HttpError } from '../lib/errors.js';
 import type { Config } from '../config.js';
 
 const MAX_READ = 1_000_000;
@@ -23,6 +24,8 @@ export async function storeArtifact(
 }
 
 export async function readArtifact(_config: Config, artifact: Artifact): Promise<string> {
-  const buf = await readFile(artifact.path);
+  const buf = await readFile(artifact.path).catch((e: NodeJS.ErrnoException) => {
+    throw e.code === 'ENOENT' ? new HttpError(404, 'artifact_file_missing') : e;
+  });
   return buf.length > MAX_READ ? `${buf.subarray(0, MAX_READ).toString('utf8')}\n[truncated]` : buf.toString('utf8');
 }
