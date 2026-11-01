@@ -43,6 +43,9 @@ describe('auth', () => {
   it('protects routes', async () => {
     const no = await t.app.inject({ method: 'GET', url: '/projects' });
     expect(no.statusCode).toBe(401);
+    const anon = await t.app.inject({ method: 'GET', url: '/auth/me' });
+    expect(anon.statusCode).toBe(200);
+    expect(anon.json()).toEqual({ setupRequired: false, anonymous: true });
     const login = await t.app.inject({
       method: 'POST',
       url: '/auth/login',

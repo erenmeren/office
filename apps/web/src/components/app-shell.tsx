@@ -15,7 +15,7 @@ function AppHeader() {
   const projects = useProjects();
   const me = useMe();
   const page = NAV.find((n) => isActive(pathname, n.href))?.label ?? (pathname.startsWith('/tasks') ? 'Tasks' : 'Office');
-  const email = me.data && !me.data.setupRequired ? me.data.email : '';
+  const email = me.data && 'email' in me.data ? me.data.email : '';
   const logout = async () => {
     await post('/auth/logout');
     window.location.assign('/login');

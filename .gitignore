@@ -8,3 +8,5 @@ src/generated
 data/
 .superpowers/
 apps/web/AGENTS.md
+apps/web/test-results/
+apps/web/playwright-report/

@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
 import { api } from './api';
 
-export type Me = { setupRequired: true } | { id: string; email: string; setupRequired: false };
+export type Me = { setupRequired: true } | { setupRequired: false; anonymous: true } | { id: string; email: string; setupRequired: false };
 export interface Project {
   id: string;
   name: string;
