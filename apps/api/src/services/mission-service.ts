@@ -493,8 +493,12 @@ export async function onTaskStatusChanged(db: Db, outbox: Outbox, task: Task) {
   }
   if (mission.status === 'approved' || mission.status === 'running') {
     await moveMission(db, outbox, mission.id, ['approved', 'running'], { status: 'review', reviewRunId: null });
-  } else if ((mission.status === 'failed' || mission.status === 'review') && tasks.every((t) => t.status === 'done')) {
-    await moveMission(db, outbox, mission.id, ['failed', 'review'], { status: 'done' });
+  } else if (mission.status === 'failed' && tasks.every((t) => t.status === 'done')) {
+    await moveMission(db, outbox, mission.id, ['failed'], { status: 'done' });
+  } else if (mission.status === 'review' && mission.reviewRunId && !tasks.some((t) => t.status === 'review')) {
+    // a review run already took its turn (reviewRunId kept) and the owner decided the last undecided task: same rule as the review-run settle
+    const done = tasks.every((t) => t.status === 'done');
+    await moveMission(db, outbox, mission.id, ['review'], { status: done ? 'done' : 'failed' });
   }
 }
 
@@ -655,7 +659,8 @@ export async function onReviewRunFinished(
       // an undecided task stays with the owner: the mission remains in review and keeps reviewRunId,
       // so the scheduler does not start another review run; any reopen/retry clears it (onTaskStatusChanged)
       const undecided = tasks.some((t) => t.status === 'review');
-      await moveMission(tx, outbox, mission.id, ['review', 'running'], { status: done ? 'done' : undecided ? 'review' : 'failed' });
+      const status = done ? 'done' : undecided ? 'review' : 'failed';
+      if (status !== current.status) await moveMission(tx, outbox, mission.id, ['review', 'running'], { status });
     }
   });
   hub.publishAll(outbox);

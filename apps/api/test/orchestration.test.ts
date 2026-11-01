@@ -332,6 +332,40 @@ describe('orchestration', () => {
     expect((await s.mission(m.id)).status).toBe('done');
   });
 
+  it.each([
+    ['a failed', 'failed'],
+    ['a done', 'done'],
+  ] as const)('owner closing the last undecided review task settles a review mission (%s)', async (_n, aEnd) => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = plan.tasks.filter((x) => x.key !== 'b');
+    plan.tasks.find((x) => x.key === 'd')!.dependsOn = [];
+    const { w, m, k } = await s.approved(1, plan);
+    // a, c, d are all roots; a fails twice (one retry) when it should end failed
+    const runs = aEnd === 'failed' ? 4 : 3;
+    for (let i = 0; i < runs; i++) {
+      const r = await s.assign(w);
+      const fail = aEnd === 'failed' && r.git?.taskSlug === 'a';
+      const code = r.taskKind === 'code';
+      await s.finish(
+        w,
+        r,
+        fail
+          ? { status: 'failed', error: 'boom' }
+          : { status: 'succeeded', resultText: 'ok', git: code ? git(1) : { ...git(0), integration: 'none' }, ...(code ? { check: check('passed') } : {}) },
+      );
+    }
+    expect((await s.task(k.a)).status).toBe(aEnd === 'failed' ? 'failed' : 'review');
+    const decisions = [{ taskId: k.c, decision: 'done' as const }, ...(aEnd === 'done' ? [{ taskId: k.a, decision: 'done' as const }] : [])];
+    const review = await s.assign(w);
+    expect(review.kind).toBe('review');
+    await s.finish(w, review, { status: 'succeeded', structuredOutput: { summary: 'partial', tasks: decisions } });
+    expect((await s.task(k.d)).status).toBe('review');
+    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: review.runId });
+    expect((await s.req('POST', `/tasks/${k.d}/done`, {})).statusCode).toBe(200);
+    expect((await s.mission(m.id)).status).toBe(aEnd === 'failed' ? 'failed' : 'done');
+  });
+
   it('required consultation: done needs a question to the consultant and a reply in the task conversation', async () => {
     s = await setup();
     const plan = testPlan();
