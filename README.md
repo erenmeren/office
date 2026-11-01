@@ -163,6 +163,16 @@ Pending approvals appear on Mission Control with the tool call and the reason; a
 
 Phase 5. The worker protocol does not assume localhost, but remote clone, remote workspace roots and multi-machine coordination are not built or tested yet. See `docs/progress.md`.
 
+### Remote worker container
+
+`pnpm worker:remote` builds `infra/docker/worker.Dockerfile` and starts the `worker-remote` service (Compose profile `remote`). The container mounts nothing from the host: it clones project repositories from the API git endpoint (`OFFICE_WORKER_CAN_CLONE=true`, no workspace roots), keeps its credential and clones in the named volume `office-worker-remote` (`/office-worker`), and registers with the tag `remote`.
+
+1. Start the API with `API_HOST=0.0.0.0` (the default `127.0.0.1` is not reachable from the container, which connects to `ws://host.docker.internal:4000`). This also exposes the API, including the first-run `/auth/setup`, on every interface. A host firewall (for example ufw with default deny) must also allow the Docker bridge to reach port 4000, e.g. `sudo ufw allow from 172.16.0.0/12 to any port 4000 proto tcp`.
+2. Create a worker (`POST /workers` or the Workers page) and copy its enroll token.
+3. `OFFICE_REMOTE_ENROLL_TOKEN=<token> pnpm worker:remote`. Later starts need no token; the saved credential in the volume is used. Without a token or a saved credential the container exits with code 2 and `OFFICE_ENROLL_TOKEN required on first start`.
+
+The runtime defaults to `fake`. `OFFICE_REMOTE_RUNTIME=claude` runs real Claude sessions, which needs the owner to provide Claude credentials inside the container; nothing is mounted or baked in for that. `OFFICE_REMOTE_WORKER_NAME` overrides the name (`remote-1`).
+
 ## Claude authentication
 
 The worker inherits the machine's Claude Code login (`claude login`) or `ANTHROPIC_API_KEY`; nothing is configured in Agent Office itself.

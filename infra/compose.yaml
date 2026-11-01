@@ -24,5 +24,26 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  # Remote worker (fake runtime by default). Needs the API on API_HOST=0.0.0.0.
+  # First start: OFFICE_REMOTE_ENROLL_TOKEN=<token from POST /workers> pnpm worker:remote
+  worker-remote:
+    profiles: ["remote"]
+    build:
+      context: ..
+      dockerfile: infra/docker/worker.Dockerfile
+    environment:
+      OFFICE_API_URL: ws://host.docker.internal:4000
+      OFFICE_WORKER_HOME: /office-worker
+      OFFICE_WORKER_CAN_CLONE: "true"
+      OFFICE_WORKSPACE_ROOTS: ""
+      OFFICE_RUNTIME: ${OFFICE_REMOTE_RUNTIME:-fake}
+      OFFICE_WORKER_NAME: ${OFFICE_REMOTE_WORKER_NAME:-remote-1}
+      OFFICE_WORKER_TAGS: remote
+      OFFICE_ENROLL_TOKEN: ${OFFICE_REMOTE_ENROLL_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - office-worker-remote:/office-worker
 volumes:
   office-pg:
+  office-worker-remote:
