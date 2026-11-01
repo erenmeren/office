@@ -60,6 +60,7 @@ export async function authRoutes(app: FastifyInstance, opts: { cookieSecure: boo
   app.get('/auth/me', async (req) => {
     if (req.user) return { ...req.user, setupRequired: false };
     if ((await app.prisma.user.count()) === 0) return { setupRequired: true };
-    throw new HttpError(401, 'unauthorized');
+    // 200, not 401: the login page asks this to decide between setup and login, and a 401 is a console error in every browser
+    return { setupRequired: false, anonymous: true };
   });
 }

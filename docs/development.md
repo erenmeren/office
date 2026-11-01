@@ -59,6 +59,17 @@ Tests use the real Postgres test database and the fake adapter; no test calls Cl
 
 Real-Claude checks are opt-in and cost money. The runtime smoke tests are `pnpm --filter @office/runtime exec tsx scripts/smoke-claude.ts` and, for a pinned skill and a subagent, `scripts/smoke-skills.ts` and `scripts/smoke-subagent.ts`. Their results are recorded in `docs/progress.md`.
 
+### Browser tests (Playwright)
+
+`apps/web/e2e` drives the real app in Chromium: every page must render with no console error or warning, no request may leave localhost (fonts are self-hosted under `apps/web/src/app/fonts`), and Mission Control's task picking and composer gating are checked. The config starts the API (with the repo's `.env`) and the web app unless they already run. Owner credentials come from the environment, never from the repo:
+
+```bash
+pnpm --filter @office/web exec playwright install chromium   # once
+OFFICE_E2E_EMAIL=... OFFICE_E2E_PASSWORD=... pnpm --filter @office/web e2e
+```
+
+With an empty database the suite creates the owner from those values.
+
 ## Before committing
 
 ```bash

@@ -16,7 +16,7 @@ export default function LoginPage() {
   const setup = me.data?.setupRequired === true;
 
   useEffect(() => {
-    if (me.data && !me.data.setupRequired) window.location.assign('/');
+    if (me.data && 'id' in me.data) window.location.assign('/');
   }, [me.data]);
 
   if (me.isPending) return <p className="text-sm text-muted-foreground">Loading…</p>;
