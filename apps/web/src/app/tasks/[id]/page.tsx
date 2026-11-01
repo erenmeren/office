@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 import { Fragment, useCallback, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { canTransitionTask, type RunStatus } from '@office/shared';
+import { TaskContext } from '@/components/task-context';
 import { RunEvents } from '@/components/run-events';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -92,6 +93,7 @@ export default function TaskPage() {
         )}
       </div>
       {t.description && <p className="whitespace-pre-wrap text-sm">{t.description}</p>}
+      <TaskContext taskId={t.id} projectId={t.projectId} latest={latest} />
 
       <Card>
         <CardHeader>

@@ -78,6 +78,12 @@ export interface Task {
   attempts: number;
   maxAttempts: number;
 }
+export interface ContextPack {
+  entryIds: string[];
+  summaryIds: string[];
+  inboxCount: number;
+  chars: number;
+}
 export interface TaskRun {
   id: string;
   createdAt: string;
@@ -88,7 +94,7 @@ export interface TaskRun {
   resultText: string | null;
   error: string | null;
   costUsd: number;
-  session: { id: string; skillsSnapshot: SkillSnapshotEntry[] | null } | null;
+  session: { id: string; skillsSnapshot: SkillSnapshotEntry[] | null; contextPack?: ContextPack | null } | null;
 }
 export interface Worker {
   id: string;
@@ -178,4 +184,53 @@ export const useMessageSearch = (projectId: string | undefined, q: string) =>
     queryKey: ['message-search', projectId, q],
     queryFn: () => api<MessageView[]>(`/messages/search?projectId=${projectId}&q=${encodeURIComponent(q)}`),
     enabled: !!projectId && q.trim().length > 1,
+  });
+
+export interface MemoryEntry {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  projectId: string | null;
+  agentId: string | null;
+  scope: 'project' | 'agent_project' | 'agent';
+  type: 'decision' | 'convention' | 'api_contract' | 'known_issue' | 'lesson' | 'task_summary';
+  title: string;
+  content: string;
+  authorType: 'agent' | 'user' | 'system';
+  authorAgentId: string | null;
+  status: 'proposed' | 'verified' | 'rejected';
+  version: number;
+  supersededById: string | null;
+  taskId: string | null;
+  runId: string | null;
+  verifiedAt: string | null;
+  sources: { id: string; kind: 'event' | 'message' | 'commit' | 'file' | 'run' | 'task'; ref: string; label: string | null }[];
+  supersedes: { id: string; version: number } | null;
+}
+export type MemoryEntryDetail = MemoryEntry & {
+  revisions: { id: string; version: number; title: string; createdAt: string; status: MemoryEntry['status']; authorType: MemoryEntry['authorType'] }[];
+};
+/** The `type` pill is applied client-side (Knowledge spans two types), so only q and status go to the API. */
+export const useMemory = (projectId: string | undefined, f: { q?: string; status?: MemoryEntry['status'] } = {}) =>
+  useQuery({
+    queryKey: ['memory', 'list', projectId, f.q ?? '', f.status ?? ''],
+    queryFn: () => {
+      const qs = new URLSearchParams({ projectId: projectId! });
+      if (f.q?.trim()) qs.set('q', f.q.trim());
+      if (f.status) qs.set('status', f.status);
+      return api<MemoryEntry[]>(`/memory?${qs}`);
+    },
+    enabled: !!projectId,
+  });
+export const useMemoryEntry = (id: string | undefined, projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['memory', 'entry', id],
+    queryFn: () => api<MemoryEntryDetail>(`/memory/${id}?projectId=${projectId}`),
+    enabled: !!id && !!projectId,
+  });
+export const useMemoryCounts = (projectId: string | undefined) =>
+  useQuery({
+    queryKey: ['memory', 'counts', projectId],
+    queryFn: () => api<{ proposed: number }>(`/memory/counts?projectId=${projectId}`),
+    enabled: !!projectId,
   });

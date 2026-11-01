@@ -2,11 +2,11 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, FolderGit2, LayoutDashboard, MessagesSquare, Server, Sparkles, Target, type LucideIcon } from 'lucide-react';
+import { Bot, Database, FolderGit2, LayoutDashboard, MessagesSquare, Server, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { StatusDot } from '@/components/ui/status-pill';
-import { useAgents, useConversations, useProjects, useSkills, useTasks, useWorkers } from '@/lib/queries';
+import { useAgents, useConversations, useMemoryCounts, useProjects, useSkills, useTasks, useWorkers } from '@/lib/queries';
 import { statusTone } from '@/lib/status';
 
 export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
@@ -15,6 +15,7 @@ export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/conversations', label: 'Conversations', icon: MessagesSquare },
   { href: '/agents', label: 'Agent Studio', icon: Bot },
   { href: '/skills', label: 'Skill Library', icon: Sparkles },
+  { href: '/memory', label: 'Project Memory', icon: Database },
   { href: '/workers', label: 'Workers', icon: Server },
 ];
 
@@ -51,10 +52,12 @@ export function useNavCounts() {
   const workers = useWorkers();
   const projects = useProjects();
   const conversations = useConversations(projects.data?.[0]?.id);
+  const memory = useMemoryCounts(projects.data?.[0]?.id);
   return {
     '/mission-control': { n: tasks.data?.filter((t) => statusTone(t.status) === 'decision').length ?? 0, tone: 'decision' as const },
     '/conversations': { n: conversations.data?.reduce((n, c) => n + c.unreadForOwner, 0) ?? 0, tone: 'message' as const },
     '/skills': { n: skills.data?.filter((s) => s.status === 'pending_review').length ?? 0, tone: 'decision' as const },
+    '/memory': { n: memory.data?.proposed ?? 0, tone: 'decision' as const },
     '/workers': { n: workers.data?.filter((w) => w.status === 'online').length ?? 0, tone: 'live' as const },
   } as Record<string, { n: number; tone: 'live' | 'decision' | 'message' }>;
 }

@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/mission-control', '/conversations', '/agents', '/skills', '/workers', '/tasks/new'];
+const STATIC = ['/', '/mission-control', '/conversations', '/agents', '/skills', '/memory', '/workers', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {
@@ -66,6 +66,27 @@ authed.describe('every page renders without console noise', () => {
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByRole('article').filter({ hasText: 'Hello from e2e' })).toBeVisible();
     await expect(page.getByText('Saved · delivers at the next session boundary').first()).toBeVisible();
+    expectQuiet(noise);
+  });
+
+  authed('owner adds and verifies memory', async ({ page, noise }) => {
+    await page.goto('/memory');
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: 'Add memory' }).click();
+    await page.getByLabel('Title', { exact: true }).fill('E2E decision');
+    await page.getByLabel('Content', { exact: true }).fill('Use Postgres for everything.');
+    await page.getByRole('button', { name: 'Save memory' }).click();
+    const row = page.getByRole('button').filter({ hasText: 'E2E decision' }).first();
+    await expect(row).toBeVisible();
+    await expect(row.getByText('Verified', { exact: true })).toBeVisible();
+    // Proposed entries come from agents only; exercise the review flow when one exists.
+    const review = page.getByRole('button', { name: 'Review now' });
+    if (await review.isVisible()) {
+      await review.click();
+      await page.getByRole('button').filter({ hasText: 'Needs review' }).first().click();
+      await page.getByRole('button', { name: 'Verify', exact: true }).click();
+      await expect(page.getByText('Verified by you')).toBeVisible();
+    }
     expectQuiet(noise);
   });
 
