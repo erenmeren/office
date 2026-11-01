@@ -91,4 +91,29 @@ describe('memory', () => {
     expect(pack.inboxCount).toBe(1);
     expect(pack.text).toContain('please look');
   });
+
+  it('concurrent supersede: one winner, one 409, one successor', async () => {
+    const old = await add({ title: 'Race', content: 'race base' });
+    const put = (content: string) =>
+      t.app.inject({ method: 'PUT', url: `/memory/${old.id}`, headers: { cookie }, payload: { title: 'Race', content } });
+    const codes = (await Promise.all([put('one'), put('two')])).map((r) => r.statusCode).sort();
+    expect(codes).toEqual([200, 409]);
+    expect(await t.prisma.memoryEntry.count({ where: { title: 'Race', version: 2 } })).toBe(1);
+  });
+
+  it('status routes honour an explicit projectId', async () => {
+    const e = await add({ status: 'proposed', title: 'Scoped' });
+    const bad = await t.app.inject({ method: 'POST', url: `/memory/${e.id}/verify?projectId=${otherId}`, headers: { cookie } });
+    expect(bad.statusCode).toBe(404);
+    const ok = await t.app.inject({ method: 'POST', url: `/memory/${e.id}/verify?projectId=${projectId}`, headers: { cookie } });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it('project-less agent lesson is managed and appears in the pack', async () => {
+    const l = await add({ projectId: undefined, agentId, scope: 'agent', type: 'lesson', status: 'proposed', title: 'Own lesson' });
+    const v = await t.app.inject({ method: 'POST', url: `/memory/${l.id}/verify`, headers: { cookie } });
+    expect(v.statusCode).toBe(200);
+    const pack = await buildContextPack(t.prisma, { projectId, agentId, taskText: '', maxChars: 12000 });
+    expect(pack.entryIds).toContain(l.id);
+  });
 });

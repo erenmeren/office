@@ -60,7 +60,12 @@ export async function buildContextPack(
   }
 
   const lessons = await db.memoryEntry.findMany({
-    where: { ...verified, type: 'lesson', agentId: a.agentId, scope: { in: ['agent', 'agent_project'] } },
+    where: {
+      status: 'verified',
+      supersededById: null,
+      OR: [{ projectId: null }, { projectId: a.projectId }],
+      type: 'lesson',
+      agentId: a.agentId, scope: { in: ['agent', 'agent_project'] } },
     orderBy: { createdAt: 'desc' },
     take: 5,
   });

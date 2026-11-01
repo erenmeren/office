@@ -32,18 +32,14 @@ const Update = z.object({
   content: z.string().min(1).max(8000),
   type: MemoryTypeSchema.optional(),
   sources: z.array(MemorySourceInputSchema).optional(),
+  projectId: z.string().min(1).optional(),
 });
 
 export async function memoryRoutes(app: FastifyInstance) {
   const changed = (entryId: string, status: z.infer<typeof MemoryStatusSchema>) =>
     app.hub.publish('global', { type: 'memory.changed', topic: 'global', entryId, status });
 
-  // The project of an existing entry comes from the row itself (single-owner API).
-  const projectOf = async (id: string) => {
-    const e = await app.prisma.memoryEntry.findUnique({ where: { id }, select: { projectId: true } });
-    if (!e?.projectId) throw new HttpError(404, 'not_found');
-    return e.projectId;
-  };
+  const optProject = (v: unknown) => z.object({ projectId: z.string().min(1).optional() }).parse(v).projectId;
 
   app.get('/memory', async (req) => {
     const q = z
@@ -78,28 +74,29 @@ export async function memoryRoutes(app: FastifyInstance) {
 
   app.post('/memory/:id/verify', async (req) => {
     const { id } = req.params as { id: string };
-    const e = await verifyEntry(app.prisma, id, await projectOf(id));
+    const e = await verifyEntry(app.prisma, id, optProject(req.query));
     changed(e.id, e.status);
     return e;
   });
 
   app.post('/memory/:id/reject', async (req) => {
     const { id } = req.params as { id: string };
-    const e = await rejectEntry(app.prisma, id, await projectOf(id));
+    const e = await rejectEntry(app.prisma, id, optProject(req.query));
     changed(e.id, e.status);
     return e;
   });
 
   app.put('/memory/:id', async (req) => {
     const { id } = req.params as { id: string };
-    const e = await supersedeEntry(app.prisma, id, await projectOf(id), { ...Update.parse(req.body), actor: 'user' });
+    const { projectId: bodyProject, ...body } = Update.parse(req.body);
+    const e = await supersedeEntry(app.prisma, id, bodyProject ?? optProject(req.query), { ...body, actor: 'user' });
     changed(e.id, e.status);
     return e;
   });
 
   app.delete('/memory/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const e = await deleteEntry(app.prisma, id, await projectOf(id));
+    const e = await deleteEntry(app.prisma, id, optProject(req.query));
     changed(e.id, e.status);
     return reply.code(204).send();
   });

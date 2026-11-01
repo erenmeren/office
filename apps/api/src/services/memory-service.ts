@@ -111,9 +111,10 @@ export async function loadOrdered(db: Db, ids: string[]): Promise<MemoryEntryVie
   return withSupersedes(db, ids.map((id) => byId.get(id)).filter((r) => r !== undefined));
 }
 
-async function ownEntry(db: Db, id: string, projectId: string) {
+// A supplied projectId must equal the row's; without one any row (even project-less) passes.
+async function ownEntry(db: Db, id: string, projectId?: string) {
   const e = await db.memoryEntry.findUnique({ where: { id }, include: { sources: true } });
-  if (!e || e.projectId !== projectId) throw new HttpError(404, 'not_found');
+  if (!e || (projectId !== undefined && e.projectId !== projectId)) throw new HttpError(404, 'not_found');
   return e;
 }
 
@@ -133,7 +134,7 @@ export async function getEntry(db: Db, id: string, projectId: string) {
   return { ...view!, revisions };
 }
 
-async function setStatus(db: Db, id: string, projectId: string, status: MemoryStatus) {
+async function setStatus(db: Db, id: string, projectId: string | undefined, status: MemoryStatus) {
   await ownEntry(db, id, projectId);
   return db.memoryEntry.update({
     where: { id },
@@ -142,18 +143,17 @@ async function setStatus(db: Db, id: string, projectId: string, status: MemorySt
   });
 }
 
-export const verifyEntry = (db: Db, id: string, projectId: string) => setStatus(db, id, projectId, 'verified');
-export const rejectEntry = (db: Db, id: string, projectId: string) => setStatus(db, id, projectId, 'rejected');
+export const verifyEntry = (db: Db, id: string, projectId?: string) => setStatus(db, id, projectId, 'verified');
+export const rejectEntry = (db: Db, id: string, projectId?: string) => setStatus(db, id, projectId, 'rejected');
 
 export async function supersedeEntry(
   db: Db,
   id: string,
-  projectId: string,
+  projectId: string | undefined,
   input: { title: string; content: string; type?: MemoryType; sources?: MemorySourceInput[]; actor: 'user' | 'agent' },
 ) {
   const run = async (tx: Db) => {
     const old = await ownEntry(tx, id, projectId);
-    if (old.supersededById) throw new HttpError(409, 'already_superseded');
     const fresh = await tx.memoryEntry.create({
       data: {
         projectId: old.projectId,
@@ -173,13 +173,15 @@ export async function supersedeEntry(
       },
       include: { sources: true },
     });
-    await tx.memoryEntry.update({ where: { id: old.id }, data: { supersededById: fresh.id } });
+    // Guarded flip: a concurrent supersede loses here and rolls the new row back.
+    const flipped = await tx.memoryEntry.updateMany({ where: { id: old.id, supersededById: null }, data: { supersededById: fresh.id } });
+    if (flipped.count === 0) throw new HttpError(409, 'already_superseded');
     return { ...fresh, supersedes: { id: old.id, version: old.version } };
   };
   return '$transaction' in db ? db.$transaction((tx) => run(tx)) : run(db);
 }
 
-export async function deleteEntry(db: Db, id: string, projectId: string) {
+export async function deleteEntry(db: Db, id: string, projectId?: string) {
   const run = async (tx: Db) => {
     const e = await ownEntry(tx, id, projectId);
     await tx.memoryEntry.updateMany({ where: { supersededById: id }, data: { supersededById: null } });
@@ -196,7 +198,7 @@ export function proposedCount(db: Db, projectId: string) {
 
 export function taskHistory(db: Db, f: { projectId: string; taskId?: string; limit: number }) {
   return db.memoryEntry.findMany({
-    where: { projectId: f.projectId, type: 'task_summary', status: 'verified', ...(f.taskId && { taskId: f.taskId }) },
+    where: { projectId: f.projectId, type: 'task_summary', status: 'verified', supersededById: null, ...(f.taskId && { taskId: f.taskId }) },
     orderBy: { createdAt: 'desc' },
     take: f.limit,
   });
