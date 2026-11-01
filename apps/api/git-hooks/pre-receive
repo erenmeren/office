@@ -1,0 +1,25 @@
+#!/bin/sh
+# Office pre-receive: workers may only fast-forward refs/heads/office/*.
+# One bad line rejects the whole push. Runs with cwd at the repository's git dir.
+set -eu
+status=0
+while read -r old new ref; do
+  case "$ref" in
+    refs/heads/office/*) ;;
+    *) echo "office: rejected $ref: only refs/heads/office/* may be pushed" >&2; status=1; continue ;;
+  esac
+  if [ "$ref" = "refs/heads/${OFFICE_DEFAULT_BRANCH:-main}" ]; then
+    echo "office: rejected $ref: the default branch is not pushable" >&2; status=1; continue
+  fi
+  case "$new" in
+    *[!0]*) ;;
+    *) echo "office: rejected $ref: deletes are not allowed" >&2; status=1; continue ;;
+  esac
+  case "$old" in
+    *[!0]*)
+      if ! git merge-base --is-ancestor "$old" "$new"; then
+        echo "office: rejected $ref: not a fast-forward" >&2; status=1
+      fi ;;
+  esac
+done
+exit "$status"

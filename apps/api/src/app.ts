@@ -24,6 +24,7 @@ import { auditRoutes } from './routes/audit.js';
 import { artifactRoutes } from './routes/artifacts.js';
 import { runRoutes } from './routes/runs.js';
 import { workerRoutes } from './routes/workers.js';
+import { gitRoutes } from './routes/git.js';
 import { EventHub } from './services/event-hub.js';
 import { Scheduler } from './services/scheduler.js';
 import { WorkerGateway } from './ws/worker-gateway.js';
@@ -98,6 +99,7 @@ export async function buildApp(
   await app.register(artifactRoutes, { config });
   await app.register(runRoutes);
   await app.register(workerRoutes);
+  await app.register(gitRoutes, { config });
   app.addHook('onReady', async () => scheduler.start());
   app.addHook('onClose', async () => scheduler.stop());
 

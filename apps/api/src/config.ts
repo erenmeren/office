@@ -1,5 +1,5 @@
-import { realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, realpathSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { MessageLimitsSchema, type MessageLimits } from '@office/shared';
@@ -39,9 +39,21 @@ export interface Config {
   messageLimits: MessageLimits;
   replyTimeoutMinutes: number;
   contextPackMaxChars: number;
+  gitHooksDir: string;
 }
 
 const defaultSkillRoot = resolve(fileURLToPath(new URL('../../../templates/skills', import.meta.url)));
+
+// the package root (the directory holding package.json), from src/ under tsx and from dist/ under node
+function packageDir(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  while (!existsSync(join(dir, 'package.json'))) {
+    const up = dirname(dir);
+    if (up === dir) throw new Error('package.json not found above ' + fileURLToPath(import.meta.url));
+    dir = up;
+  }
+  return dir;
+}
 
 function realOrGiven(p: string): string {
   try {
@@ -77,6 +89,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     }),
     replyTimeoutMinutes: e.OFFICE_REPLY_TIMEOUT_MINUTES,
     contextPackMaxChars: e.OFFICE_CONTEXT_PACK_MAX_CHARS,
+    gitHooksDir: join(packageDir(), 'git-hooks'),
     cookieSecure: env.NODE_ENV === 'production',
     skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot]).map(realOrGiven),
   };
