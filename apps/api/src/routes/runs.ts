@@ -21,7 +21,7 @@ export async function runRoutes(app: FastifyInstance) {
   app.post('/runs/:id/cancel', async (req) => {
     const { id } = req.params as { id: string };
     const { task } = z.object({ task: z.enum(['true', 'false']).optional() }).parse(req.query);
-    return cancelRun(app.prisma, app.hub, app.gateway, id, req.user!.id, task === 'true');
+    return cancelRun(app.prisma, app.hub, app.gateway, id, req.user!.id, task === 'true', req.log);
   });
 
   app.get('/runs/:id/events', async (req) => {

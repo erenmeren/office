@@ -209,6 +209,21 @@ describe('run lifecycle', () => {
     expect((await s.run(spec.runId)).status).toBe('cancelled');
   });
 
+  it('cancelling a summary run lets the parent run be summarized again', async () => {
+    s = await setup();
+    const summarizer = await s.agent('office-summarizer');
+    await s.t.prisma.agent.update({ where: { id: summarizer }, data: { isSystem: true } });
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    s.result(w, spec, { status: 'succeeded', resultText: 'done', sdkSessionId: 'sdk-1' });
+    await s.flush(w);
+    const sum = await s.assign(w);
+    expect((await s.run(spec.runId)).summarizedAt).toBeTruthy();
+    await s.req('POST', `/runs/${sum.runId}/cancel`);
+    expect((await s.run(spec.runId)).summarizedAt).toBeNull();
+  });
+
   it('cancel of a finished run is 409; ?task=true cancels the task', async () => {
     s = await setup();
     const task = await s.createTask();

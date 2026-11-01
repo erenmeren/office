@@ -11,6 +11,8 @@ import { cancelLiveRuns, notifyCancelled, setTaskStatus } from './task-service.j
 import { buildContextPack } from './context-pack.js';
 import { toolsForKind } from './tool-service.js';
 import {
+  LIVE_TASK,
+  cancelMission,
   missionBranch,
   onPlanRunFinished,
   onPlanRunLost,
@@ -493,6 +495,7 @@ export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: str
  */
 export async function cancelRun(
   prisma: PrismaClient, hub: EventHub, gateway: WorkerGateway, runId: string, userId: string, cancelTaskToo: boolean,
+  log: { error: (obj: object, msg: string) => void },
 ) {
   const outbox: Outbox = [];
   const cancelled = await prisma.$transaction(async (tx) => {
@@ -504,7 +507,7 @@ export async function cancelRun(
     });
     if (run.kind === 'task' && run.taskId) {
       const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
-      if (['queued', 'running', 'waiting_reply', 'waiting_approval'].includes(task.status)) {
+      if ((LIVE_TASK as readonly string[]).includes(task.status)) {
         const mission = task.missionId ? await tx.mission.findUnique({ where: { id: task.missionId } }) : null;
         // a task of a stopped mission must not go ready; the attempt is given back like in abandonRun
         const stopped = mission && !['approved', 'running', 'review'].includes(mission.status);
@@ -514,13 +517,20 @@ export async function cancelRun(
         await setTaskStatus(tx, outbox, task.id, to);
       }
     }
-    if (run.kind === 'plan') await onPlanRunLost(tx, outbox, { ...run, status: 'cancelled' });
-    if (run.kind === 'review') await reviewRunFailed(tx, outbox, { ...run, status: 'cancelled' });
+    // let the scheduler summarize that run again
+    if (run.summaryOfRunId) await tx.taskRun.update({ where: { id: run.summaryOfRunId }, data: { summarizedAt: null } });
+    // a cancelled review run keeps reviewRunId on purpose: no new review starts, the owner decides the tasks
     return run;
   });
   if (!cancelled) throw new HttpError(409, 'run_not_live');
   hub.publishAll(outbox);
   notifyCancelled(gateway, [cancelled]);
+  // an owner-cancelled plan run stops the mission; cancelMission is a no-op when it is already over
+  if (cancelled.kind === 'plan' && cancelled.missionId) {
+    await cancelMission(prisma, hub, gateway, cancelled.missionId, userId, log).catch((err: unknown) => {
+      if (!(err instanceof HttpError && err.status === 409)) throw err;
+    });
+  }
   return { id: runId, status: 'cancelled' as const };
 }
 

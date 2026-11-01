@@ -295,6 +295,17 @@ describe('orchestration', () => {
     expect(await s.t.prisma.taskRun.count({ where: { kind: 'task' } })).toBeGreaterThan(0);
   });
 
+  it('owner cancel of the review run keeps the mission in review and starts no new review', async () => {
+    s = await setup();
+    const { w, m, k } = await s.approved();
+    await s.toReview(w, k, 'failed');
+    const review = await s.assign(w);
+    expect((await s.req('POST', `/runs/${review.runId}/cancel`)).statusCode).toBe(200);
+    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: review.runId });
+    await s.t.app.scheduler.tick();
+    expect(await s.t.prisma.taskRun.count({ where: { kind: 'review' } })).toBe(1);
+  });
+
   it('a stalled mission goes to review; the Chief review run gets the review tools; a failed check is evidence_missing; structured reopen -> ready', async () => {
     s = await setup();
     const { w, m, k } = await s.approved();

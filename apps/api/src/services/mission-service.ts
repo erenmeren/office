@@ -413,7 +413,7 @@ export async function replan(prisma: PrismaClient, hub: EventHub, missionId: str
 
 const CANCELLABLE: MissionStatus[] = ['planning', 'plan_failed', 'awaiting_approval', 'approved', 'running', 'review'];
 const IDLE_TASK = ['planned', 'ready', 'blocked'] as const;
-const LIVE_TASK = ['queued', 'running', 'waiting_reply', 'waiting_approval'] as const;
+export const LIVE_TASK = ['queued', 'running', 'waiting_reply', 'waiting_approval'] as const;
 
 /**
  * Open mission -> cancelled; idempotent on an already cancelled mission (the task sweep runs again).
