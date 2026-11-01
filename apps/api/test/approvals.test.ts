@@ -142,8 +142,29 @@ describe('tool approvals', () => {
     expect((await s.run(spec.runId)).status).toBe('cancelled');
     expect(await s.t.prisma.approval.findUniqueOrThrow({ where: { id: a!.id } })).toMatchObject({ status: 'expired', message: 'run cancelled' });
     expect((await w.waitFor('run.cancel')).runId).toBe(spec.runId);
+    expect(await s.t.prisma.auditLog.findFirst({ where: { action: 'approval.expired', targetId: a!.id } })).toMatchObject({
+      userId: null,
+      detail: { reason: 'run cancelled' },
+    });
     const res = await s.req('POST', `/approvals/${a!.id}/approve`, {});
     expect(res.statusCode).toBe(409);
+  });
+
+  it('a second request sent right after the first decision arrives is decided and delivered too', async () => {
+    s = await setup();
+    const { w, spec } = await s.running();
+    const first = await s.ask(w, spec, { command: 'rm -rf a' });
+    const [a] = await s.pending(spec.runId);
+    await s.req('POST', `/approvals/${a!.id}/approve`, {});
+    expect((await w.waitFor('approval.result')).decision.requestId).toBe(first.requestId);
+    const second = await s.ask(w, spec, { command: 'rm -rf b' });
+    const [b] = await s.pending(spec.runId);
+    expect(b!.requestId).toBe(second.requestId);
+    expect((await s.run(spec.runId)).status).toBe('waiting_approval');
+    await s.req('POST', `/approvals/${b!.id}/deny`, {});
+    expect(await w.waitFor('approval.result')).toMatchObject({ decision: { requestId: second.requestId, decision: 'deny' } });
+    expect((await s.t.prisma.approval.findMany({ where: { runId: spec.runId } })).map((x) => x.status).sort()).toEqual(['approved', 'denied']);
+    expect((await s.run(spec.runId)).status).toBe('running');
   });
 
   it('a request for a run the worker does not lease -> error, no row', async () => {

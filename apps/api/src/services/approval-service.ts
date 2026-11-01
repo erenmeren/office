@@ -37,7 +37,7 @@ export async function requestApproval(
   { run, session, request }: { run: TaskRun; session: AgentSession; request: ApprovalRequest },
 ): Promise<ApprovalDecision | null> {
   const input = redactSecrets(request.input) as Prisma.InputJsonValue;
-  const repeat = await prisma.approval.findUnique({ where: { requestId: request.requestId } });
+  const repeat = await prisma.approval.findFirst({ where: { requestId: request.requestId, runId: run.id } });
   if (repeat) return repeat.status === 'pending' ? null : decisionOf(repeat);
   if (run.taskId) {
     const key = approvalKey(request.toolName, input);
@@ -51,11 +51,9 @@ export async function requestApproval(
   const { approvalTimeoutMinutes } = await getSettings(prisma, session.projectId);
   const outbox: Outbox = [];
   await prisma.$transaction(async (tx) => {
-    const moved = await tx.taskRun.updateMany({ where: { id: run.id, status: 'running' }, data: { status: 'waiting_approval' } });
-    // a second concurrent request finds the run already waiting
-    if (moved.count === 0 && (await tx.taskRun.findUniqueOrThrow({ where: { id: run.id } })).status !== 'waiting_approval') {
-      throw new Error(`run ${run.id} is not running`);
-    }
+    // a running run starts waiting; one already waiting (another request pending) just gets one more row
+    const status = await lockRun(tx, run.id);
+    if (status !== 'running' && status !== 'waiting_approval') throw new Error(`run ${run.id} is not running`);
     const approval = await tx.approval.create({
       data: {
         projectId: session.projectId,
@@ -70,45 +68,62 @@ export async function requestApproval(
         expiresAt: new Date(Date.now() + approvalTimeoutMinutes * 60_000),
       },
     });
-    if (moved.count) {
-      await tx.agentSession.update({ where: { id: session.id }, data: { status: 'waiting_approval' } });
-      outbox.push({ topic: `run:${run.id}`, message: { type: 'run.status.changed', runId: run.id, status: 'waiting_approval' } });
-      if (run.kind === 'task' && run.taskId) {
-        const task = await tx.task.findUniqueOrThrow({ where: { id: run.taskId } });
-        if (task.status === 'running') await setTaskStatus(tx, outbox, task.id, 'waiting_approval');
-      }
-    }
+    if (status === 'running') await moveRun(tx, outbox, run.id, 'running', 'waiting_approval');
     queueApproval(outbox, approval);
   });
   hub.publishAll(outbox);
   return null;
 }
 
-/** waiting_approval -> running for the run (and its task) once no request of the run is pending. */
-async function resumeFromApproval(prisma: PrismaClient, hub: EventHub, runId: string) {
-  const outbox: Outbox = [];
-  await prisma.$transaction(async (tx) => {
-    if (await tx.approval.count({ where: { runId, status: 'pending' } })) return;
-    const { count } = await tx.taskRun.updateMany({ where: { id: runId, status: 'waiting_approval' }, data: { status: 'running' } });
-    if (count === 0) return;
-    await tx.agentSession.updateMany({ where: { runId }, data: { status: 'running' } });
-    outbox.push({ topic: `run:${runId}`, message: { type: 'run.status.changed', runId, status: 'running' } });
-    const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId }, include: { task: true } });
-    if (run.kind === 'task' && run.task?.status === 'waiting_approval') await setTaskStatus(tx, outbox, run.task.id, 'running');
-  });
-  hub.publishAll(outbox);
+/** Row lock on the run, so requests and resumes of one run serialize; returns its status. */
+async function lockRun(tx: Prisma.TransactionClient, runId: string) {
+  const rows = await tx.$queryRaw<Array<{ status: string }>>`SELECT status::text FROM "TaskRun" WHERE id = ${runId} FOR UPDATE`;
+  return rows[0]?.status;
+}
+
+/** Guarded run (and session, task) status move between running and waiting_approval; false when the run was not in `from`. */
+async function moveRun(
+  tx: Prisma.TransactionClient,
+  outbox: Outbox,
+  runId: string,
+  from: 'running' | 'waiting_approval',
+  to: 'running' | 'waiting_approval',
+) {
+  const { count } = await tx.taskRun.updateMany({ where: { id: runId, status: from }, data: { status: to } });
+  if (count === 0) return false;
+  await tx.agentSession.updateMany({ where: { runId }, data: { status: to } });
+  outbox.push({ topic: `run:${runId}`, message: { type: 'run.status.changed', runId, status: to } });
+  const run = await tx.taskRun.findUniqueOrThrow({ where: { id: runId }, include: { task: true } });
+  if (run.kind === 'task' && run.task?.status === from) await setTaskStatus(tx, outbox, run.task.id, to);
+  return true;
 }
 
 /**
- * Sends a decided approval to its run's worker and resumes the run. 'ended' when the run no longer waits;
- * 'offline' when the worker is not connected (the run keeps waiting; the worker's next hello re-sends it).
+ * Resumes the run (once no other request of it is pending), then sends the decided approval to its worker.
+ * Resuming first means the worker's next request finds the run running. 'ended' when the run no longer waits;
+ * 'offline' when the worker is not connected: the run waits again and the worker's next hello re-sends it.
  */
 async function deliver(prisma: PrismaClient, hub: EventHub, gateway: Gateway, a: Approval) {
   const run = a.runId ? await prisma.taskRun.findUnique({ where: { id: a.runId } }) : null;
   if (!run || run.status !== 'waiting_approval' || !run.workerId) return 'ended';
-  if (!gateway.send(run.workerId, { type: 'approval.result', runId: run.id, decision: decisionOf(a) })) return 'offline';
-  await resumeFromApproval(prisma, hub, run.id);
-  return 'sent';
+  const outbox: Outbox = [];
+  const resumed = await prisma.$transaction(async (tx) => {
+    if ((await lockRun(tx, run.id)) !== 'waiting_approval') return null;
+    if (await tx.approval.count({ where: { runId: run.id, status: 'pending' } })) return false;
+    return moveRun(tx, outbox, run.id, 'waiting_approval', 'running');
+  });
+  if (resumed === null) return 'ended';
+  hub.publishAll(outbox);
+  if (gateway.send(run.workerId, { type: 'approval.result', runId: run.id, decision: decisionOf(a) })) return 'sent';
+  if (resumed) {
+    const back: Outbox = [];
+    await prisma.$transaction(async (tx) => {
+      await lockRun(tx, run.id);
+      await moveRun(tx, back, run.id, 'running', 'waiting_approval');
+    });
+    hub.publishAll(back);
+  }
+  return 'offline';
 }
 
 /** Owner decision on any approval: plan and budget approvals keep their own flow. */
@@ -195,5 +210,6 @@ export async function expireRunApprovals(tx: Prisma.TransactionClient, outbox: O
   const pending = await tx.approval.findMany({ where: { runId: { in: runIds }, status: 'pending' } });
   for (const a of pending) {
     queueApproval(outbox, await tx.approval.update({ where: { id: a.id }, data: { status: 'expired', decidedAt: new Date(), message } }));
+    await audit(tx, { action: 'approval.expired', targetType: 'approval', targetId: a.id, detail: { reason: message } });
   }
 }
