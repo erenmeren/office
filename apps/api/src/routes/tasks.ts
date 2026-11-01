@@ -26,10 +26,19 @@ export async function taskRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const task = await app.prisma.task.findUnique({
       where: { id },
-      include: { runs: { orderBy: { createdAt: 'asc' }, include: { session: true } } },
+      include: {
+        runs: { orderBy: { createdAt: 'asc' }, include: { session: true } },
+        mission: { select: { id: true, title: true, status: true, branch: true } },
+        dependencies: { select: { dependsOnId: true } },
+        dependents: { select: { taskId: true } },
+      },
     });
     if (!task) throw new HttpError(404, 'not_found');
-    return task;
+    return {
+      ...task,
+      dependencies: task.dependencies.map((d) => d.dependsOnId),
+      dependents: task.dependents.map((d) => d.taskId),
+    };
   });
 
   app.post('/tasks/:id/cancel', async (req) => {

@@ -36,7 +36,10 @@ const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter(
   (n) => n !== 'submit_summary' && n !== 'get_task_evidence' && n !== 'review_task', // review tools: wired in Phase 4 Task 5
 );
 
+const PLAN_TOOLS: OfficeToolName[] = ['search_memory', 'read_memory', 'get_task_history', 'get_project_decisions', 'list_agents'];
+
 export function toolsForKind(kind: RunKind): OfficeToolName[] {
+  if (kind === 'plan') return [...PLAN_TOOLS];
   return kind === 'summary' ? ['submit_summary'] : [...MESSAGING_AND_MEMORY];
 }
 

@@ -1,5 +1,5 @@
 import type { AgentSession, Prisma, PrismaClient, Task, TaskRun } from '@office/db';
-import { RunSpecSchema, skillPromptSection, type OfficeEvent, type RunResult } from '@office/shared';
+import { RunSpecSchema, skillPromptSection, type OfficeEvent, type RunResult, type RunSpec } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
 import type { EventHub, Outbox, RunStatusChanged } from './event-hub.js';
@@ -8,6 +8,7 @@ import { appendEvent } from './event-store.js';
 import { setTaskStatus } from './task-service.js';
 import { buildContextPack } from './context-pack.js';
 import { toolsForKind } from './tool-service.js';
+import { onPlanRunFinished, onPlanRunLost, planRunFailed } from './mission-service.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 
 export class LeaseError extends Error {
@@ -42,6 +43,7 @@ const MESSAGING_SECTION: Partial<Record<RunKind, string>> = {
   inbox:
     'You were woken to answer your inbox. Call read_inbox, reply to each question with reply_message, then stop. Do not start new work.',
   summary: 'Call submit_summary exactly once.',
+  plan: 'You are planning a mission. Inspect the repository read-only (Read, Glob, Grep, Bash for git log and listing only; writes are blocked). Answer only with the plan JSON that matches the schema.',
 };
 const DEFAULT_MESSAGING_SECTION =
   'You can message teammates with the office tools (list_agents, send_message, read_inbox, …). Check read_inbox when you are blocked or when the context pack reports unread mail. Propose durable knowledge with propose_memory; the owner verifies it.';
@@ -113,6 +115,11 @@ export interface CreateRunInput {
   resumeSdkSessionId?: string;
   startSeq?: number;
   summaryOfRunId?: string;
+  missionId?: string;
+  outputFormat?: RunSpec['outputFormat'];
+  readOnlyCheckout?: boolean;
+  allowedToolsOverride?: string[];
+  taskKind?: RunSpec['taskKind'];
 }
 
 export async function createRun(prisma: PrismaClient, hub: EventHub, config: Config, input: CreateRunInput) {
@@ -133,6 +140,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
         projectId,
         conversationId: input.conversationId,
         summaryOfRunId: input.summaryOfRunId,
+        missionId: input.missionId,
         agentVersionId: base.version.id,
         workerId: input.worker.workerId,
         status: 'queued',
@@ -166,6 +174,10 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
     }
     const spec = RunSpecSchema.parse({
       ...base.spec,
+      ...(input.allowedToolsOverride && { allowedTools: input.allowedToolsOverride }),
+      outputFormat: input.outputFormat,
+      readOnlyCheckout: input.readOnlyCheckout,
+      taskKind: input.taskKind,
       runId: run.id,
       sessionId: session.id,
       prompt: input.prompt,
@@ -324,6 +336,7 @@ export async function abandonRun(prisma: PrismaClient, hub: EventHub, runId: str
     }
     // let the scheduler summarize that run again
     if (run.summaryOfRunId) await tx.taskRun.update({ where: { id: run.summaryOfRunId }, data: { summarizedAt: null } });
+    if (run.kind === 'plan') await onPlanRunLost(tx, outbox, run);
     queueRunStatus(outbox, runId, 'lost');
   });
   hub.publishAll(outbox);
@@ -365,7 +378,14 @@ export async function completeRun(
       data: suspended
         ? // parked without a lease: the worker slot is free; workerId stays for the record
           { status, waitingSince: now, leaseExpiresAt: null, costUsd: { increment: r.usage.costUsd } }
-        : { status, resultText: r.resultText, error: r.error, finishedAt: now, costUsd: { increment: r.usage.costUsd } },
+        : {
+            status,
+            resultText: r.resultText,
+            error: r.error,
+            finishedAt: now,
+            costUsd: { increment: r.usage.costUsd },
+            structuredOutput: r.structuredOutput as Prisma.InputJsonValue | undefined,
+          },
     });
     if (count === 0) throw new LeaseError(runId);
     await tx.agentSession.update({
@@ -395,9 +415,15 @@ export async function completeRun(
         await setTaskStatus(tx, outbox, run.taskId, status);
       }
     }
+    if (run.kind === 'plan' && (status === 'failed' || status === 'cancelled')) {
+      await planRunFailed(tx, outbox, run, [r.error ?? `plan run ${status}`]);
+    }
     queueRunStatus(outbox, runId, status);
   });
   hub.publishAll(outbox);
+  if (run.kind === 'plan' && status === 'succeeded') {
+    await onPlanRunFinished(prisma, hub, { ...run, structuredOutput: r.structuredOutput as TaskRun['structuredOutput'] });
+  }
 }
 
 /** Marks every expired leased run `lost` and requeues or fails its task. Returns the lost runs. */
@@ -425,6 +451,7 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
         if (task.status === 'waiting_reply') await setTaskStatus(tx, outbox, task.id, 'running');
         await setTaskStatus(tx, outbox, task.id, task.attempts < task.maxAttempts ? 'ready' : 'failed');
       }
+      if (run.kind === 'plan') await onPlanRunLost(tx, outbox, run);
       queueRunStatus(outbox, run.id, 'lost');
       return true;
     });

@@ -10,6 +10,7 @@ import type { EventHub } from './event-hub.js';
 import { pendingWakeDeliveries } from './message-service.js';
 import { abandonRun, createRun, createRunForTask, expireLeases, resumeRun } from './run-service.js';
 import { summaryPrompt } from './summary-prompt.js';
+import { startPlanRun } from './mission-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
@@ -68,6 +69,11 @@ export class Scheduler {
     } catch (err) {
       this.log.error({ err }, 'expireLeases failed');
     }
+    try {
+      await this.planMissions();
+    } catch (err) {
+      this.log.error({ err }, 'planning missions failed');
+    }
     let tasks;
     try {
       tasks = await this.prisma.task.findMany({
@@ -110,6 +116,25 @@ export class Scheduler {
       await this.summarize();
     } catch (err) {
       this.log.error({ err }, 'enqueuing summary runs failed');
+    }
+  }
+
+  /** Each `planning` mission without a plan run gets one for the Chief. */
+  private async planMissions() {
+    const missions = await this.prisma.mission.findMany({
+      where: { status: 'planning', planRunId: null },
+      include: { project: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const mission of missions) {
+      try {
+        const worker = this.pickWorker(mission.project.repoPath);
+        if (!worker) continue;
+        const { spec } = await startPlanRun(this.prisma, this.hub, this.config, mission, worker);
+        await this.assign(worker.workerId, spec);
+      } catch (err) {
+        this.log.error({ err, missionId: mission.id }, 'starting plan run failed');
+      }
     }
   }
 

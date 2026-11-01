@@ -1,0 +1,415 @@
+import type { Agent, Approval, Mission, Prisma, PrismaClient, Project, TaskRun } from '@office/db';
+import {
+  PLAN_JSON_SCHEMA,
+  PlanSchema,
+  validatePlan,
+  type MissionStatus,
+  type Plan,
+  type ProjectSettings,
+} from '@office/shared';
+import type { Config } from '../config.js';
+import { HttpError } from '../lib/errors.js';
+import { audit } from './audit-service.js';
+import type { EventHub, Outbox } from './event-hub.js';
+import { findOrCreateConversation } from './message-service.js';
+import { agentAllowed, getSettings } from './project-service.js';
+import { createRun } from './run-service.js';
+import { setTaskStatus, type Db } from './task-service.js';
+
+const CHIEF_SLUG = 'chief';
+const PLAN_TOOLS = ['Read', 'Glob', 'Grep', 'Bash'];
+
+export function queueMissionStatus(outbox: Outbox, mission: Mission) {
+  const message = {
+    type: 'mission.status.changed' as const,
+    mission: { id: mission.id, status: mission.status, updatedAt: mission.updatedAt.toISOString() },
+  };
+  outbox.push({ topic: `mission:${mission.id}`, message }, { topic: 'global', message });
+}
+
+function queueApproval(outbox: Outbox, a: Approval) {
+  const message = {
+    type: 'approval.changed' as const,
+    approval: {
+      id: a.id,
+      projectId: a.projectId,
+      missionId: a.missionId,
+      taskId: a.taskId,
+      runId: a.runId,
+      type: a.type,
+      status: a.status,
+      scope: a.scope,
+      toolName: a.toolName,
+      input: a.input,
+      reason: a.reason,
+      createdAt: a.createdAt.toISOString(),
+      decidedAt: a.decidedAt?.toISOString() ?? null,
+      expiresAt: a.expiresAt?.toISOString() ?? null,
+    },
+  };
+  if (a.missionId) outbox.push({ topic: `mission:${a.missionId}`, message });
+  outbox.push({ topic: 'global', message });
+}
+
+/** Guarded mission status move: null when the mission was not in one of `from`. */
+async function moveMission(
+  db: Db,
+  outbox: Outbox,
+  id: string,
+  from: MissionStatus[],
+  data: Prisma.MissionUpdateManyMutationInput & { status: MissionStatus },
+) {
+  const { count } = await db.mission.updateMany({ where: { id, status: { in: from } }, data });
+  if (count === 0) return null;
+  const mission = await db.mission.findUniqueOrThrow({ where: { id } });
+  queueMissionStatus(outbox, mission);
+  return mission;
+}
+
+/** Active non-system agents allowed in the project. */
+async function teamOf(db: Db, projectId: string): Promise<Agent[]> {
+  const agents = await db.agent.findMany({ where: { isActive: true, isSystem: false }, orderBy: { name: 'asc' } });
+  const allowed = await Promise.all(agents.map((a) => agentAllowed(db, projectId, a.id)));
+  return agents.filter((_, i) => allowed[i]);
+}
+
+async function validate(db: Db, projectId: string, plan: Plan) {
+  const agents = await db.agent.findMany();
+  const roster = await Promise.all(
+    agents.map(async (a) => ({
+      slug: a.slug,
+      active: a.isActive,
+      system: a.isSystem,
+      allowed: await agentAllowed(db, projectId, a.id),
+    })),
+  );
+  return validatePlan(plan, roster);
+}
+
+export async function createMission(
+  prisma: PrismaClient,
+  hub: EventHub,
+  input: { projectId: string; request: string; title?: string; budgetUsd?: number },
+) {
+  await getSettings(prisma, input.projectId); // 404 when the project is missing
+  const chief = await prisma.agent.findFirst({ where: { slug: CHIEF_SLUG, isActive: true } });
+  if (!chief) throw new HttpError(404, 'no_chief');
+  const title = input.title ?? input.request.slice(0, 80);
+  const outbox: Outbox = [];
+  const mission = await prisma.$transaction(async (tx) => {
+    const team = await teamOf(tx, input.projectId);
+    const conversation = await findOrCreateConversation(tx, {
+      projectId: input.projectId,
+      kind: 'group',
+      agentIds: team.map((a) => a.id),
+      includesOwner: true,
+      title: `Mission: ${title}`,
+    });
+    return tx.mission.create({
+      data: {
+        projectId: input.projectId,
+        title,
+        request: input.request,
+        budgetUsd: input.budgetUsd,
+        status: 'planning',
+        conversationId: conversation.id,
+      },
+    });
+  });
+  queueMissionStatus(outbox, mission);
+  hub.publishAll(outbox);
+  return mission;
+}
+
+export function planPrompt(mission: Mission & { project: Project }, roster: Agent[], settings: ProjectSettings) {
+  return [
+    `Plan this mission for the project ${mission.project.name}.`,
+    `Request:\n${mission.request}`,
+    `Team (slug · name · role · description):\n${roster
+      .map((a) => `- ${a.slug} · ${a.name} · ${a.role} · ${a.description ?? ''}`)
+      .join('\n')}`,
+    [
+      'Rules:',
+      '- Split the work into small, verifiable tasks.',
+      '- Give every task a `kind`: code, analysis or review.',
+      '- Assign every task to one agent by slug from the team above.',
+      '- Express order with `dependsOn` (task keys). Run tasks in parallel only when they touch disjoint areas.',
+      '- Every task needs requirements and acceptance criteria.',
+      "- Add `requiredConsultations` when a task depends on another agent's knowledge.",
+      '- Use `approvalPoints` only for push, merge or deploy.',
+      `- A task without \`budgetUsd\` gets ${settings.defaultTaskBudgetUsd} USD.`,
+    ].join('\n'),
+    mission.planErrors.length ? `Problems with the previous plan attempt:\n${mission.planErrors.map((e) => `- ${e}`).join('\n')}` : '',
+    'Answer only with the plan JSON.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+/** Creates the plan run for a `planning` mission without one; the scheduler assigns the returned spec. */
+export async function startPlanRun(
+  prisma: PrismaClient,
+  hub: EventHub,
+  config: Config,
+  mission: Mission & { project: Project },
+  worker: { workerId: string },
+) {
+  const chief = await prisma.agent.findFirst({ where: { slug: CHIEF_SLUG, isActive: true } });
+  if (!chief) throw new Error('no active chief agent');
+  const [roster, settings] = await Promise.all([teamOf(prisma, mission.projectId), getSettings(prisma, mission.projectId)]);
+  const created = await createRun(prisma, hub, config, {
+    kind: 'plan',
+    agentId: chief.id,
+    projectId: mission.projectId,
+    missionId: mission.id,
+    prompt: planPrompt(mission, roster, settings),
+    readOnlyCheckout: true,
+    outputFormat: { type: 'json_schema', schema: PLAN_JSON_SCHEMA },
+    allowedToolsOverride: PLAN_TOOLS,
+    worker,
+  });
+  await prisma.mission.update({ where: { id: mission.id }, data: { planRunId: created.run.id } });
+  return created;
+}
+
+/** The mission's current plan run, if `run` is it and the mission still waits for it. */
+async function planningMission(db: Db, run: TaskRun) {
+  if (!run.missionId) return null;
+  const mission = await db.mission.findUnique({ where: { id: run.missionId } });
+  return mission?.status === 'planning' && mission.planRunId === run.id ? mission : null;
+}
+
+export async function planRunFailed(db: Db, outbox: Outbox, run: TaskRun, errors: string[]) {
+  const mission = await planningMission(db, run);
+  if (mission) await moveMission(db, outbox, mission.id, ['planning'], { status: 'plan_failed', planErrors: errors });
+}
+
+/** A lost plan run is retried once (planRunId cleared); the second loss fails the plan. */
+export async function onPlanRunLost(db: Db, outbox: Outbox, run: TaskRun) {
+  const mission = await planningMission(db, run);
+  if (!mission) return;
+  // shortcut: counts every lost plan run of the mission, also those before a replan; track per attempt if that matters
+  const lost = await db.taskRun.count({ where: { missionId: mission.id, kind: 'plan', status: 'lost' } });
+  if (lost >= 2) await planRunFailed(db, outbox, run, ['plan run lost twice']);
+  else await db.mission.update({ where: { id: mission.id }, data: { planRunId: null } });
+}
+
+async function createPlanTasks(db: Db, mission: Mission, plan: Plan, settings: ProjectSettings) {
+  const agents = await db.agent.findMany({ where: { slug: { in: plan.tasks.map((t) => t.agent) } } });
+  const agentIds = new Map(agents.map((a) => [a.slug, a.id]));
+  const ids = new Map<string, string>();
+  for (const t of plan.tasks) {
+    const task = await db.task.create({
+      data: {
+        projectId: mission.projectId,
+        missionId: mission.id,
+        agentId: agentIds.get(t.agent)!,
+        key: t.key,
+        title: t.title,
+        description: t.description,
+        kind: t.kind,
+        status: 'planned',
+        requirements: t.requirements,
+        acceptanceCriteria: t.acceptanceCriteria,
+        parallelGroup: t.parallelGroup,
+        requiredConsultations: t.requiredConsultations,
+        budgetUsd: t.budgetUsd ?? settings.defaultTaskBudgetUsd,
+      },
+    });
+    ids.set(t.key, task.id);
+  }
+  await db.taskDependency.createMany({
+    data: plan.tasks.flatMap((t) =>
+      [...new Set(t.dependsOn)].map((d) => ({ taskId: ids.get(t.key)!, dependsOnId: ids.get(d)! })),
+    ),
+  });
+}
+
+/** Deletes the mission's `planned` tasks and their dependency rows. */
+async function deletePlannedTasks(db: Db, missionId: string) {
+  const ids = (await db.task.findMany({ where: { missionId, status: 'planned' }, select: { id: true } })).map((t) => t.id);
+  await db.taskDependency.deleteMany({ where: { OR: [{ taskId: { in: ids } }, { dependsOnId: { in: ids } }] } });
+  await db.task.deleteMany({ where: { id: { in: ids } } });
+}
+
+/** awaiting_approval -> approved; every planned task without dependencies becomes ready. */
+async function approveMissionPlan(db: Db, outbox: Outbox, missionId: string) {
+  const mission = await moveMission(db, outbox, missionId, ['awaiting_approval'], { status: 'approved' });
+  if (!mission) throw new HttpError(409, 'invalid_transition');
+  const roots = await db.task.findMany({ where: { missionId, status: 'planned', dependencies: { none: {} } } });
+  for (const t of roots) await setTaskStatus(db, outbox, t.id, 'ready');
+  return mission;
+}
+
+export async function onPlanRunFinished(prisma: PrismaClient, hub: EventHub, run: TaskRun) {
+  const outbox: Outbox = [];
+  try {
+    await prisma.$transaction(async (tx) => {
+      const mission = await planningMission(tx, run);
+      if (!mission) return;
+      const parsed = PlanSchema.safeParse(run.structuredOutput);
+      if (!parsed.success) {
+        const errors =
+          run.structuredOutput == null
+            ? ['plan run returned no structured output']
+            : parsed.error.issues.map((i) => `${i.path.join('.') || 'plan'}: ${i.message}`);
+        return planRunFailed(tx, outbox, run, errors);
+      }
+      const plan = parsed.data;
+      const result = await validate(tx, mission.projectId, plan);
+      if (!result.ok) return planRunFailed(tx, outbox, run, result.errors);
+      const settings = await getSettings(tx, mission.projectId);
+      await createPlanTasks(tx, mission, plan, settings);
+      await moveMission(tx, outbox, mission.id, ['planning'], {
+        status: 'awaiting_approval',
+        plan,
+        planVersion: { increment: 1 },
+        planErrors: [],
+      });
+      if (settings.approvalPolicy.plan === 'auto') {
+        await approveMissionPlan(tx, outbox, mission.id);
+        await audit(tx, { action: 'plan.approved', targetType: 'mission', targetId: mission.id, detail: { auto: true } });
+      } else {
+        const approval = await tx.approval.create({
+          data: {
+            projectId: mission.projectId,
+            missionId: mission.id,
+            type: 'plan',
+            status: 'pending',
+            reason: 'Approve the full task plan',
+          },
+        });
+        queueApproval(outbox, approval);
+      }
+    });
+  } catch (err) {
+    // the run already succeeded; a plan that cannot be applied fails the mission instead of the worker message
+    outbox.length = 0;
+    await prisma.$transaction((tx) =>
+      planRunFailed(tx, outbox, run, [`plan could not be applied: ${(err as Error).message}`]),
+    );
+  }
+  hub.publishAll(outbox);
+}
+
+async function pendingPlanApproval(db: Db, approvalId: string) {
+  const approval = await db.approval.findUnique({ where: { id: approvalId } });
+  if (!approval) throw new HttpError(404, 'not_found');
+  if (approval.type !== 'plan') throw new HttpError(409, 'unsupported_approval_type');
+  if (approval.status !== 'pending' || !approval.missionId) throw new HttpError(409, 'approval_decided');
+  return approval as Approval & { missionId: string };
+}
+
+async function decide(db: Db, outbox: Outbox, approvalId: string, status: 'approved' | 'denied', userId: string) {
+  const { count } = await db.approval.updateMany({
+    where: { id: approvalId, status: 'pending' },
+    data: { status, decidedAt: new Date(), decidedByUserId: userId },
+  });
+  if (count === 0) throw new HttpError(409, 'approval_decided');
+  queueApproval(outbox, await db.approval.findUniqueOrThrow({ where: { id: approvalId } }));
+}
+
+export async function approvePlan(prisma: PrismaClient, hub: EventHub, approvalId: string, userId: string) {
+  const outbox: Outbox = [];
+  const mission = await prisma.$transaction(async (tx) => {
+    const approval = await pendingPlanApproval(tx, approvalId);
+    await decide(tx, outbox, approvalId, 'approved', userId);
+    const mission = await approveMissionPlan(tx, outbox, approval.missionId);
+    await audit(tx, { userId, action: 'plan.approved', targetType: 'mission', targetId: mission.id, detail: { approvalId } });
+    return mission;
+  });
+  hub.publishAll(outbox);
+  return mission;
+}
+
+export async function rejectPlan(prisma: PrismaClient, hub: EventHub, approvalId: string, userId: string) {
+  const outbox: Outbox = [];
+  const mission = await prisma.$transaction(async (tx) => {
+    const approval = await pendingPlanApproval(tx, approvalId);
+    await decide(tx, outbox, approvalId, 'denied', userId);
+    const mission = await moveMission(tx, outbox, approval.missionId, ['awaiting_approval'], { status: 'cancelled' });
+    if (!mission) throw new HttpError(409, 'invalid_transition');
+    const tasks = await tx.task.findMany({ where: { missionId: mission.id, status: 'planned' } });
+    for (const t of tasks) await setTaskStatus(tx, outbox, t.id, 'cancelled');
+    await audit(tx, { userId, action: 'plan.rejected', targetType: 'mission', targetId: mission.id, detail: { approvalId } });
+    return mission;
+  });
+  hub.publishAll(outbox);
+  return mission;
+}
+
+export async function editPlan(prisma: PrismaClient, hub: EventHub, missionId: string, plan: Plan, userId: string) {
+  const outbox: Outbox = [];
+  const mission = await prisma.$transaction(async (tx) => {
+    const current = await tx.mission.findUnique({ where: { id: missionId } });
+    if (!current) throw new HttpError(404, 'not_found');
+    if (current.status !== 'awaiting_approval') throw new HttpError(409, 'plan_locked');
+    const result = await validate(tx, current.projectId, plan);
+    if (!result.ok) throw new HttpError(400, 'invalid_plan', result.errors.join('; '));
+    await deletePlannedTasks(tx, missionId);
+    await createPlanTasks(tx, current, plan, await getSettings(tx, current.projectId));
+    const mission = await tx.mission.update({ where: { id: missionId }, data: { plan, planVersion: { increment: 1 } } });
+    await audit(tx, { userId, action: 'plan.edited', targetType: 'mission', targetId: missionId, detail: { planVersion: mission.planVersion } });
+    return mission;
+  });
+  hub.publishAll(outbox);
+  return mission;
+}
+
+/** plan_failed or awaiting_approval -> planning: the scheduler starts a new plan run with the errors and note. */
+export async function replan(prisma: PrismaClient, hub: EventHub, missionId: string, note: string | undefined, userId: string) {
+  const outbox: Outbox = [];
+  const mission = await prisma.$transaction(async (tx) => {
+    const current = await tx.mission.findUnique({ where: { id: missionId } });
+    if (!current) throw new HttpError(404, 'not_found');
+    await deletePlannedTasks(tx, missionId);
+    await tx.approval.deleteMany({ where: { missionId, type: 'plan', status: 'pending' } });
+    const mission = await moveMission(tx, outbox, missionId, ['plan_failed', 'awaiting_approval'], {
+      status: 'planning',
+      planRunId: null,
+      planErrors: note ? [...current.planErrors, `owner note: ${note}`] : current.planErrors,
+    });
+    if (!mission) throw new HttpError(409, 'invalid_transition');
+    await audit(tx, { userId, action: 'plan.replan', targetType: 'mission', targetId: missionId, detail: { note: note ?? null } });
+    return mission;
+  });
+  hub.publishAll(outbox);
+  return mission;
+}
+
+const OPEN: MissionStatus[] = ['planning', 'plan_failed', 'awaiting_approval', 'approved', 'running', 'review'];
+
+/**
+ * Any open mission -> cancelled. Pending approvals are denied, a live plan run is cancelled and returned
+ * (the caller tells its worker); tasks are left to the caller's cancelTask.
+ */
+export async function cancelMission(prisma: PrismaClient, hub: EventHub, missionId: string, userId: string) {
+  const outbox: Outbox = [];
+  const now = new Date();
+  const out = await prisma.$transaction(async (tx) => {
+    if (!(await tx.mission.findUnique({ where: { id: missionId } }))) throw new HttpError(404, 'not_found');
+    const mission = await moveMission(tx, outbox, missionId, OPEN, { status: 'cancelled' });
+    if (!mission) throw new HttpError(409, 'invalid_transition');
+    const pending = await tx.approval.findMany({ where: { missionId, status: 'pending' } });
+    for (const a of pending) await decide(tx, outbox, a.id, 'denied', userId);
+    let planRun: TaskRun | null = null;
+    if (mission.planRunId) {
+      const { count } = await tx.taskRun.updateMany({
+        where: { id: mission.planRunId, status: { in: ['queued', 'running'] } },
+        data: { status: 'cancelled', finishedAt: now },
+      });
+      if (count) {
+        await tx.agentSession.updateMany({ where: { runId: mission.planRunId }, data: { status: 'cancelled', endedAt: now } });
+        outbox.push({
+          topic: `run:${mission.planRunId}`,
+          message: { type: 'run.status.changed', runId: mission.planRunId, status: 'cancelled' },
+        });
+        planRun = await tx.taskRun.findUniqueOrThrow({ where: { id: mission.planRunId } });
+      }
+    }
+    await audit(tx, { userId, action: 'mission.cancelled', targetType: 'mission', targetId: missionId });
+    return { mission, planRun };
+  });
+  hub.publishAll(outbox);
+  return out;
+}
