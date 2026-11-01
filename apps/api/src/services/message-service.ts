@@ -102,12 +102,20 @@ export interface SendInput {
   idempotencyKey?: string;
 }
 
-export async function sendMessage(
-  db: Db,
-  limits: MessageLimits,
-  input: SendInput,
-): Promise<{ message: Message; deliveries: MessageDelivery[]; created: boolean }> {
+type SendResult = { message: Message; deliveries: MessageDelivery[]; created: boolean };
+
+/** Runs in its own transaction (unless the caller already passed one) so the limit check and insert are atomic. */
+export function sendMessage(db: Db, limits: MessageLimits, input: SendInput): Promise<SendResult> {
+  if ('$transaction' in db) return db.$transaction((tx) => sendInTx(tx, limits, input));
+  return sendInTx(db, limits, input);
+}
+
+async function sendInTx(db: Db, limits: MessageLimits, input: SendInput): Promise<SendResult> {
   const { projectId, senderAgentId } = input;
+  // serialize concurrent senders sharing a cap; released at commit
+  for (const key of [input.senderSessionId && `s:${input.senderSessionId}`, input.taskId && `t:${input.taskId}`]) {
+    if (key) await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))::text`;
+  }
   const withDeliveries = (id: string) => db.message.findUniqueOrThrow({ where: { id }, include: { deliveries: true } });
 
   if (input.idempotencyKey) {
@@ -127,6 +135,7 @@ export async function sendMessage(
       where: { id: input.inReplyToId, projectId },
       include: { deliveries: true },
     });
+    if (!parent) throw new MessageError('not_found', 'inReplyTo message not found');
   }
   if (input.type === 'reply') {
     const p = parent as (Message & { deliveries: MessageDelivery[] }) | null;

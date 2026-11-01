@@ -95,6 +95,30 @@ describe('message bus', () => {
     expect(await err(send({ type: 'handoff', inReplyToId: prev.id }))).toBe('limit_exceeded');
   });
 
+  it('concurrent sends cannot overshoot the cap', async () => {
+    const tight = { ...limits, perSession: 3 };
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () =>
+        sendMessage(t.prisma, tight, {
+          projectId, type: 'message', body: 'c', senderAgentId: a, recipientAgentIds: [b], senderSessionId: 's-conc',
+        }),
+      ),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(3);
+    for (const r of results.filter((r) => r.status === 'rejected')) {
+      expect((r as PromiseRejectedResult).reason).toMatchObject({ code: 'limit_exceeded' });
+    }
+    expect(await t.prisma.message.count({ where: { senderSessionId: 's-conc' } })).toBe(3);
+  });
+
+  it('inReplyToId from another project is not_found', async () => {
+    const other = await t.prisma.project.create({ data: { name: 'Q', slug: 'q', repoPath: '/tmp/q' } });
+    const foreign = await send({ projectId: other.id });
+    for (const type of ['message', 'escalation'] as const) {
+      expect(await err(send({ type, inReplyToId: foreign.message.id }))).toBe('not_found');
+    }
+  });
+
   it('idempotency', async () => {
     const one = await send({ idempotencyKey: 'k1' });
     const two = await send({ idempotencyKey: 'k1' });
