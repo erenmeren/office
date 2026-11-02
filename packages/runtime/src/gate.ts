@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { resolve, sep } from 'node:path';
 import { DEFAULT_DESTRUCTIVE_PATTERNS, GIT_OPTIONS, evaluateToolCall, normalizeCommand, type ApprovalDecision, type RunSpec } from '@office/shared';
 import type { EventSink, ToolBridge } from './types.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'NotebookRead']);
 
 // read-only runs: only these git subcommands (prefix match on `<sub> <args>`)
 const READ_ONLY_GIT = [
@@ -41,6 +43,25 @@ function mayWrite(command: string): boolean {
   );
 }
 
+const PATH_INPUTS = ['file_path', 'notebook_path', 'path'] as const;
+const under = (path: string, root: string) => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+
+/**
+ * A run in a worktree (`spec.git`) may read and write only there and in its skills dir: the file tools are
+ * checked here, Bash by the SDK sandbox. Relative paths resolve against the worktree.
+ */
+function outsideWorktree(spec: RunSpec, toolName: string, input: Record<string, unknown>): string | undefined {
+  if (!spec.git || !(WRITE_TOOLS.has(toolName) || READ_TOOLS.has(toolName))) return undefined;
+  const roots = [spec.cwd, spec.skillsDir].filter((r): r is string => !!r).map((r) => resolve(r));
+  for (const key of PATH_INPUTS) {
+    const raw = input[key];
+    if (typeof raw !== 'string' || !raw) continue;
+    const path = resolve(spec.cwd, raw);
+    if (!roots.some((r) => under(path, r))) return path;
+  }
+  return undefined;
+}
+
 /** Read-only and approval-policy checks shared by both adapters; the allowedTools check stays with the caller. */
 export async function gateToolCall(
   spec: RunSpec,
@@ -49,6 +70,8 @@ export async function gateToolCall(
   toolName: string,
   input: Record<string, unknown>,
 ): Promise<{ allow: true } | { allow: false; message: string }> {
+  const outside = outsideWorktree(spec, toolName, input);
+  if (outside) return { allow: false, message: `${toolName} outside the worktree is not permitted: ${outside}` };
   if (spec.readOnlyCheckout) {
     if (WRITE_TOOLS.has(toolName)) return { allow: false, message: 'Read-only run: writes are not permitted' };
     if (toolName === 'Bash' && typeof input.command === 'string') {

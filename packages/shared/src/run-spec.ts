@@ -28,6 +28,8 @@ export const RunSpecSchema = z.object({
   subagents: z.array(SubagentDefinitionSchema).default([]),
   // worker-filled: directory passed to additionalDirectories; never set by the API
   skillsDir: z.string().optional(),
+  // worker-filled for runs in a worktree: the repository's git dir, which git must still write (objects, refs, index)
+  gitDir: z.string().optional(),
   // present for code and review task runs of a mission; the worker creates the worktree and sets cwd itself
   git: z
     .object({

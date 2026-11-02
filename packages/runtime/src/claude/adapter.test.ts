@@ -153,6 +153,11 @@ describe('office tools', () => {
     expect(o.disallowedTools?.some((t) => t.startsWith('mcp__'))).toBe(false);
     expect(o.strictMcpConfig).toBe(true);
     expect(buildQueryOptions({ ...spec, tools: [] }, bridge, () => {}).mcpServers).toBeUndefined();
+    // a worktree run runs Bash in the SDK sandbox, writable in the worktree, the git dir and the skills dir
+    const wt = buildQueryOptions({ ...spec, git: { repoPath: '/repo' } as RunSpec['git'], gitDir: '/repo/.git', skillsDir: '/s' }, bridge, () => {});
+    expect(wt.sandbox).toMatchObject({ enabled: true, failIfUnavailable: false, allowUnsandboxedCommands: false });
+    expect(wt.sandbox?.filesystem?.allowWrite).toEqual(expect.arrayContaining(['/repo/.git', '/s']));
+    expect(buildQueryOptions(spec, bridge, () => {}).sandbox).toBeUndefined();
     expect(buildQueryOptions({ ...spec, tools: ['read_inbox'] }, undefined, () => {}).mcpServers).toBeUndefined();
   });
 

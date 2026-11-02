@@ -288,7 +288,8 @@ export class RunExecutor {
         }
         // summary runs need no skills, so no run root is created for them
         const skillsDir = spec.kind === 'summary' ? undefined : await materializeSkills(this.runsDir, spec.runId, spec.skills);
-        result = await this.adapter.run({ ...spec, cwd, ...(skillsDir && { skillsDir }) }, { emit }, signal, tools);
+        const gitDir = worktree ? join(worktree.repo, '.git') : undefined;
+        result = await this.adapter.run({ ...spec, cwd, ...(skillsDir && { skillsDir }), ...(gitDir && { gitDir }) }, { emit }, signal, tools);
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         emit({ type: 'agent.failed', payload: { error } });

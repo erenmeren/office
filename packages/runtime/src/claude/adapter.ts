@@ -1,4 +1,6 @@
 import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BUILTIN_TOOLS, MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
 import { gateToolCall } from '../gate.js';
 import { redactSecrets } from '../redact.js';
@@ -121,6 +123,7 @@ export function buildQueryOptions(
     settingSources: ['project'],
     resume: spec.resumeSdkSessionId,
     additionalDirectories: spec.skillsDir ? [spec.skillsDir] : undefined,
+    ...(spec.git && { sandbox: sandboxFor(spec) }),
     skills: spec.skills.length ? spec.skills.map((s) => s.name) : undefined,
     agents,
     env: buildChildEnv(process.env, spec),
@@ -135,6 +138,26 @@ export function buildQueryOptions(
     // gates (and emits agent.command.executed); normalizeSdkMessage emits the other tool events
     hooks: { PreToolUse: [{ hooks: [gateHook], timeout: (spec.approvalTimeoutMinutes ?? 30) * 60 + 60 }] },
     ...(spec.outputFormat && { outputFormat: spec.outputFormat }),
+  };
+}
+
+/**
+ * Bash confinement for a run in a worktree: the SDK sandbox (bubblewrap on Linux) lets commands write only to the
+ * worktree, the repository's git dir, the skills dir and the usual caches. Missing sandbox tooling degrades to
+ * unsandboxed commands rather than failing the run (`failIfUnavailable: false`); the file tools are gated separately.
+ */
+export function sandboxFor(spec: RunSpec) {
+  const home = homedir();
+  return {
+    enabled: true,
+    failIfUnavailable: false,
+    allowUnsandboxedCommands: false,
+    filesystem: {
+      allowWrite: [spec.gitDir, spec.skillsDir, tmpdir(), join(home, '.cache'), join(home, '.npm'), join(home, '.local', 'share', 'pnpm')].filter(
+        (p): p is string => !!p,
+      ),
+    },
+    network: { allowLocalBinding: true },
   };
 }
 
