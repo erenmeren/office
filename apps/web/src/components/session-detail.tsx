@@ -122,7 +122,7 @@ export function SessionDetail({
         </CardContent>
       </Card>
 
-      <TalkTo key={d.agentId} detail={d} subagent={sub && subagentName(sub)} projectId={projectId} recipients={recipients} />
+      <TalkTo key={d.agentId} detail={d} runId={runId} subagent={sub && subagentName(sub)} projectId={projectId} recipients={recipients} />
     </div>
   );
 }
@@ -220,8 +220,8 @@ export function StopButton({ runId, name, subagent, onCancelled, label = 'Stop' 
 
 type Kind = 'message' | 'question';
 
-/** Writes to the agent's human conversation; delivery happens at the next run boundary (no streaming input). */
-function TalkTo({ detail, subagent, projectId, recipients }: { detail: Detail; subagent?: string; projectId: string; recipients: { id: string; name: string }[] }) {
+/** Writes to the agent's human conversation: delivered at the next run boundary, or now by interrupting the running session. */
+function TalkTo({ detail, runId, subagent, projectId, recipients }: { detail: Detail; runId: string; subagent?: string; projectId: string; recipients: { id: string; name: string }[] }) {
   const list = recipients.some((r) => r.id === detail.agentId) ? recipients : [{ id: detail.agentId, name: detail.agentName }, ...recipients];
   const [to, setTo] = useState(detail.agentId);
   const [type, setType] = useState<Kind>('message');
@@ -239,6 +239,18 @@ function TalkTo({ detail, subagent, projectId, recipients }: { detail: Detail; s
       setState({ sent: toName });
     } catch (err) {
       setState({ error: String(err) });
+    }
+  };
+  // only the session's own agent can be interrupted, and only while it runs
+  const canInterrupt = to === detail.agentId && detail.status === 'running' && !subagent;
+  const interrupt = async () => {
+    setState({ busy: true });
+    try {
+      await post(`/runs/${runId}/interrupt`, { body: body.trim() });
+      setBody('');
+      setState({ sent: `${toName} (interrupted)` });
+    } catch (err) {
+      setState({ error: err instanceof ApiError && err.status === 409 ? 'The session is no longer running; send it as a note instead.' : String(err) });
     }
   };
 
@@ -271,12 +283,19 @@ function TalkTo({ detail, subagent, projectId, recipients }: { detail: Detail; s
                 { value: 'question', label: 'Question' },
               ]}
             />
-            <Button type="submit" size="lg" disabled={state.busy || !body.trim()}>
-              <Send data-icon="inline-start" aria-hidden />
-              Send
-            </Button>
+            <div className="flex gap-2">
+              {canInterrupt && (
+                <Button type="button" size="lg" variant="secondary" disabled={state.busy || !body.trim()} onClick={() => void interrupt()}>
+                  Interrupt and send
+                </Button>
+              )}
+              <Button type="submit" size="lg" disabled={state.busy || !body.trim()}>
+                <Send data-icon="inline-start" aria-hidden />
+                Send
+              </Button>
+            </div>
           </div>
-          <p className="text-xs text-ink-3">Delivered at the next run boundary</p>
+          <p className="text-xs text-ink-3">{canInterrupt ? 'Send: delivered at the next run boundary. Interrupt and send: the session stops its current turn and continues with your message.' : 'Delivered at the next run boundary'}</p>
           {state.sent && <p className="text-xs text-mint">Saved for {state.sent}.</p>}
           {state.error && <p role="alert" className="text-sm text-destructive">{state.error}</p>}
         </form>

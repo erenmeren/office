@@ -9,7 +9,12 @@ export interface ToolBridge {
   askApproval(request: ApprovalRequest): Promise<ApprovalDecision>;
 }
 
+/** `interrupted` fires on the owner's "interrupt and send": the adapter ends the turn with a `suspended` result. */
+export interface RunControl {
+  interrupted: AbortSignal;
+}
+
 export interface RuntimeAdapter {
   readonly name: 'claude' | 'fake';
-  run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge): Promise<RunResult>;
+  run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge, control?: RunControl): Promise<RunResult>;
 }

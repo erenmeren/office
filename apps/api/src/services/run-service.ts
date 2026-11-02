@@ -323,7 +323,9 @@ export async function resumeRun(
   const session = run.session;
   const prompt =
     opts.reason === 'reply'
-      ? `Reply from ${opts.reply.sender}:\n${opts.reply.body}`
+      ? opts.reply.sender === 'owner'
+        ? `Message from the owner (your run was interrupted to deliver it):\n${opts.reply.body}`
+        : `Reply from ${opts.reply.sender}:\n${opts.reply.body}`
       : `No reply was received within ${config.replyTimeoutMinutes} minutes. Continue or escalate.`;
   const base = await specBase(prisma, config, {
     kind: run.kind,
@@ -842,4 +844,44 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
     }
   }
   return lost;
+}
+
+/**
+ * Owner "interrupt and send": the message is stored in the agent's human conversation, the run is told to end
+ * its turn (`run.interrupt`), and once its `suspended` result arrives the scheduler resumes it with the message
+ * (`waitingForMessageId` names an owner-authored message, which stands for its own reply). 409 `not_running`
+ * when the run is not running, 409 `worker_offline` when its worker is not connected.
+ */
+export async function interruptRun(
+  prisma: PrismaClient,
+  hub: EventHub,
+  config: Config,
+  gateway: Pick<WorkerGateway, 'send' | 'onlineWorkers'>,
+  runId: string,
+  userId: string,
+  body: string,
+) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId } });
+  if (!run) throw new HttpError(404, 'not_found');
+  if (run.status !== 'running') throw new HttpError(409, 'not_running', `run is ${run.status}`);
+  if (!run.workerId || !gateway.onlineWorkers().some((w) => w.workerId === run.workerId)) throw new HttpError(409, 'worker_offline');
+  const outbox: Outbox = [];
+  const message = await prisma.$transaction(async (tx) => {
+    const { message, deliveries } = await sendMessage(tx, config.messageLimits, {
+      projectId: run.projectId,
+      kind: 'human',
+      type: 'message',
+      body,
+      senderUserId: userId,
+      recipientAgentIds: [run.agentId],
+    });
+    queueMessageCreated(outbox, toMessageView({ ...message, deliveries }));
+    const { count } = await tx.taskRun.updateMany({ where: { id: runId, status: 'running' }, data: { waitingForMessageId: message.id } });
+    if (count === 0) throw new HttpError(409, 'not_running');
+    await audit(tx, { userId, action: 'run.interrupted', targetType: 'run', targetId: runId, detail: { messageId: message.id } });
+    return message;
+  });
+  hub.publishAll(outbox);
+  if (!gateway.send(run.workerId, { type: 'run.interrupt', runId })) throw new HttpError(409, 'worker_offline');
+  return { messageId: message.id };
 }

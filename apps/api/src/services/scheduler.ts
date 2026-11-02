@@ -233,12 +233,16 @@ export class Scheduler {
     for (const id of this.loggedParked.keys()) if (!ids.has(id)) this.loggedParked.delete(id);
     for (const run of waiting) {
       try {
-        const reply = run.waitingForMessageId
-          ? await this.prisma.message.findFirst({
-              where: { type: 'reply', inReplyToId: run.waitingForMessageId },
-              orderBy: { createdAt: 'asc' },
-            })
-          : null;
+        const waited = run.waitingForMessageId ? await this.prisma.message.findUnique({ where: { id: run.waitingForMessageId } }) : null;
+        // an owner-authored waited message is an interrupt: it stands for its own reply
+        const reply = waited?.senderUserId
+          ? waited
+          : run.waitingForMessageId
+            ? await this.prisma.message.findFirst({
+                where: { type: 'reply', inReplyToId: run.waitingForMessageId },
+                orderBy: { createdAt: 'asc' },
+              })
+            : null;
         const timedOut = !!run.waitingSince && run.waitingSince < cutoff;
         if (!reply && !timedOut) continue;
         const pinned = this.gateway.onlineWorkers().find((w) => w.workerId === run.workerId);

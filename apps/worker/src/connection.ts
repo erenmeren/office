@@ -222,6 +222,10 @@ export class WorkerConnection {
         this.log.info({ runId: msg.runId }, 'run cancelled by API');
         this.executor.cancel(msg.runId);
         return;
+      case 'run.interrupt':
+        this.log.info({ runId: msg.runId }, 'run interrupted by the owner');
+        this.executor.interrupt(msg.runId);
+        return;
       case 'error': {
         this.log.warn({ message: msg.message }, 'API reported an error');
         // the lease is gone: the API will retry the run, so the stored result is dead weight

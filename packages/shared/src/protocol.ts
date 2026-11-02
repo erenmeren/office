@@ -60,6 +60,8 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('welcome'), workerId: z.string(), credential: z.string().optional() }),
   z.object({ type: z.literal('run.assign'), spec: RunSpecSchema }),
   z.object({ type: z.literal('run.cancel'), runId: z.string() }),
+  /** Owner "interrupt and send": end the SDK turn with a `suspended` result; the API resumes the run with the owner's message. */
+  z.object({ type: z.literal('run.interrupt'), runId: z.string() }),
   z.object({ type: z.literal('tool.result'), callId: z.string(), result: ToolCallResultSchema }),
   z.object({ type: z.literal('approval.result'), runId: z.string(), decision: ApprovalDecisionSchema }),
   /** The run.result was applied (or was already, for a resend); the worker may drop it from its outbox. */

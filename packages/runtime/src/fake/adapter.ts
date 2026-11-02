@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { mcpToolName, type OfficeToolName, type RunResult, type RunSpec, type ToolCallResult } from '@office/shared';
 import { gateToolCall } from '../gate.js';
-import type { EventSink, RuntimeAdapter, ToolBridge } from '../types.js';
+import type { EventSink, RunControl, RuntimeAdapter, ToolBridge } from '../types.js';
 import { FAKE_PLAN } from './plan.js';
 
 const execFile = promisify(execFileCb);
@@ -23,7 +23,7 @@ const USAGE = { inputTokens: 0, outputTokens: 0, costUsd: 0, numTurns: 1, durati
 export class FakeAdapter implements RuntimeAdapter {
   readonly name = 'fake' as const;
 
-  async run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge): Promise<RunResult> {
+  async run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge, control?: RunControl): Promise<RunResult> {
     sink.emit({ type: 'agent.started', payload: { model: spec.model } });
     for (const { name } of spec.skills.filter((s) => s.mode === 'eager')) {
       const toolUseId = 'fake-skill-' + name;
@@ -151,12 +151,18 @@ export class FakeAdapter implements RuntimeAdapter {
     if (spec.prompt.includes('SLOW')) {
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, 2000);
-        signal.addEventListener('abort', () => (clearTimeout(t), resolve()), { once: true });
+        const done = () => (clearTimeout(t), resolve());
+        signal.addEventListener('abort', done, { once: true });
+        control?.interrupted.addEventListener('abort', done, { once: true });
       });
     }
     if (signal.aborted) {
       sink.emit({ type: 'agent.cancelled', payload: {} });
       return { status: 'cancelled', usage: USAGE };
+    }
+    if (control?.interrupted.aborted) {
+      sink.emit({ type: 'agent.waiting_reply', payload: { reason: 'interrupted' } });
+      return suspendedResult();
     }
     if (spec.prompt.includes('FAIL')) {
       sink.emit({ type: 'agent.failed', payload: { error: 'fake failure' } });
