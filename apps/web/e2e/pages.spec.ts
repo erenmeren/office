@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/mission-control', '/sessions', '/conversations', '/agents', '/skills', '/memory', '/workers', '/audit', '/settings', '/tasks/new'];
+const STATIC = ['/', '/mission-control', '/sessions', '/office', '/conversations', '/agents', '/skills', '/memory', '/workers', '/audit', '/settings', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {

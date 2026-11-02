@@ -155,3 +155,12 @@
     background: rgb(255 255 255 / 0.36);
   }
 }
+
+/* Pixel Office floor: idle bob, typing dots, sleep, keyboard flicker, lamp glow, live pulse, faded subagent. */
+@keyframes om-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes om-dot { 0%, 80%, 100% { opacity: .2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+@keyframes om-zzz { 0% { opacity: 0; transform: translate(0, 0) scale(.6); } 30% { opacity: 1; } 100% { opacity: 0; transform: translate(12px, -20px) scale(1.15); } }
+@keyframes om-keys { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+@keyframes om-glow { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+@keyframes om-live { 0%, 100% { box-shadow: 0 0 0 0 rgb(61 245 200 / 0.7); } 70% { box-shadow: 0 0 0 6px rgb(61 245 200 / 0); } }
+@keyframes om-fade { 0%, 100% { opacity: .85; } 50% { opacity: .2; } }
