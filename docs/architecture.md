@@ -187,5 +187,5 @@ Built in Phase 6:
 Not built yet:
 
 - Phase 3 leftovers: a `MemoryRevision` table (a revision is a new `MemoryEntry` row that supersedes the old one), streaming delivery into a live session, semantic memory search, the memory purge.
-- Phase 4 leftovers: the greenfield path (a mission on a project without a repository), push and PR creation (an approval request only), worktree confinement for chat, inbox and non-mission task runs (they are gated by the approval policy but work in the project repository).
+- Phase 4 leftovers: push and PR creation (an approval request only), worktree confinement for chat, inbox and non-mission task runs (they are gated by the approval policy but work in the project repository).
 - Phase 6 leftovers: `ProjectMember`, the interactive PTY shell, session Pause, interrupt delivery, messages to a subagent, a project switcher, worktree confinement.
