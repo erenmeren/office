@@ -40,7 +40,8 @@ function NewProject() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await post<Project>('/projects', form);
+      // an empty repoPath asks the API to create a new repository (greenfield project)
+      await post<Project>('/projects', { ...form, repoPath: form.repoPath.trim() || undefined });
       setForm({ name: '', slug: '', repoPath: '' });
       await qc.invalidateQueries({ queryKey: ['projects'] });
     } catch (err) {
@@ -52,7 +53,13 @@ function NewProject() {
       {(['name', 'slug', 'repoPath'] as const).map((k) => (
         <div key={k} className="space-y-1">
           <Label htmlFor={`project-${k}`}>Project {k}</Label>
-          <Input id={`project-${k}`} required value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })} />
+          <Input
+            id={`project-${k}`}
+            required={k !== 'repoPath'}
+            placeholder={k === 'repoPath' ? 'empty: new repository' : undefined}
+            value={form[k]}
+            onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+          />
         </div>
       ))}
       <Button type="submit" variant="secondary">

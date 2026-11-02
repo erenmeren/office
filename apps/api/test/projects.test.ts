@@ -1,4 +1,6 @@
 import { rm, stat, readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentAllowed } from '../src/services/project-service.js';
 import { storeArtifact, readArtifact } from '../src/services/artifact-store.js';
@@ -46,6 +48,23 @@ describe('project settings, agents, audit, artifacts', () => {
     expect(s.checkCommand).toBe('x');
     const rows = (await call('GET', `/audit?targetType=project&targetId=${p}&limit=1`)).json();
     expect(rows[0].detail.keys).toEqual(['checkCommand']);
+  });
+
+  it('project without repoPath gets a fresh repository under <dataDir>/repos/<slug>', async () => {
+    const dir = resolve(t.config.dataDir, 'repos', 'fresh');
+    await rm(dir, { recursive: true, force: true });
+    try {
+      const res = await t.app.inject({ method: 'POST', url: '/projects', headers: { cookie }, payload: { name: 'F', slug: 'fresh' } });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().repoPath).toBe(dir);
+      const log = execFileSync('git', ['log', '--format=%s', 'main'], { cwd: dir, encoding: 'utf8' }).trim();
+      expect(log).toBe('Initial commit');
+      // the directory now exists: a second project must not reuse it
+      const again = await t.app.inject({ method: 'POST', url: '/projects', headers: { cookie }, payload: { name: 'F2', slug: 'fresh' } });
+      expect(again.statusCode).toBe(409);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('missing artifact file is 404 artifact_file_missing', async () => {

@@ -1,4 +1,8 @@
 import type { FastifyInstance } from 'fastify';
+import { execFile } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { z } from 'zod';
 import { ProjectSettingsSchema, type ProjectSettings } from '@office/shared';
 import type { Config } from '../config.js';
@@ -10,9 +14,23 @@ import { getSettings, projectAgents, setProjectAgents, updateSettings } from '..
 const CreateProject = z.object({
   name: z.string().min(1),
   slug: z.string().min(1),
-  repoPath: z.string().min(1),
+  // without repoPath a new repository is created under <OFFICE_DATA_DIR>/repos/<slug> (greenfield project)
+  repoPath: z.string().min(1).optional(),
   defaultBranch: z.string().min(1).optional(),
 });
+
+const run = promisify(execFile);
+
+/** `git init` plus one empty commit on `branch`, so the worker can create mission branches from it. */
+async function initRepository(path: string, branch: string): Promise<void> {
+  const { committerName, committerEmail } = ProjectSettingsSchema.parse({});
+  // mkdir without `recursive` refuses an existing directory: never init over somebody's files
+  await mkdir(join(path, '..'), { recursive: true });
+  await mkdir(path);
+  const git = (...args: string[]) => run('git', ['-c', `user.name=${committerName}`, '-c', `user.email=${committerEmail}`, ...args], { cwd: path });
+  await git('init', '-q', '-b', branch);
+  await git('commit', '-q', '--allow-empty', '-m', 'Initial commit');
+}
 
 export async function projectRoutes(app: FastifyInstance, opts: { config: Config }) {
   app.get('/settings/runtime', async () => ({ leaseSeconds: opts.config.leaseSeconds, heartbeatSeconds: opts.config.heartbeatSeconds }));
@@ -24,7 +42,16 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
     if (await app.prisma.project.findUnique({ where: { slug: data.slug } })) {
       throw new HttpError(409, 'conflict');
     }
-    return reply.code(201).send(await app.prisma.project.create({ data }));
+    let repoPath = data.repoPath;
+    if (!repoPath) {
+      // absolute: the worker's allowedRoots check and git itself must not depend on the API's cwd
+      repoPath = resolve(opts.config.dataDir, 'repos', data.slug);
+      await initRepository(repoPath, data.defaultBranch ?? 'main').catch((err: NodeJS.ErrnoException) => {
+        if (err.code === 'EEXIST') throw new HttpError(409, 'repo_exists');
+        throw err;
+      });
+    }
+    return reply.code(201).send(await app.prisma.project.create({ data: { ...data, repoPath } }));
   });
 
   app.get('/projects/:id', async (req) => {

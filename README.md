@@ -44,7 +44,7 @@ Copy the template and edit it:
 cp .env.example .env
 ```
 
-`.env` is git-ignored and must never be committed. Set at least `COOKIE_SECRET` to a random string of 32 characters or more, and `OFFICE_WORKSPACE_ROOTS` to the directory (or a colon-separated list of directories) under which the worker may run agents; the worker refuses to start if the list is empty or a directory does not exist. The other values match the Compose setup. The API listens on `127.0.0.1` only; set `API_HOST` (for example `0.0.0.0`) to expose it on other interfaces, which also exposes the unauthenticated first-run `/auth/setup`.
+`.env` is git-ignored and must never be committed. Set at least `COOKIE_SECRET` to a random string of 32 characters or more, and `OFFICE_WORKSPACE_ROOTS` to the directory (or a colon-separated list of directories) under which the worker may run agents; the worker refuses to start if the list is empty or a directory does not exist. Include `<OFFICE_DATA_DIR>/repos` when you create projects without a repository path: the API initializes their repositories there. The other values match the Compose setup. The API listens on `127.0.0.1` only; set `API_HOST` (for example `0.0.0.0`) to expose it on other interfaces, which also exposes the unauthenticated first-run `/auth/setup`.
 
 The API and the worker read their configuration from the process environment only; they do not load `.env` themselves. For the API and the web app, export `.env` into the shell before starting them by hand:
 
