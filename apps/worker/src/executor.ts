@@ -114,6 +114,7 @@ function realCwd(cwd: string): string | null {
 
 export class RunExecutor {
   private active = new Map<string, AbortController>();
+  private interrupts = new Map<string, AbortController>();
   private pendingTools = new Map<string, { runId: string; resolve: (r: ToolCallResult) => void; timer: NodeJS.Timeout }>();
   // the API's approval timeout answers first; the worker's own timer is a backstop for a lost answer
   private pendingApprovals = new Map<string, { runId: string; resolve: (d: ApprovalDecision) => void; timer: NodeJS.Timeout }>();
@@ -194,6 +195,11 @@ export class RunExecutor {
   }
 
   /** Aborts the run and settles its pending tool calls and approvals, so the adapter can wind down. */
+  /** Owner "interrupt and send": the adapter ends the turn with a `suspended` result; the API resumes it with the message. */
+  interrupt(runId: string): void {
+    this.interrupts.get(runId)?.abort();
+  }
+
   cancel(runId: string): void {
     this.active.get(runId)?.abort();
     for (const [callId, p] of [...this.pendingTools]) {
@@ -225,8 +231,12 @@ export class RunExecutor {
     }
     const controller = new AbortController();
     this.active.set(spec.runId, controller);
+    this.interrupts.set(spec.runId, new AbortController());
     this.send({ type: 'run.accepted', runId: spec.runId });
-    void this.execute(spec, controller.signal).finally(() => this.active.delete(spec.runId));
+    void this.execute(spec, controller.signal).finally(() => {
+      this.active.delete(spec.runId);
+      this.interrupts.delete(spec.runId);
+    });
   }
 
   private async execute(spec: RunSpec, signal: AbortSignal) {
@@ -288,7 +298,9 @@ export class RunExecutor {
         }
         // summary runs need no skills, so no run root is created for them
         const skillsDir = spec.kind === 'summary' ? undefined : await materializeSkills(this.runsDir, spec.runId, spec.skills);
-        result = await this.adapter.run({ ...spec, cwd, ...(skillsDir && { skillsDir }) }, { emit }, signal, tools);
+        const gitDir = worktree ? join(worktree.repo, '.git') : undefined;
+        const control = { interrupted: this.interrupts.get(spec.runId)!.signal };
+        result = await this.adapter.run({ ...spec, cwd, ...(skillsDir && { skillsDir }), ...(gitDir && { gitDir }) }, { emit }, signal, tools, control);
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         emit({ type: 'agent.failed', payload: { error } });

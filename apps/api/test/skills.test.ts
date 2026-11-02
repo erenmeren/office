@@ -115,6 +115,10 @@ describe('skills', () => {
     const { id } = (await req('POST', '/skills/import', { source: 'local', path: dir })).json();
     expect((await req('POST', `/skills/${id}/approve`)).json().status).toBe('approved');
     expect((await req('POST', `/skills/${id}/approve`)).statusCode).toBe(200);
+    expect((await req('POST', `/skills/${id}/disable`)).statusCode).toBe(200);
+    expect((await req('POST', `/skills/${id}/disable`)).statusCode).toBe(409);
+    expect((await req('GET', `/skills/${id}`)).json().status).toBe('disabled');
+    expect((await req('POST', `/skills/${id}/enable`)).json().status).toBe('approved');
     expect((await req('POST', `/skills/${id}/reject`)).json().status).toBe('rejected');
     const list = (await req('GET', '/skills')).json();
     expect(list.length).toBeGreaterThan(0);

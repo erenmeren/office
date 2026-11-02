@@ -13,7 +13,8 @@ const read = () => localStorage.getItem(KEY);
 
 /** Selects the project the UI shows; persisted in localStorage so a reload keeps it. */
 export function selectProject(id: string) {
-  localStorage.setItem(KEY, id);
+  if (id) localStorage.setItem(KEY, id);
+  else localStorage.removeItem(KEY);
   listeners.forEach((fn) => fn());
 }
 

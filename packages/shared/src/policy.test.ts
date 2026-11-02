@@ -31,6 +31,13 @@ describe('evaluateToolCall', () => {
     });
     expect(evaluateToolCall(policy, 'Bash', { command: 'git push --force' })).toMatchObject({ type: 'git_push' });
   });
+  it('catches git push behind global options or extra spaces, and spaced-out patterns', () => {
+    for (const command of ['git -C /w push', 'git  push', 'git --no-pager -c x=y push origin', 'cd x &&  git\tpush']) {
+      expect(evaluateToolCall(policy, 'Bash', { command })).toMatchObject({ type: 'git_push' });
+    }
+    expect(evaluateToolCall(policy, 'Bash', { command: 'git pushover' })).not.toMatchObject({ type: 'git_push' });
+    expect(evaluateToolCall(policy, 'Bash', { command: 'git  reset   --hard' })).toMatchObject({ type: 'destructive_command' });
+  });
   it('matches destructive patterns case-insensitively', () => {
     expect(evaluateToolCall(policy, 'Bash', { command: 'psql -c "drop table x"' })).toMatchObject({
       type: 'destructive_command',

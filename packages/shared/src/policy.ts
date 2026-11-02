@@ -51,6 +51,12 @@ const COMMIT_EQUIVALENT = new RegExp(
 
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Read', 'Grep']);
 
+// `git [-C dir | -c k=v | --no-pager ...] push`, whatever the spacing
+const GIT_PUSH = new RegExp(String.raw`\bgit${GIT_OPTIONS}\s+push(?![\w-])`, 'i');
+
+/** One space between words: `git  push` and `rm   -rf` match their patterns like the plain spelling. */
+export const normalizeCommand = (command: string) => command.replace(/\s+/g, ' ').trim();
+
 function decide(policy: ApprovalPolicy, type: ApprovalType, reason: string): PolicyVerdict {
   const mode = policy[type];
   return mode === 'auto' ? { verdict: 'allow' } : { verdict: mode, type, reason };
@@ -62,10 +68,10 @@ export function evaluateToolCall(
   input: Record<string, unknown>,
 ): PolicyVerdict {
   if (toolName === 'Bash') {
-    const command = typeof input.command === 'string' ? input.command : '';
+    const command = typeof input.command === 'string' ? normalizeCommand(input.command) : '';
     const lower = command.toLowerCase();
-    if (lower.includes('git push')) return decide(policy, 'git_push', `git push: ${command}`);
-    const hit = policy.destructivePatterns.find((p) => lower.includes(p.toLowerCase()));
+    if (GIT_PUSH.test(command)) return decide(policy, 'git_push', `git push: ${command}`);
+    const hit = policy.destructivePatterns.find((p) => lower.includes(normalizeCommand(p).toLowerCase()));
     if (hit) return decide(policy, 'destructive_command', `command matches "${hit}": ${command}`);
     const commit = policy.destructivePatterns.some((p) => p.toLowerCase() === 'git commit') && COMMIT_EQUIVALENT.exec(command);
     if (commit) return decide(policy, 'destructive_command', `git ${commit[1]} is commit-equivalent ("git commit"): ${command}`);

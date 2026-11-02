@@ -55,7 +55,8 @@ export function evidenceRule(e: Pick<Evidence, 'task' | 'runs' | 'artifacts' | '
     if (!committed.length) return { ok: false, reason: 'no succeeded run changed files' };
     // a failed check integrates nothing, so it is the reason to report first
     const check = ok.filter((r) => r.check).at(-1)?.check;
-    if (check?.status !== 'passed') return { ok: false, reason: `check ${check?.status ?? 'missing'} on the latest checked run` };
+    // skipped: the project has no checkCommand (a greenfield repository); the Chief judges from the diff
+    if (check?.status !== 'passed' && check?.status !== 'skipped') return { ok: false, reason: `check ${check?.status ?? 'missing'} on the latest checked run` };
     // the last committed run must be the integrated one; it supersedes earlier unintegrated attempts
     if (committed.at(-1)!.git!.integration !== 'fast_forwarded') return { ok: false, reason: 'commits not integrated' };
     return { ok: true };

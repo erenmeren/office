@@ -10,6 +10,7 @@ export interface Project {
   name: string;
   slug: string;
   repoPath: string;
+  defaultBranch: string;
 }
 export type SkillMode = 'eager' | 'on_demand';
 export interface SubagentDef {
@@ -154,7 +155,7 @@ export const useTask = (id: string) =>
     refetchInterval: (q) => (q.state.data && TERMINAL.includes(q.state.data.status) ? false : 3000),
   });
 
-export type SkillStatus = 'pending_review' | 'approved' | 'rejected';
+export type SkillStatus = 'pending_review' | 'approved' | 'rejected' | 'disabled';
 export interface SkillVersion {
   id: string;
   version: number;

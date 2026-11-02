@@ -132,6 +132,30 @@ describe('run lifecycle', () => {
     expect((await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).attempts).toBe(1);
   });
 
+  it('owner interrupt: message stored, worker told, the suspended run resumes with the owner message', async () => {
+    s = await setup();
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    await until(async () => (await s.run(spec.runId)).status === 'running', 'running');
+    const res = await s.req('POST', `/runs/${spec.runId}/interrupt`, { body: 'Stop: use Redis instead.' });
+    expect(res.statusCode).toBe(200);
+    expect((await w.waitFor('run.interrupt')).runId).toBe(spec.runId);
+    expect((await s.run(spec.runId)).waitingForMessageId).toBe(res.json().messageId);
+    const stored = await s.t.prisma.message.findUniqueOrThrow({ where: { id: res.json().messageId }, include: { conversation: true } });
+    expect(stored).toMatchObject({ type: 'message', body: 'Stop: use Redis instead.' });
+    expect(stored.conversation).toMatchObject({ kind: 'human', agentIds: [s.a] });
+    // a second interrupt while the first is in flight is still a running run: accepted too
+    s.result(w, spec, { status: 'suspended', sdkSessionId: 'sdk-1' });
+    await s.flush(w);
+    const resumed = await s.assign(w);
+    expect(resumed).toMatchObject({ runId: spec.runId, resumeSdkSessionId: 'sdk-1' });
+    expect(resumed.prompt).toBe('Message from the owner (your run was interrupted to deliver it):\nStop: use Redis instead.');
+    expect((await s.req('POST', `/runs/${spec.runId}/interrupt`, { body: 'again' })).statusCode).toBe(409);
+    expect((await s.req('GET', `/audit?targetType=run&targetId=${spec.runId}`)).json().map((r: { action: string }) => r.action)).toContain('run.interrupted');
+  });
+
   it('timeout resumes with the no-reply prompt', async () => {
     process.env.OFFICE_REPLY_TIMEOUT_MINUTES = '0';
     s = await setup();

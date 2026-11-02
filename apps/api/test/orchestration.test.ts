@@ -5,6 +5,7 @@ import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
 import { sendMessage } from '../src/services/message-service.js';
 import { expireLeases } from '../src/services/run-service.js';
 import { approveBudget } from '../src/services/budget-service.js';
+import { evidenceRule } from '../src/services/review-service.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const usage = { inputTokens: 10, outputTokens: 20, costUsd: 0.5, numTurns: 1, durationMs: 5 };
@@ -218,6 +219,19 @@ describe('orchestration', () => {
     expect(await s.task(k.a)).toMatchObject({ status: 'review', reviewNote: 'needs integration' });
   });
 
+  it('evidence rule: a skipped check (no checkCommand) is not a failure, a failed one is', async () => {
+    s = await setup();
+    const run = (status: string) => ({
+      status: 'succeeded',
+      git: { ...git(1), integration: 'fast_forwarded' },
+      check: { status, exitCode: null },
+    });
+    const task = { kind: 'code' };
+    const e = (status: string) => ({ task, runs: [run(status)], artifacts: [], memoryCount: 0 }) as unknown as Parameters<typeof evidenceRule>[0];
+    expect(evidenceRule(e('skipped')).ok).toBe(true);
+    expect(evidenceRule(e('failed'))).toEqual({ ok: false, reason: 'check failed on the latest checked run' });
+  });
+
   it('owner failed override: review -> failed with the note, audited, dependent blocked', async () => {
     s = await setup();
     const { w, k } = await s.approved();
@@ -292,8 +306,14 @@ describe('orchestration', () => {
     expect(approvals[0]!.status).toBe('pending');
     expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 1 });
 
+    // changing the daily budget in settings expires the pending approval; the next tick raises a fresh one
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 1 });
+    expect((await s.t.prisma.approval.findUniqueOrThrow({ where: { id: approvals[0]!.id } })).status).toBe('expired');
+    await s.t.app.scheduler.tick();
+    const fresh = await s.t.prisma.approval.findFirstOrThrow({ where: { missionId: m.id, type: 'budget_exceeded', status: 'pending' } });
+
     const user = await s.t.prisma.user.findFirstOrThrow();
-    await approveBudget(s.t.prisma, s.t.app.hub, approvals[0]!.id, user.id);
+    await approveBudget(s.t.prisma, s.t.app.hub, fresh.id, user.id);
     expect((await s.mission(m.id)).budgetUsd).toBeNull();
     expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 2 });
     await s.assign(w);
@@ -332,6 +352,10 @@ describe('orchestration', () => {
     expect(bad).toMatchObject({ ok: false, code: 'evidence_missing' });
     expect((await s.task(k.a)).status).toBe('review');
 
+    // a newer review run owns the mission: this run's decisions are stale
+    await s.t.prisma.mission.update({ where: { id: m.id }, data: { reviewRunId: 'newer' } });
+    expect(await s.tool(w, review, 'review_task', { taskId: k.c, decision: 'done', note: 'good' })).toMatchObject({ ok: false, code: 'not_allowed' });
+    await s.t.prisma.mission.update({ where: { id: m.id }, data: { reviewRunId: review.runId } });
     // the analysis stored its result as an artifact, so it may close; its dependent becomes ready
     expect(await s.tool(w, review, 'review_task', { taskId: k.c, decision: 'done', note: 'good' })).toMatchObject({ ok: true });
     expect(await s.statuses(m.id)).toMatchObject({ c: 'done', d: 'ready' });
@@ -503,6 +527,19 @@ describe('orchestration', () => {
     const line = info.mock.calls.find(([o]) => (o as { taskId?: string }).taskId === k.a);
     expect((line![0] as { reason: string }).reason).toBe('mission budget exhausted');
     expect(await s.t.prisma.approval.count({ where: { missionId: m.id } })).toBe(0);
+  });
+
+  it('a plan run waits for the daily budget like a task and raises the approval', async () => {
+    s = await setup();
+    const { w } = await s.approved(2); // its plan run cost 0.5
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 0.4 });
+    const res = await s.req('POST', '/missions', { projectId: s.projectId, request: 'Second mission' });
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect((await s.mission(res.json().id)).planRunId).toBeNull();
+    expect(w.received.filter((x) => x.type === 'run.assign')).toHaveLength(1);
+    const a = await s.t.prisma.approval.findFirstOrThrow({ where: { missionId: res.json().id, type: 'budget_exceeded' } });
+    expect(a.status).toBe('pending');
   });
 
   it('an approved legacy mission-cap approval does not raise the project daily budget', async () => {

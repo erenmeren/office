@@ -85,8 +85,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     host: e.API_HOST,
     cookieSecret: e.COOKIE_SECRET,
     webOrigin: e.WEB_ORIGIN,
-    dataDir: e.OFFICE_DATA_DIR,
-    artifactsDir: join(e.OFFICE_DATA_DIR, 'artifacts'),
+    // absolute: repository paths derived from it are stored and handed to workers
+    dataDir: resolve(e.OFFICE_DATA_DIR),
+    artifactsDir: resolve(e.OFFICE_DATA_DIR, 'artifacts'),
     leaseSeconds: e.OFFICE_LEASE_SECONDS,
     heartbeatSeconds: e.OFFICE_HEARTBEAT_SECONDS,
     schedulerIntervalMs: e.OFFICE_SCHEDULER_INTERVAL_MS,

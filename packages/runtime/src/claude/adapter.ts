@@ -1,8 +1,10 @@
 import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BUILTIN_TOOLS, MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
 import { gateToolCall } from '../gate.js';
 import { redactSecrets } from '../redact.js';
-import type { EventSink, RuntimeAdapter, ToolBridge } from '../types.js';
+import type { EventSink, RunControl, RuntimeAdapter, ToolBridge } from '../types.js';
 import { buildChildEnv } from './env.js';
 import { normalizeSdkMessage } from './normalize.js';
 
@@ -51,9 +53,13 @@ export function buildQueryOptions(
     return r;
   };
   const gate = (toolUseId: string | undefined, toolName: string, input: Record<string, unknown>) => {
-    if (!toolUseId) return decide(toolName, input);
-    let d = decisions.get(toolUseId);
-    if (!d) decisions.set(toolUseId, (d = decide(toolName, input, toolUseId)));
+    // without an id the hook and canUseTool are matched by content, for a few seconds: the owner is still asked once
+    const key = toolUseId ?? `${toolName}:${JSON.stringify(input)}`;
+    let d = decisions.get(key);
+    if (!d) {
+      decisions.set(key, (d = decide(toolName, input, toolUseId)));
+      if (!toolUseId) void d.finally(() => setTimeout(() => decisions.delete(key), 5000).unref());
+    }
     return d;
   };
   // PreToolUse runs before allow rules (allowedTools and project settings), so the gate always applies.
@@ -117,6 +123,7 @@ export function buildQueryOptions(
     settingSources: ['project'],
     resume: spec.resumeSdkSessionId,
     additionalDirectories: spec.skillsDir ? [spec.skillsDir] : undefined,
+    ...(spec.git && { sandbox: sandboxFor(spec) }),
     skills: spec.skills.length ? spec.skills.map((s) => s.name) : undefined,
     agents,
     env: buildChildEnv(process.env, spec),
@@ -134,10 +141,30 @@ export function buildQueryOptions(
   };
 }
 
+/**
+ * Bash confinement for a run in a worktree: the SDK sandbox (bubblewrap on Linux) lets commands write only to the
+ * worktree, the repository's git dir, the skills dir and the usual caches. Missing sandbox tooling degrades to
+ * unsandboxed commands rather than failing the run (`failIfUnavailable: false`); the file tools are gated separately.
+ */
+export function sandboxFor(spec: RunSpec) {
+  const home = homedir();
+  return {
+    enabled: true,
+    failIfUnavailable: false,
+    allowUnsandboxedCommands: false,
+    filesystem: {
+      allowWrite: [spec.gitDir, spec.skillsDir, tmpdir(), join(home, '.cache'), join(home, '.npm'), join(home, '.local', 'share', 'pnpm')].filter(
+        (p): p is string => !!p,
+      ),
+    },
+    network: { allowLocalBinding: true },
+  };
+}
+
 export class ClaudeAdapter implements RuntimeAdapter {
   readonly name = 'claude' as const;
 
-  async run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge): Promise<RunResult> {
+  async run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge, control?: RunControl): Promise<RunResult> {
     const abortController = new AbortController();
     const onAbort = () => abortController.abort();
     signal.addEventListener('abort', onAbort, { once: true });
@@ -153,6 +180,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
     let suspended = false;
     let initSessionId: string | undefined;
     const parents = new Map<string, string>();
+    // the owner's message is delivered by the API when it resumes the suspended run
+    const onInterrupt = () => {
+      suspended = true;
+      sink.emit({ type: 'agent.waiting_reply', payload: { reason: 'interrupted' } });
+      void q?.interrupt().catch(() => {});
+    };
+    control?.interrupted.addEventListener('abort', onInterrupt, { once: true });
     try {
       q = query({
         prompt: spec.prompt,
@@ -208,6 +242,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
       return { status: 'failed', error, usage: ZERO_USAGE };
     } finally {
       signal.removeEventListener('abort', onAbort);
+      control?.interrupted.removeEventListener('abort', onInterrupt);
     }
     if (result) return result;
     if (signal.aborted) return cancelled();

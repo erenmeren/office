@@ -67,6 +67,20 @@ describe('project settings, agents, audit, artifacts', () => {
     }
   });
 
+  it('project update and delete; delete refused while tasks exist', async () => {
+    const p = (await t.prisma.project.create({ data: { name: 'D', slug: 'd', repoPath: '/tmp/d' } })).id;
+    const up = await t.app.inject({ method: 'PUT', url: `/projects/${p}`, headers: { cookie }, payload: { name: 'D2', defaultBranch: 'dev' } });
+    expect(up.statusCode).toBe(200);
+    expect(up.json()).toMatchObject({ name: 'D2', defaultBranch: 'dev' });
+    await call('PUT', `/projects/${p}/agents`, { agentIds: [a1] });
+    const task = await t.prisma.task.create({ data: { projectId: p, agentId: a1, title: 't', description: '' } });
+    expect((await t.app.inject({ method: 'DELETE', url: `/projects/${p}`, headers: { cookie } })).statusCode).toBe(409);
+    await t.prisma.task.delete({ where: { id: task.id } });
+    expect((await t.app.inject({ method: 'DELETE', url: `/projects/${p}`, headers: { cookie } })).statusCode).toBe(204);
+    expect(await t.prisma.project.findUnique({ where: { id: p } })).toBeNull();
+    expect((await t.app.inject({ method: 'DELETE', url: `/projects/${p}`, headers: { cookie } })).statusCode).toBe(404);
+  });
+
   it('missing artifact file is 404 artifact_file_missing', async () => {
     const art = await storeArtifact(t.prisma, t.config, { projectId, kind: 'k', name: 'n', content: 'x' });
     await rm(art.path);

@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
-import { cancelRun } from '../services/run-service.js';
+import { cancelRun, interruptRun } from '../services/run-service.js';
 import { listEvents } from '../services/event-store.js';
 
-export async function runRoutes(app: FastifyInstance) {
+export async function runRoutes(app: FastifyInstance, opts: { config: Config }) {
   app.get('/runs/:id', async (req) => {
     const { id } = req.params as { id: string };
     const run = await app.prisma.taskRun.findUnique({ where: { id }, include: { session: true } });
@@ -22,6 +23,12 @@ export async function runRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const { task } = z.object({ task: z.enum(['true', 'false']).optional() }).parse(req.query);
     return cancelRun(app.prisma, app.hub, app.gateway, id, req.user!.id, task === 'true', req.log);
+  });
+
+  app.post('/runs/:id/interrupt', async (req) => {
+    const { id } = req.params as { id: string };
+    const { body } = z.object({ body: z.string().trim().min(1).max(20_000) }).parse(req.body);
+    return interruptRun(app.prisma, app.hub, opts.config, app.gateway, id, req.user!.id, body);
   });
 
   app.get('/runs/:id/events', async (req) => {

@@ -323,10 +323,13 @@ describe('missions', () => {
     const { m } = await s.planned();
     const ts = await s.tasks(m.id);
     await s.t.prisma.task.update({ where: { id: ts[3]!.id }, data: { status: 'done' } });
+    await s.t.prisma.task.update({ where: { id: ts[2]!.id }, data: { status: 'review' } });
     const res = await s.req('POST', `/missions/${m.id}/cancel`);
     expect(res.statusCode).toBe(200);
+    // a task in review is swept too
     expect((await s.tasks(m.id)).map((x) => x.status)).toEqual(['cancelled', 'cancelled', 'cancelled', 'done']);
     expect((await s.t.prisma.approval.findFirstOrThrow({ where: { missionId: m.id } })).status).toBe('expired');
+    expect((await s.req('PUT', `/missions/${m.id}`, { budgetUsd: 5 })).statusCode).toBe(409);
   });
 
   it('a mission cancelled before its plan result arrives gets no tasks and no approval', async () => {

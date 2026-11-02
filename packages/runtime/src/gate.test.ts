@@ -84,14 +84,48 @@ describe('gateToolCall', () => {
         message: 'Read-only run: writes are not permitted',
       });
     }
-    for (const command of ['rm -rf x', 'echo a > b', 'echo a >> b', 'echo a | tee b']) {
+    for (const command of [
+      'rm -rf x', 'echo a > b', 'echo a >> b', 'echo a | tee b', 'echo a >b', 'rm  -rf x', 'cp a b', 'cd /w && mkdir x',
+      'sed -i s/a/b/ f', 'eval "$cmd"', 'source ./x.sh', '. ./x.sh', 'pnpm add left-pad', 'npm i', 'curl -o f http://x',
+      'git diff --output=x', 'sh -c "printf x >f"', 'sudo touch f', 'ls | xargs rm',
+    ]) {
       expect(await gateToolCall(ro, collect().sink, b.tools, 'Bash', { command })).toEqual({
         allow: false,
         message: 'Read-only run: this command may write',
       });
     }
-    expect(await gateToolCall(ro, collect().sink, b.tools, 'Bash', { command: 'git log' })).toEqual({ allow: true });
+    for (const command of ['git log', 'ls -la', 'cat a.ts 2>&1', 'echo x >&2', 'grep -r "a->b" src', 'node -e "1>=0"', 'pnpm test', 'cat a | sort', 'curl http://x', 'sed -n 1,5p f', 'pnpm install-check']) {
+      expect(await gateToolCall(ro, collect().sink, b.tools, 'Bash', { command })).toEqual({ allow: true });
+    }
     expect(b.requests).toEqual([]);
+  });
+
+  it('a worktree run keeps the file tools inside the worktree and the skills dir', async () => {
+    const wt = { ...base, cwd: '/w/run', skillsDir: '/home/x/runs/r/.office', git: { repoPath: '/repo' } } as RunSpec;
+    const b = bridge('allow');
+    for (const [tool, input] of [
+      ['Read', { file_path: '/repo/.env.local' }],
+      ['Read', { file_path: '../other/a.ts' }],
+      ['Write', { file_path: '/tmp/x', content: '' }],
+      ['Grep', { pattern: 'x', path: '/etc' }],
+      ['Glob', { pattern: '**', path: '/w/runner' }],
+    ] as const) {
+      const r = await gateToolCall(wt, collect().sink, b.tools, tool, input as Record<string, unknown>);
+      expect(r.allow).toBe(false);
+      expect(!r.allow && r.message).toMatch(/outside the worktree/);
+    }
+    for (const [tool, input] of [
+      ['Read', { file_path: '/w/run/src/a.ts' }],
+      ['Read', { file_path: 'src/a.ts' }],
+      ['Edit', { file_path: './b.ts' }],
+      ['Grep', { pattern: 'x' }],
+      ['Read', { file_path: '/home/x/runs/r/.office/skills/s/SKILL.md' }],
+      ['Bash', { command: 'cat /etc/hostname' }],
+    ] as const) {
+      expect(await gateToolCall(wt, collect().sink, b.tools, tool, input as Record<string, unknown>)).toEqual({ allow: true });
+    }
+    // no worktree: no confinement
+    expect(await gateToolCall(base, collect().sink, b.tools, 'Read', { file_path: '/etc/hostname' })).toEqual({ allow: true });
   });
 
   it('read-only runs allow only the read-only git list', async () => {

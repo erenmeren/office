@@ -136,7 +136,7 @@ Phase 6 (observability and hardening):
 - `TaskRun.maxBudgetUsd` is stored at creation (migration `phase6_run_budget`); `SessionEvent (ts, id)` index.
 - Task 10b: `TaskRun.usageRecordedAt` (migration `phase6_usage_recorded`) records an owner-cancelled run's usage exactly once from the worker's `cancelled` result. The worker buffers `run.event`s until `welcome` (5000 per run, in memory only), re-sends the last 50 sent events per live run, flushes events before results, and re-sends an unacked result on a heartbeat after 30 s. The Dashboard activity remounts per project (`key={projectId}`).
 - `requiredWorkerTags` and machine identity unchanged from Phase 5, plus the `OFFICE_MACHINE_ID` override on both sides. `OFFICE_GIT_TIMEOUT_SECONDS` defaults to 600 (504 only before http-backend sends headers; a push is exempt from the timeout). `Git-Protocol` is forwarded (v2). A corrupt outbox file is renamed `.corrupt`. `failWaitingRun` writes a session event. `retriedByRunId` counts only `task` runs.
-- Not built (the owner may request them): interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages are delivered at the next run boundary; the UI says so), messages addressed to a subagent (reached through the parent). Project switcher: built 2026-11-02, header `Select` with the choice in `localStorage` (`office.projectId`), fallback to the first project; its last item opens the new-project form, which also creates greenfield repositories.
+- Not built (the owner may request them): interactive PTY shell, `ProjectMember`, session Pause, messages addressed to a subagent (reached through the parent). "Interrupt and send" built 2026-11-02 (see Post-Phase 6). Project switcher: built 2026-11-02, header `Select` with the choice in `localStorage` (`office.projectId`), fallback to the first project; its last item opens the new-project form, which also creates greenfield repositories.
 
 ## Phase 6 evidence
 
@@ -796,3 +796,14 @@ run.status.changed succeeded
 File on disk: `/home/meren/projects/office-workspaces/office-sandbox/hello.txt`, 24 bytes, `Hello from Agent Office` plus a newline, sha256 `ec3c94d325c2638a2448fb45ceb38bab0083cf8399ebc8ca6aaccfb3e7762ad2`.
 
 Replay after restart: the API was killed (health check failed) and restarted at 2026-10-31T16:12:11Z; re-subscribing to `run:0d4988f2-13bf-47cd-a131-883a73061bb4` with `afterSeq: 0` replayed seqs 1 to 9 with the same event types from the database, then `replay.done` with `lastSeq` 9. `GET /tasks/dc7e7d65-76af-42c9-88d6-be9703002aa8` returned `done` with the succeeded run and its cost; the web task page returned HTTP 200.
+
+## Post-Phase 6 hardening (2026-11-02)
+
+Owner request: "finish everything that is missing". Done, each on `main`:
+- Greenfield projects (`POST /projects` without `repoPath`), `PUT`/`DELETE /projects/:id`, project switcher in the header with a new-project dialog, project card in Settings.
+- Worktree confinement: file tools gated to the worktree and skills dir; Bash in the SDK sandbox (bubblewrap, `failIfUnavailable: false`, writes limited to the worktree, `spec.gitDir`, skills dir, temp dir and package caches). Chat, inbox and non-mission task runs are still unconfined (no worktree).
+- Approval detection: `git push` after global options and with any whitespace; destructive patterns matched on the whitespace-normalized command; the read-only Bash heuristic denies file writers, inline interpreters (`eval`, `source`, `.`), package installs, any redirection and `git --output`.
+- "Interrupt and send": `POST /runs/:id/interrupt`, `run.interrupt` worker message, adapter `suspended` result, scheduler resume with the owner's message; session page button.
+- Skill on/off (`disabled` status, not materialized), stale review decisions refused, plan and review runs under the budgets, one gate decision without `toolUseId`, pending daily-budget approvals expire on a settings change, `review → cancelled` on mission cancel, finished missions refuse `PUT`, a skipped check satisfies the code evidence rule (greenfield), `OFFICE_DATA_DIR` absolute, redaction before capping, half-made worktrees removed.
+
+Still not built (reasons): interactive PTY shell (new native dependency and a remote shell on the worker host; ask for it explicitly), `ProjectMember` (contradicts the single-owner decision), session Pause (the SDK has interrupt, not pause; "Interrupt and send" covers the use), messages to a subagent (reached through the parent), semantic memory search (needs an embedding provider and key), Claude Code plugins (request not clarified), the check grandchild that leaves its process group, the 7-day worktree sweep versus a run suspended longer than `replyTimeoutMinutes` (cannot happen with the default 60 minutes).

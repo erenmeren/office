@@ -9,6 +9,7 @@ import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { dailyLimit, spentToday } from '../services/budget-service.js';
+import { expireDailyBudgetApprovals } from '../services/budget-service.js';
 import { getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
 
 const CreateProject = z.object({
@@ -61,6 +62,29 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
     return project;
   });
 
+  app.put('/projects/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const data = z.object({ name: z.string().min(1).optional(), defaultBranch: z.string().min(1).optional() }).parse(req.body);
+    if (!(await app.prisma.project.findUnique({ where: { id } }))) throw new HttpError(404, 'not_found');
+    const project = await app.prisma.project.update({ where: { id }, data });
+    await audit(app.prisma, { userId: req.user!.id, action: 'project.updated', targetType: 'project', targetId: id, detail: data });
+    return project;
+  });
+
+  // refused while the project has any task, mission or run: their records would lose their project
+  app.delete('/projects/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const project = await app.prisma.project.findUnique({ where: { id }, include: { _count: { select: { tasks: true, missions: true, runs: true } } } });
+    if (!project) throw new HttpError(404, 'not_found');
+    if (project._count.tasks || project._count.missions || project._count.runs) throw new HttpError(409, 'project_in_use');
+    await app.prisma.$transaction([
+      app.prisma.projectAgent.deleteMany({ where: { projectId: id } }),
+      app.prisma.project.delete({ where: { id } }),
+    ]);
+    await audit(app.prisma, { userId: req.user!.id, action: 'project.deleted', targetType: 'project', targetId: id, detail: { slug: project.slug } });
+    return reply.code(204).send();
+  });
+
   app.get('/projects/:id/settings', async (req) => getSettings(app.prisma, (req.params as { id: string }).id));
 
   app.put('/projects/:id/settings', async (req) => {
@@ -69,6 +93,8 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
     const parsed = ProjectSettingsSchema.partial().parse(req.body) as Record<string, unknown>;
     const patch = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in (req.body as object)));
     const settings = await updateSettings(app.prisma, id, patch as Partial<ProjectSettings>);
+    // a raised daily budget answers the pending daily-budget approvals: the scheduler re-checks the limit on its own
+    if ('dailyBudgetUsd' in patch) await expireDailyBudgetApprovals(app.prisma, app.hub, id);
     await audit(app.prisma, { userId: req.user!.id, action: 'settings.updated', targetType: 'project', targetId: id, detail: { keys: Object.keys(patch) } });
     return settings;
   });

@@ -79,7 +79,17 @@ export default function SkillPage() {
           >
             Delete
           </Button>
-          {s.status !== 'approved' && (
+          {s.status === 'approved' && (
+            <Button size="sm" variant="outline" onClick={() => act(() => post(`/skills/${id}/disable`))}>
+              Turn off
+            </Button>
+          )}
+          {s.status === 'disabled' && (
+            <Button size="sm" onClick={() => act(() => post(`/skills/${id}/enable`))}>
+              Turn on
+            </Button>
+          )}
+          {s.status !== 'approved' && s.status !== 'disabled' && (
             <Button size="sm" onClick={() => act(() => post(`/skills/${id}/approve`))}>
               Approve
             </Button>

@@ -98,7 +98,7 @@ export async function buildApp(
   await app.register(memoryRoutes);
   await app.register(auditRoutes);
   await app.register(artifactRoutes, { config });
-  await app.register(runRoutes);
+  await app.register(runRoutes, { config });
   await app.register(workerRoutes);
   await app.register(gitRoutes, { config });
   await app.register(observabilityRoutes);

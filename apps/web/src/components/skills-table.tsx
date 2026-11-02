@@ -14,7 +14,7 @@ import { del, post } from '@/lib/api';
 import { useAgents, useSkills, type Skill } from '@/lib/queries';
 import { skillErrorText, skillSourceLabel } from '@/lib/skills';
 
-const STATUS_TONE = { approved: 'done', pending_review: 'decision', rejected: 'failed' } as const;
+const STATUS_TONE = { approved: 'done', pending_review: 'decision', rejected: 'failed', disabled: 'idle' } as const;
 
 /** The Library card of the Skill Library artboard: filter, table, per-row Update and Delete. */
 export function SkillsTable() {
