@@ -73,9 +73,15 @@ export async function createWorktree(
 ): Promise<{ path: string; baseCommit: string }> {
   await mkdir(worktreesDir, { recursive: true });
   const path = join(worktreesDir, runId);
-  await git(repoPath, 'worktree', 'add', '-q', '--detach', path, missionBranch);
-  await git(path, 'checkout', '-q', '-B', runBranch);
-  return { path, baseCommit: await git(path, 'rev-parse', 'HEAD') };
+  try {
+    await git(repoPath, 'worktree', 'add', '-q', '--detach', path, missionBranch);
+    await git(path, 'checkout', '-q', '-B', runBranch);
+    return { path, baseCommit: await git(path, 'rev-parse', 'HEAD') };
+  } catch (err) {
+    // a half-made worktree would block the retry of this run id
+    await removeWorktree(repoPath, path);
+    throw err;
+  }
 }
 
 /** Adds `line` to the worktree's info/exclude unless present. */

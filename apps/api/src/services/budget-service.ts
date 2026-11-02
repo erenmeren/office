@@ -94,6 +94,21 @@ export async function requestBudgetApproval(prisma: PrismaClient, hub: EventHub,
   hub.publishAll(outbox);
 }
 
+/** Expires the project's pending daily-budget approvals (after the owner changed `dailyBudgetUsd` in settings). */
+export async function expireDailyBudgetApprovals(prisma: PrismaClient, hub: EventHub, projectId: string) {
+  const outbox: Outbox = [];
+  await prisma.$transaction(async (tx) => {
+    const pending = await tx.approval.findMany({
+      where: { projectId, type: 'budget_exceeded', status: 'pending', reason: { startsWith: DAILY_BUDGET_SPENT } },
+    });
+    for (const a of pending) {
+      queueApproval(outbox, await tx.approval.update({ where: { id: a.id }, data: { status: 'expired', decidedAt: new Date(), message: 'Daily budget changed in settings.' } }));
+      await audit(tx, { action: 'approval.expired', targetType: 'approval', targetId: a.id, detail: { reason: 'daily budget changed' } });
+    }
+  });
+  hub.publishAll(outbox);
+}
+
 /** Approves a pending budget_exceeded approval; dailyLimit counts it, raising today's project budget. */
 export async function approveBudget(prisma: PrismaClient, hub: EventHub, approvalId: string, userId: string) {
   const outbox: Outbox = [];

@@ -45,7 +45,8 @@ export function runCheck(cwd: string, command: string, timeoutSeconds: number, e
         status: timedOut ? 'timeout' : exitCode === 0 ? 'passed' : 'failed',
         exitCode: timedOut ? null : exitCode,
         durationMs: Date.now() - started,
-        output: redactSecrets(cap(out)),
+        // redact before capping: a secret cut by the cap would leave a fragment
+        output: cap(redactSecrets(out)),
       });
     };
     child.on('error', (err) => {

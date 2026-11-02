@@ -9,6 +9,7 @@ import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { dailyLimit, spentToday } from '../services/budget-service.js';
+import { expireDailyBudgetApprovals } from '../services/budget-service.js';
 import { getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
 
 const CreateProject = z.object({
@@ -69,6 +70,8 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
     const parsed = ProjectSettingsSchema.partial().parse(req.body) as Record<string, unknown>;
     const patch = Object.fromEntries(Object.entries(parsed).filter(([k]) => k in (req.body as object)));
     const settings = await updateSettings(app.prisma, id, patch as Partial<ProjectSettings>);
+    // a raised daily budget answers the pending daily-budget approvals: the scheduler re-checks the limit on its own
+    if ('dailyBudgetUsd' in patch) await expireDailyBudgetApprovals(app.prisma, app.hub, id);
     await audit(app.prisma, { userId: req.user!.id, action: 'settings.updated', targetType: 'project', targetId: id, detail: { keys: Object.keys(patch) } });
     return settings;
   });

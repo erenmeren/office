@@ -82,6 +82,7 @@ export async function missionRoutes(app: FastifyInstance) {
     const { budgetUsd } = z.object({ budgetUsd: z.number().positive().nullable() }).parse(req.body);
     const before = await app.prisma.mission.findUnique({ where: { id } });
     if (!before) throw new HttpError(404, 'not_found');
+    if (['done', 'failed', 'cancelled'].includes(before.status)) throw new HttpError(409, 'mission_finished');
     const mission = await app.prisma.mission.update({ where: { id }, data: { budgetUsd } });
     await audit(app.prisma, {
       userId: req.user!.id,

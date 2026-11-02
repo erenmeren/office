@@ -292,8 +292,14 @@ describe('orchestration', () => {
     expect(approvals[0]!.status).toBe('pending');
     expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 1 });
 
+    // changing the daily budget in settings expires the pending approval; the next tick raises a fresh one
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 1 });
+    expect((await s.t.prisma.approval.findUniqueOrThrow({ where: { id: approvals[0]!.id } })).status).toBe('expired');
+    await s.t.app.scheduler.tick();
+    const fresh = await s.t.prisma.approval.findFirstOrThrow({ where: { missionId: m.id, type: 'budget_exceeded', status: 'pending' } });
+
     const user = await s.t.prisma.user.findFirstOrThrow();
-    await approveBudget(s.t.prisma, s.t.app.hub, approvals[0]!.id, user.id);
+    await approveBudget(s.t.prisma, s.t.app.hub, fresh.id, user.id);
     expect((await s.mission(m.id)).budgetUsd).toBeNull();
     expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 2 });
     await s.assign(w);

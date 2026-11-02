@@ -7,7 +7,7 @@ export const TASK_TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   running: ['waiting_reply', 'waiting_approval', 'review', 'failed', 'cancelled', 'ready'],
   waiting_reply: ['running', 'failed', 'cancelled'],
   waiting_approval: ['running', 'failed', 'cancelled'],
-  review: ['done', 'running', 'failed', 'ready'], // ready: reopened by the Chief or the owner
+  review: ['done', 'running', 'failed', 'ready', 'cancelled'], // ready: reopened by the Chief or the owner; cancelled: mission cancel
   blocked: ['ready', 'cancelled'],
   done: [],
   failed: ['ready'], // explicit owner retry
