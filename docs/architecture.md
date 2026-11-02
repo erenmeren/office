@@ -187,5 +187,5 @@ Built in Phase 6:
 Not built yet:
 
 - Phase 3 leftovers: a `MemoryRevision` table (a revision is a new `MemoryEntry` row that supersedes the old one), streaming delivery into a live session, semantic memory search, the memory purge.
-- Phase 4 leftovers: push and PR creation (an approval request only), worktree confinement for chat, inbox and non-mission task runs (they are gated by the approval policy but work in the project repository).
-- Phase 6 leftovers: `ProjectMember`, the interactive PTY shell, session Pause, interrupt delivery, messages to a subagent, worktree confinement.
+- Phase 4 leftovers: push and PR creation (an approval request only). Worktree confinement was added on 2026-11-02 for every run with a worktree (file tools gated to the worktree and skills dir, Bash in the SDK sandbox); chat, inbox and non-mission task runs still work in the project repository, gated by the approval policy only.
+- Phase 6 leftovers: `ProjectMember`, the interactive PTY shell, session Pause, messages to a subagent. "Interrupt and send" (`POST /runs/:id/interrupt`, `run.interrupt`) was added on 2026-11-02.
