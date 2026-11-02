@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
+import { Bot, Building2, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { StatusDot } from '@/components/ui/status-pill';
@@ -13,6 +13,7 @@ export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/mission-control', label: 'Mission Control', icon: Target },
   { href: '/sessions', label: 'Live Sessions', icon: Radio },
+  { href: '/office', label: 'Office', icon: Building2 },
   { href: '/conversations', label: 'Conversations', icon: MessagesSquare },
   { href: '/agents', label: 'Agent Studio', icon: Bot },
   { href: '/skills', label: 'Skill Library', icon: Sparkles },

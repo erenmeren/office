@@ -11,7 +11,7 @@ import { approvalSentence, approvalTypeLabel } from '@/lib/missions';
 import type { ApprovalView } from '@/lib/queries';
 
 /** What the agent asked to do: the Bash command, the file path, or the gate's reason. */
-function subject(a: ApprovalView): string {
+export function approvalSubject(a: ApprovalView): string {
   const input = (a.input ?? {}) as { command?: unknown; file_path?: unknown };
   if (typeof input.command === 'string') return input.command;
   if (typeof input.file_path === 'string') return input.file_path;
@@ -49,7 +49,7 @@ export function ApprovalCard({ approval, agentName, title = 'Approval required' 
       </CardHeader>
       <CardContent className="space-y-3">
         <pre className="overflow-x-auto rounded-[10px] border border-white/13 bg-[rgb(7_5_24/0.55)] px-3.5 py-2.5 font-mono text-[13px] whitespace-pre-wrap break-all text-ink">
-          {subject(approval)}
+          {approvalSubject(approval)}
         </pre>
         <div className="flex flex-wrap gap-2">
           <Button disabled={busy} onClick={() => decide('approve', { scope: 'once' })}>
