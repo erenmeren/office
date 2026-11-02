@@ -11,14 +11,15 @@ import { Card, CardContent } from '@/components/ui/card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { useMounted } from '@/lib/use-mounted';
 import { uiSocket } from '@/lib/ws';
-import { useAgents, useConversation, useConversations, useProjects } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useAgents, useConversation, useConversations } from '@/lib/queries';
 
 function ConversationsView() {
   const mounted = useMounted();
   const qc = useQueryClient();
   const router = useRouter();
   const params = useSearchParams();
-  const project = useProjects().data?.[0];
+  const project = useProject();
   const agents = useAgents().data ?? [];
   const [filter, setFilter] = useState<Filter>('all');
   const [panel, setPanel] = useState<'human' | 'group'>();

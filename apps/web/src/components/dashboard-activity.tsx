@@ -4,14 +4,15 @@ import { useEffect, useState } from 'react';
 import { ActivityRow } from '@/components/ui/activity-row';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { activityFromEvent, mergeActivity } from '@/lib/dashboard';
-import { useActivity, useAgents, useProjects, type ActivityItem } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useActivity, useAgents, type ActivityItem } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
 
 const LIMIT = 50;
 
 /** Stored events of the project, newest first, with live events prepended as they arrive. */
 export function DashboardActivity() {
-  const projectId = useProjects().data?.[0]?.id;
+  const projectId = useProject()?.id;
   // remounted per project so the live rows of the previous one are dropped
   return <ProjectActivity key={projectId} projectId={projectId} />;
 }

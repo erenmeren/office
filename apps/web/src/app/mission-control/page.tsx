@@ -10,15 +10,15 @@ import { Field } from '@/components/ui/field';
 import { NativeSelect } from '@/components/ui/native-select';
 import { PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { statusLabel } from '@/lib/status';
-import { useAgents, useApprovals, useMission, useMissions, useProjects, useTasks } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useAgents, useApprovals, useMission, useMissions, useTasks } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
 
 export default function MissionControlPage() {
   const qc = useQueryClient();
-  const projects = useProjects();
   const agents = useAgents();
   const tasks = useTasks(5000);
-  const project = projects.data?.[0];
+  const project = useProject();
   const missions = useMissions(project?.id);
   const approvals = useApprovals(project?.id, 'pending');
   const [pickedMission, setPickedMission] = useState<string>();

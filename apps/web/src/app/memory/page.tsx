@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { matchesType, type TypeFilter } from '@/lib/memory';
-import { useAgents, useMemory, useMemoryCounts, useProjects, type MemoryEntry } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useAgents, useMemory, useMemoryCounts, type MemoryEntry } from '@/lib/queries';
 import { useMounted } from '@/lib/use-mounted';
 import { uiSocket } from '@/lib/ws';
 
@@ -19,7 +20,7 @@ function MemoryView() {
   const qc = useQueryClient();
   const router = useRouter();
   const params = useSearchParams();
-  const project = useProjects().data?.[0];
+  const project = useProject();
   const agents = useAgents().data ?? [];
   const [q, setQ] = useState('');
   const [type, setType] = useState<TypeFilter>('all');

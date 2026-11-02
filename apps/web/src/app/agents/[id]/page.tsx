@@ -10,13 +10,14 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { api } from '@/lib/api';
-import { useAgent, useLiveSessions, useProjects } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useAgent, useLiveSessions } from '@/lib/queries';
 
 export default function AgentPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
   const agent = useAgent(id);
-  const project = useProjects().data?.[0];
+  const project = useProject();
   const liveRun = useLiveSessions(project?.id).data?.find((s) => s.agentId === id);
   const [open, setOpen] = useState<string | null>(null);
 

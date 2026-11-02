@@ -69,7 +69,8 @@ A control plane that turns Claude Code sessions into a persistent AI software te
 - Phase 6: `TaskRun.maxBudgetUsd` is stored at creation; `SessionEvent (ts, id)` is indexed; `TaskRun.usageRecordedAt` makes an owner-cancelled run's usage count exactly once.
 - Phase 6: the Dashboard activity remounts per project (`key={projectId}`) instead of resetting live rows in an effect; `/activity` rows are keyed `sessionId:seq`.
 - Phase 6: `OFFICE_MACHINE_ID` overrides `/etc/machine-id` on the API and the worker; `OFFICE_GIT_TIMEOUT_SECONDS` defaults to 600; `Git-Protocol` is forwarded (v2).
-- Phase 6: not built, the owner may request them: interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages are delivered at the next run boundary), messages addressed to a subagent, a project switcher.
+- Phase 6: not built, the owner may request them: interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages are delivered at the next run boundary), messages addressed to a subagent.
+- Project switcher (2026-11-02): the header `Select` picks the project every screen shows; the choice is kept in `localStorage` (`office.projectId`, `apps/web/src/lib/project.ts`, `useProject()`), falling back to the first project. Its last item opens the new-project form (`repoPath` optional, see greenfield).
 
 ## Commands
 

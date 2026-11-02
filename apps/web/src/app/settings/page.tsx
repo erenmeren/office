@@ -2,12 +2,13 @@
 
 import { Suspense } from 'react';
 import { SettingsForm } from '@/components/settings-form';
-import { useProjectAgents, useProjectSettings, useProjects } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useProjectAgents, useProjectSettings } from '@/lib/queries';
 import { useMounted } from '@/lib/use-mounted';
 
 function SettingsView() {
   const mounted = useMounted();
-  const project = useProjects().data?.[0];
+  const project = useProject();
   const settings = useProjectSettings(project?.id).data;
   const agents = useProjectAgents(project?.id).data;
   if (!mounted || !project || !settings || !agents) return null;

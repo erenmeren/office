@@ -115,7 +115,7 @@ Phase 6 (observability and hardening):
 - Audit: (closed in Task 10b: `GET /audit` orders by `createdAt desc, id desc` and pages with `before` + `beforeId`; `before` alone still works) action options accumulate through a render-time `setState`; the target-type input is not throttled.
 - The git timeout answers 504 only before http-backend sends headers (a stalled fetch is truncated); a push (`git-receive-pack`) is exempt from the timeout since Task 10b (a kill during its ref update could leave a stale ref lock), so a stalled push holds its child until the client disconnects; the API does not trim `OFFICE_MACHINE_ID` while the worker does; the timeout test is wall-clock and Linux-only.
 - Closed in Task 10b: web lint error in `dashboard-activity.tsx` (`setState` inside an effect); the component remounts per project with `key={projectId}`.
-- Not built (the owner may request them): interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send", messages addressed to a subagent, project switcher. Worktree confinement (Phase 4 Outstanding) is not built either.
+- Not built (the owner may request them): interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send", messages addressed to a subagent. Project switcher built 2026-11-02 (see Post-Phase 6 below). Worktree confinement (Phase 4 Outstanding) is not built either.
 - Acceptance data note: three `throwaway-6` worker rows exist, all `revoked`: `22a41a24` (enrolled, then revoked) and `73fb16e6`, `301e5eb4` (created while the implementer's start command failed; their enroll tokens were never used, revoked unused).
 
 ## Owner follow-ups after Phase 6 (2026-11-01)
@@ -136,7 +136,7 @@ Phase 6 (observability and hardening):
 - `TaskRun.maxBudgetUsd` is stored at creation (migration `phase6_run_budget`); `SessionEvent (ts, id)` index.
 - Task 10b: `TaskRun.usageRecordedAt` (migration `phase6_usage_recorded`) records an owner-cancelled run's usage exactly once from the worker's `cancelled` result. The worker buffers `run.event`s until `welcome` (5000 per run, in memory only), re-sends the last 50 sent events per live run, flushes events before results, and re-sends an unacked result on a heartbeat after 30 s. The Dashboard activity remounts per project (`key={projectId}`).
 - `requiredWorkerTags` and machine identity unchanged from Phase 5, plus the `OFFICE_MACHINE_ID` override on both sides. `OFFICE_GIT_TIMEOUT_SECONDS` defaults to 600 (504 only before http-backend sends headers; a push is exempt from the timeout). `Git-Protocol` is forwarded (v2). A corrupt outbox file is renamed `.corrupt`. `failWaitingRun` writes a session event. `retriedByRunId` counts only `task` runs.
-- Not built (the owner may request them): interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages are delivered at the next run boundary; the UI says so), messages addressed to a subagent (reached through the parent), project switcher (the screens use the first project).
+- Not built (the owner may request them): interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages are delivered at the next run boundary; the UI says so), messages addressed to a subagent (reached through the parent). Project switcher: built 2026-11-02, header `Select` with the choice in `localStorage` (`office.projectId`), fallback to the first project; its last item opens the new-project form, which also creates greenfield repositories.
 
 ## Phase 6 evidence
 
