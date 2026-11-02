@@ -2,11 +2,12 @@
 
 import { KpiCard, KpiRow } from '@/components/ui/kpi-card';
 import { usd } from '@/lib/dashboard';
+import { useProject } from '@/lib/project';
 import { useOverview, useProjects } from '@/lib/queries';
 
 export function DashboardKpis() {
   const projects = useProjects().data ?? [];
-  const o = useOverview(projects[0]?.id).data;
+  const o = useOverview(useProject()?.id).data;
   const busy = o ? o.agentsTotal - o.agentsAvailable : 0;
   const pct = o?.dailyBudgetUsd ? Math.round((o.costTodayUsd / o.dailyBudgetUsd) * 100) : 0;
   return (

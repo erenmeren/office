@@ -5,11 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { usd } from '@/lib/dashboard';
-import { useAgents, useOverview, useProjects } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useAgents, useOverview } from '@/lib/queries';
 
 /** Who is doing what right now, with today's spend per agent. */
 export function DashboardTeam() {
-  const o = useOverview(useProjects().data?.[0]?.id).data;
+  const o = useOverview(useProject()?.id).data;
   const agents = useAgents().data;
   return (
     <Card>

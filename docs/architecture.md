@@ -124,7 +124,7 @@ Read models (`services/observability-service.ts`, `routes/observability.ts`) bui
 - **Hardening.** `OFFICE_MACHINE_ID` overrides `/etc/machine-id` on both sides; the git endpoint kills `git http-backend` after `OFFICE_GIT_TIMEOUT_SECONDS` (600) and forwards `Git-Protocol` (v2); `TaskRun.maxBudgetUsd` is stored at creation; a waiting run that fails at resume writes a session event.
 - **Web.** Dashboard `apps/web/src/app/page.tsx` (`components/dashboard-*.tsx`), Live Sessions `apps/web/src/app/sessions` (`session-list.tsx`, `session-detail.tsx`), Agent Inspector `apps/web/src/app/sessions/[runId]` (`inspector-*.tsx`), Audit `apps/web/src/app/audit` (`audit-table.tsx`).
 
-Not built in Phase 6 (the owner may request them): the interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages reach an agent at its next run boundary), messages addressed to a subagent, and a project switcher (the screens show the first project).
+Not built in Phase 6 (the owner may request them): the interactive PTY shell, `ProjectMember`, session Pause, "Interrupt and send" (messages reach an agent at its next run boundary), and messages addressed to a subagent. The project switcher was added on 2026-11-02: the header's `Select` (`apps/web/src/components/app-shell.tsx`) sets the project in `localStorage`, `useProject()` in `apps/web/src/lib/project.ts` reads it with a fallback to the first project, and every screen uses it; its last item opens `NewProjectForm`.
 
 ## Where each spec entity lives today
 
@@ -188,4 +188,4 @@ Not built yet:
 
 - Phase 3 leftovers: a `MemoryRevision` table (a revision is a new `MemoryEntry` row that supersedes the old one), streaming delivery into a live session, semantic memory search, the memory purge.
 - Phase 4 leftovers: push and PR creation (an approval request only), worktree confinement for chat, inbox and non-mission task runs (they are gated by the approval policy but work in the project repository).
-- Phase 6 leftovers: `ProjectMember`, the interactive PTY shell, session Pause, interrupt delivery, messages to a subagent, a project switcher, worktree confinement.
+- Phase 6 leftovers: `ProjectMember`, the interactive PTY shell, session Pause, interrupt delivery, messages to a subagent, worktree confinement.

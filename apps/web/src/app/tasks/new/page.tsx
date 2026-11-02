@@ -2,7 +2,6 @@
 
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -10,7 +9,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { post } from '@/lib/api';
-import { useAgents, useProjects, type Project, type Task } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useAgents, useProjects, type Task } from '@/lib/queries';
 
 function Pick(props: { label: string; value: string; onChange: (v: string) => void; items: { value: string; label: string }[] }) {
   return (
@@ -32,49 +32,13 @@ function Pick(props: { label: string; value: string; onChange: (v: string) => vo
   );
 }
 
-// no project page in phase 1: a project must exist before a task can be created
-function NewProject() {
-  const qc = useQueryClient();
-  const [form, setForm] = useState({ name: '', slug: '', repoPath: '' });
-  const [error, setError] = useState('');
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    try {
-      // an empty repoPath asks the API to create a new repository (greenfield project)
-      await post<Project>('/projects', { ...form, repoPath: form.repoPath.trim() || undefined });
-      setForm({ name: '', slug: '', repoPath: '' });
-      await qc.invalidateQueries({ queryKey: ['projects'] });
-    } catch (err) {
-      setError(String(err));
-    }
-  };
-  return (
-    <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
-      {(['name', 'slug', 'repoPath'] as const).map((k) => (
-        <div key={k} className="space-y-1">
-          <Label htmlFor={`project-${k}`}>Project {k}</Label>
-          <Input
-            id={`project-${k}`}
-            required={k !== 'repoPath'}
-            placeholder={k === 'repoPath' ? 'empty: new repository' : undefined}
-            value={form[k]}
-            onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-          />
-        </div>
-      ))}
-      <Button type="submit" variant="secondary">
-        Add project
-      </Button>
-      {error && <p className="w-full text-sm text-destructive">{error}</p>}
-    </form>
-  );
-}
-
 export default function NewTaskPage() {
   const router = useRouter();
   const projects = useProjects();
   const agents = useAgents();
-  const [projectId, setProjectId] = useState('');
+  const current = useProject();
+  const [picked, setPicked] = useState<string>();
+  const projectId = picked ?? current?.id ?? '';
   const [agentId, setAgentId] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -97,12 +61,11 @@ export default function NewTaskPage() {
         <CardTitle>New task</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
-        <NewProject />
         <form onSubmit={submit} className="space-y-4">
           <Pick
             label="Project"
             value={projectId}
-            onChange={setProjectId}
+            onChange={setPicked}
             items={(projects.data ?? []).map((p) => ({ value: p.id, label: `${p.name} (${p.repoPath})` }))}
           />
           <Pick

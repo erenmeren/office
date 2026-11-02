@@ -6,7 +6,8 @@ import { Bot, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, Scro
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { StatusDot } from '@/components/ui/status-pill';
-import { useAgents, useApprovals, useConversations, useLiveSessions, useMemoryCounts, useProjects, useSkills, useTasks, useWorkers } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useAgents, useApprovals, useConversations, useLiveSessions, useMemoryCounts, useSkills, useTasks, useWorkers } from '@/lib/queries';
 
 export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -51,11 +52,11 @@ function Count({ n, tone }: { n: number; tone: 'live' | 'decision' | 'message' }
 export function useNavCounts() {
   const skills = useSkills();
   const workers = useWorkers();
-  const projects = useProjects();
-  const conversations = useConversations(projects.data?.[0]?.id);
-  const memory = useMemoryCounts(projects.data?.[0]?.id);
-  const approvals = useApprovals(projects.data?.[0]?.id, 'pending');
-  const sessions = useLiveSessions(projects.data?.[0]?.id);
+  const projectId = useProject()?.id;
+  const conversations = useConversations(projectId);
+  const memory = useMemoryCounts(projectId);
+  const approvals = useApprovals(projectId, 'pending');
+  const sessions = useLiveSessions(projectId);
   return {
     '/mission-control': { n: approvals.data?.length ?? 0, tone: 'decision' as const },
     '/sessions': { n: sessions.data?.length ?? 0, tone: 'live' as const },
@@ -68,11 +69,10 @@ export function useNavCounts() {
 
 export function AppSidebar({ className }: { className?: string }) {
   const pathname = usePathname();
-  const projects = useProjects();
   const agents = useAgents();
   const tasks = useTasks();
   const counts = useNavCounts();
-  const project = projects.data?.[0];
+  const project = useProject();
   const busy = new Set(tasks.data?.filter((t) => t.status === 'running').map((t) => t.agentId));
 
   return (

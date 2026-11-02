@@ -9,13 +9,14 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { DashboardStack } from '@/components/ui/kpi-card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
-import { useLiveSessions, useProjects } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useLiveSessions } from '@/lib/queries';
 import { useMounted } from '@/lib/use-mounted';
 
 export default function SessionsPage() {
   const mounted = useMounted();
   const qc = useQueryClient();
-  const project = useProjects().data?.[0];
+  const project = useProject();
   const sessions = useLiveSessions(project?.id).data ?? [];
   const [filter, setFilter] = useState<SessionFilter>('all');
   const [picked, setPicked] = useState<SessionSelection>();

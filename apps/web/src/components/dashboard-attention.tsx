@@ -7,7 +7,8 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { post } from '@/lib/api';
 import { relativeTime } from '@/lib/workers';
-import { useOverview, useProjects, type Overview } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useOverview, type Overview } from '@/lib/queries';
 
 type Item = Overview['attention'][number];
 
@@ -67,7 +68,7 @@ function AttentionRow({ item }: { item: Item }) {
 
 /** Pending approvals and skill imports waiting for the owner. */
 export function DashboardAttention() {
-  const items = useOverview(useProjects().data?.[0]?.id).data?.attention ?? [];
+  const items = useOverview(useProject()?.id).data?.attention ?? [];
   return (
     <Card>
       <CardHeader>

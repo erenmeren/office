@@ -3,11 +3,12 @@
 import { BarChart } from '@/components/ui/bar-chart';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { costBars, usd } from '@/lib/dashboard';
-import { useCosts, useProjects } from '@/lib/queries';
+import { useProject } from '@/lib/project';
+import { useCosts } from '@/lib/queries';
 
 /** Daily spend for the last seven UTC days, today partial, with today's top spenders. */
 export function DashboardCosts() {
-  const projectId = useProjects().data?.[0]?.id;
+  const projectId = useProject()?.id;
   const week = useCosts(projectId, 7, 'day').data;
   const today = useCosts(projectId, 1, 'agent').data;
   const bars = costBars(week?.buckets ?? []);
