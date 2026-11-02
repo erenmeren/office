@@ -8,6 +8,7 @@ import { cn } from 'cn';
 import { AppSidebar, NAV, isActive } from '@/components/app-sidebar';
 import { NewProjectForm } from '@/components/new-project-form';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { post } from '@/lib/api';
@@ -40,7 +41,7 @@ function ProjectSwitcher() {
   if (!useMounted() || !project) return <span className="truncate">Office</span>;
   const items = [...projects.map((p) => ({ value: p.id, label: p.name })), { value: NEW_PROJECT, label: 'New project…' }];
   return (
-    <div className="relative">
+    <div>
       <Select items={items} value={project.id} onValueChange={(v) => (v === NEW_PROJECT ? setCreating(true) : selectProject(String(v)))}>
         <SelectTrigger size="sm" aria-label="Project" className="border-0 text-ink-3 hover:text-ink">
           <SelectValue />
@@ -53,11 +54,12 @@ function ProjectSwitcher() {
           ))}
         </SelectContent>
       </Select>
-      {creating && (
-        <div className="absolute top-full left-0 z-50 mt-2">
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent>
+          <DialogTitle>New project</DialogTitle>
           <NewProjectForm onDone={() => setCreating(false)} />
-        </div>
-      )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -62,6 +62,29 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
     return project;
   });
 
+  app.put('/projects/:id', async (req) => {
+    const { id } = req.params as { id: string };
+    const data = z.object({ name: z.string().min(1).optional(), defaultBranch: z.string().min(1).optional() }).parse(req.body);
+    if (!(await app.prisma.project.findUnique({ where: { id } }))) throw new HttpError(404, 'not_found');
+    const project = await app.prisma.project.update({ where: { id }, data });
+    await audit(app.prisma, { userId: req.user!.id, action: 'project.updated', targetType: 'project', targetId: id, detail: data });
+    return project;
+  });
+
+  // refused while the project has any task, mission or run: their records would lose their project
+  app.delete('/projects/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const project = await app.prisma.project.findUnique({ where: { id }, include: { _count: { select: { tasks: true, missions: true, runs: true } } } });
+    if (!project) throw new HttpError(404, 'not_found');
+    if (project._count.tasks || project._count.missions || project._count.runs) throw new HttpError(409, 'project_in_use');
+    await app.prisma.$transaction([
+      app.prisma.projectAgent.deleteMany({ where: { projectId: id } }),
+      app.prisma.project.delete({ where: { id } }),
+    ]);
+    await audit(app.prisma, { userId: req.user!.id, action: 'project.deleted', targetType: 'project', targetId: id, detail: { slug: project.slug } });
+    return reply.code(204).send();
+  });
+
   app.get('/projects/:id/settings', async (req) => getSettings(app.prisma, (req.params as { id: string }).id));
 
   app.put('/projects/:id/settings', async (req) => {

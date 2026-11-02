@@ -5,6 +5,7 @@ import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
 import { sendMessage } from '../src/services/message-service.js';
 import { expireLeases } from '../src/services/run-service.js';
 import { approveBudget } from '../src/services/budget-service.js';
+import { evidenceRule } from '../src/services/review-service.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const usage = { inputTokens: 10, outputTokens: 20, costUsd: 0.5, numTurns: 1, durationMs: 5 };
@@ -216,6 +217,19 @@ describe('orchestration', () => {
     const spec = await s.assign(w);
     await s.finish(w, spec, { status: 'succeeded', git: { ...git(1), integration: 'needs_integration' }, check: check('passed') });
     expect(await s.task(k.a)).toMatchObject({ status: 'review', reviewNote: 'needs integration' });
+  });
+
+  it('evidence rule: a skipped check (no checkCommand) is not a failure, a failed one is', async () => {
+    s = await setup();
+    const run = (status: string) => ({
+      status: 'succeeded',
+      git: { ...git(1), integration: 'fast_forwarded' },
+      check: { status, exitCode: null },
+    });
+    const task = { kind: 'code' };
+    const e = (status: string) => ({ task, runs: [run(status)], artifacts: [], memoryCount: 0 }) as unknown as Parameters<typeof evidenceRule>[0];
+    expect(evidenceRule(e('skipped')).ok).toBe(true);
+    expect(evidenceRule(e('failed'))).toEqual({ ok: false, reason: 'check failed on the latest checked run' });
   });
 
   it('owner failed override: review -> failed with the note, audited, dependent blocked', async () => {

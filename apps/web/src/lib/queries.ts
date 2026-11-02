@@ -10,6 +10,7 @@ export interface Project {
   name: string;
   slug: string;
   repoPath: string;
+  defaultBranch: string;
 }
 export type SkillMode = 'eager' | 'on_demand';
 export interface SubagentDef {
