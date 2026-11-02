@@ -56,13 +56,14 @@ export async function loadVersion(prisma: Db, versionId: string) {
   const version = await prisma.agentVersion.findUniqueOrThrow({ where: { id: versionId } });
   const pins = await prisma.agentSkill.findMany({
     where: { agentVersionId: versionId },
-    include: { skill: { select: { name: true } }, skillVersion: true },
+    include: { skill: { select: { name: true, status: true } }, skillVersion: true },
     ...bySkillName,
   });
   return {
     version,
     config: AgentConfigSchema.parse(version.config),
-    skills: pins.map((p) => ({
+    // a disabled skill stays pinned (the version is immutable) but is not materialized
+    skills: pins.filter((p) => p.skill.status !== 'disabled').map((p) => ({
       skillId: p.skillId,
       skillVersionId: p.skillVersionId,
       name: p.skill.name,

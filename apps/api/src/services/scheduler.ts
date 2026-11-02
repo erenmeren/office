@@ -8,7 +8,7 @@ import { pendingWakeDeliveries } from './message-service.js';
 import { abandonRun, createRun, createRunForTask, expireLeases, failWaitingRun, resumeRun } from './run-service.js';
 import { summaryPrompt } from './summary-prompt.js';
 import { startPlanRun, startReviewRun } from './mission-service.js';
-import { gate, requestBudgetApproval } from './budget-service.js';
+import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
 
@@ -150,6 +150,7 @@ export class Scheduler {
     });
     for (const mission of missions) {
       try {
+        if (!(await this.missionMayRun(mission))) continue;
         const worker = this.pickWorker(mission.project, { needsRepoAccess: 'any' });
         if (!worker) continue;
         const { spec } = await startReviewRun(this.prisma, this.hub, this.config, mission, worker);
@@ -169,6 +170,7 @@ export class Scheduler {
     });
     for (const mission of missions) {
       try {
+        if (!(await this.missionMayRun(mission))) continue;
         const worker = this.pickWorker(mission.project, { needsRepoAccess: 'any' });
         if (!worker) continue;
         const { spec } = await startPlanRun(this.prisma, this.hub, this.config, mission, worker);
@@ -177,6 +179,21 @@ export class Scheduler {
         this.log.error({ err, missionId: mission.id }, 'starting plan run failed');
       }
     }
+  }
+
+  /** Budget gate for a Chief plan or review run; a spent daily budget raises the approval like a task would. */
+  private async missionMayRun(mission: { id: string; projectId: string; budgetUsd: number | null }) {
+    const verdict = await missionGate(this.prisma, await getSettings(this.prisma, mission.projectId), mission);
+    if (verdict.ok) {
+      this.loggedBlocked.delete(mission.id);
+      return true;
+    }
+    if (this.loggedBlocked.get(mission.id) !== verdict.reason) {
+      this.loggedBlocked.set(mission.id, verdict.reason);
+      this.log.info({ missionId: mission.id, reason: verdict.reason }, 'mission run held back');
+    }
+    if (verdict.budgetExceeded) await requestBudgetApproval(this.prisma, this.hub, mission.id, `${verdict.reason}; approve to continue`);
+    return false;
   }
 
   /**

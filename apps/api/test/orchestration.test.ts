@@ -352,6 +352,10 @@ describe('orchestration', () => {
     expect(bad).toMatchObject({ ok: false, code: 'evidence_missing' });
     expect((await s.task(k.a)).status).toBe('review');
 
+    // a newer review run owns the mission: this run's decisions are stale
+    await s.t.prisma.mission.update({ where: { id: m.id }, data: { reviewRunId: 'newer' } });
+    expect(await s.tool(w, review, 'review_task', { taskId: k.c, decision: 'done', note: 'good' })).toMatchObject({ ok: false, code: 'not_allowed' });
+    await s.t.prisma.mission.update({ where: { id: m.id }, data: { reviewRunId: review.runId } });
     // the analysis stored its result as an artifact, so it may close; its dependent becomes ready
     expect(await s.tool(w, review, 'review_task', { taskId: k.c, decision: 'done', note: 'good' })).toMatchObject({ ok: true });
     expect(await s.statuses(m.id)).toMatchObject({ c: 'done', d: 'ready' });
@@ -523,6 +527,19 @@ describe('orchestration', () => {
     const line = info.mock.calls.find(([o]) => (o as { taskId?: string }).taskId === k.a);
     expect((line![0] as { reason: string }).reason).toBe('mission budget exhausted');
     expect(await s.t.prisma.approval.count({ where: { missionId: m.id } })).toBe(0);
+  });
+
+  it('a plan run waits for the daily budget like a task and raises the approval', async () => {
+    s = await setup();
+    const { w } = await s.approved(2); // its plan run cost 0.5
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 0.4 });
+    const res = await s.req('POST', '/missions', { projectId: s.projectId, request: 'Second mission' });
+    await s.t.app.scheduler.tick();
+    await sleep(100);
+    expect((await s.mission(res.json().id)).planRunId).toBeNull();
+    expect(w.received.filter((x) => x.type === 'run.assign')).toHaveLength(1);
+    const a = await s.t.prisma.approval.findFirstOrThrow({ where: { missionId: res.json().id, type: 'budget_exceeded' } });
+    expect(a.status).toBe('pending');
   });
 
   it('an approved legacy mission-cap approval does not raise the project daily budget', async () => {

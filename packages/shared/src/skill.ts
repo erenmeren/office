@@ -11,7 +11,7 @@ export const SKILL_MAX_FILES = 50;
 
 export const SkillModeSchema = z.enum(['eager', 'on_demand']);
 export type SkillMode = z.infer<typeof SkillModeSchema>;
-export const SkillStatusSchema = z.enum(['pending_review', 'approved', 'rejected']);
+export const SkillStatusSchema = z.enum(['pending_review', 'approved', 'rejected', 'disabled']);
 export type SkillStatus = z.infer<typeof SkillStatusSchema>;
 export const SkillSourceSchema = z.enum(['local', 'git', 'ui']);
 export type SkillSource = z.infer<typeof SkillSourceSchema>;

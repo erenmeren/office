@@ -76,6 +76,17 @@ export async function gate(db: Db, settings: ProjectSettings, task: Task, agent:
   return { ok: true };
 }
 
+/** Whether a Chief plan or review run may start now: the mission cap and the project daily budget apply to it too. */
+export async function missionGate(db: Db, settings: ProjectSettings, mission: { id: string; projectId: string; budgetUsd: number | null }): Promise<Gate> {
+  if (mission.budgetUsd != null && (await missionSpent(db, mission.id)) >= mission.budgetUsd) {
+    return { ok: false, reason: 'mission budget exhausted' };
+  }
+  if ((await spentToday(db, { projectId: mission.projectId })) >= (await dailyLimit(db, settings, mission.projectId))) {
+    return { ok: false, reason: DAILY_BUDGET_SPENT, budgetExceeded: true };
+  }
+  return { ok: true };
+}
+
 /** One budget_exceeded approval per mission, reason and UTC day (none when one was already raised today). */
 export async function requestBudgetApproval(prisma: PrismaClient, hub: EventHub, missionId: string, reason: string) {
   const outbox: Outbox = [];

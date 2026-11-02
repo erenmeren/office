@@ -39,7 +39,7 @@ export async function skillRoutes(app: FastifyInstance, opts: { config: Config }
       : null;
     return { ...skill, currentVersion };
   };
-  const setStatus = async (id: string, status: 'approved' | 'rejected') => {
+  const setStatus = async (id: string, status: 'approved' | 'rejected' | 'disabled') => {
     await detail(id, false);
     await app.prisma.skill.update({ where: { id }, data: { status } });
     return detail(id, false);
@@ -138,6 +138,23 @@ export async function skillRoutes(app: FastifyInstance, opts: { config: Config }
     const { id } = req.params as { id: string };
     const s = await setStatus(id, 'approved');
     await audit(app.prisma, { userId: req.user!.id, action: 'skill.approved', targetType: 'skill', targetId: id });
+    return s;
+  });
+  // off: an approved skill that stays pinned but is left out of every run until enabled again
+  app.post('/skills/:id/disable', async (req) => {
+    const { id } = req.params as { id: string };
+    const current = await detail(id, false);
+    if (current.status !== 'approved') throw new HttpError(409, 'not_approved');
+    const s = await setStatus(id, 'disabled');
+    await audit(app.prisma, { userId: req.user!.id, action: 'skill.disabled', targetType: 'skill', targetId: id });
+    return s;
+  });
+  app.post('/skills/:id/enable', async (req) => {
+    const { id } = req.params as { id: string };
+    const current = await detail(id, false);
+    if (current.status !== 'disabled') throw new HttpError(409, 'not_disabled');
+    const s = await setStatus(id, 'approved');
+    await audit(app.prisma, { userId: req.user!.id, action: 'skill.enabled', targetType: 'skill', targetId: id });
     return s;
   });
   app.post('/skills/:id/reject', async (req) => {

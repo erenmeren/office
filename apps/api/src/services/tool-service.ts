@@ -246,6 +246,9 @@ async function run(
       const task = await prisma.task.findFirst({ where: { id: args.taskId, projectId } });
       if (run.kind !== 'review' || !run.reviewOfMissionId) throw new ToolError('not_allowed', `${name} is only available to review runs`);
       if (!task || task.missionId !== run.reviewOfMissionId) throw new ToolError('not_found', 'task not found in the mission under review');
+      // an owner reopen started a newer review: this run's decisions are stale
+      const current = await prisma.mission.findUnique({ where: { id: run.reviewOfMissionId }, select: { reviewRunId: true } });
+      if (current?.reviewRunId && current.reviewRunId !== run.id) throw new ToolError('not_allowed', 'a newer review run owns the mission; this decision is stale');
       if (name === 'get_task_evidence') {
         const e = await evidenceFor(prisma, task.id);
         // only the latest run's result text, capped: older ones are in its summaries

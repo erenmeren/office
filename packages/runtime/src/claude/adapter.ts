@@ -51,9 +51,13 @@ export function buildQueryOptions(
     return r;
   };
   const gate = (toolUseId: string | undefined, toolName: string, input: Record<string, unknown>) => {
-    if (!toolUseId) return decide(toolName, input);
-    let d = decisions.get(toolUseId);
-    if (!d) decisions.set(toolUseId, (d = decide(toolName, input, toolUseId)));
+    // without an id the hook and canUseTool are matched by content, for a few seconds: the owner is still asked once
+    const key = toolUseId ?? `${toolName}:${JSON.stringify(input)}`;
+    let d = decisions.get(key);
+    if (!d) {
+      decisions.set(key, (d = decide(toolName, input, toolUseId)));
+      if (!toolUseId) void d.finally(() => setTimeout(() => decisions.delete(key), 5000).unref());
+    }
     return d;
   };
   // PreToolUse runs before allow rules (allowedTools and project settings), so the gate always applies.
