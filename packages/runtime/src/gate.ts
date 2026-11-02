@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DEFAULT_DESTRUCTIVE_PATTERNS, GIT_OPTIONS, evaluateToolCall, type ApprovalDecision, type RunSpec } from '@office/shared';
+import { DEFAULT_DESTRUCTIVE_PATTERNS, GIT_OPTIONS, evaluateToolCall, normalizeCommand, type ApprovalDecision, type RunSpec } from '@office/shared';
 import type { EventSink, ToolBridge } from './types.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
@@ -23,11 +23,21 @@ function writingGitCall(command: string): string | undefined {
   return undefined;
 }
 
+// commands that write files or run code the gate cannot read: denied on read-only runs wherever they start a simple command
+const WRITERS = /(?:^|[;&|(`]\s*|\b(?:sudo|xargs|nice|env|time)\s+)(?:cp|mv|rm|mkdir|rmdir|touch|chmod|chown|ln|dd|install|truncate|rsync|wget|eval|source|\.|curl\s+(?:-\S*[oO]|.*--output)|sed\s+(?:-\S*i|--in-place)|(?:npm|pnpm|yarn|bun)\s+(?:i|install|add|remove|rm|uninstall|link|update|up)|pip3?\s+install)(?=\s|$)/;
+// a redirection writes unless it is a descriptor copy (`2>&1`, `>&2`); `->`, `>=`, `<>` are not redirections
+const REDIRECT = /(?<![-=<>&\d])\d*>(?![=&])/;
+
 function mayWrite(command: string): boolean {
-  const lower = command.toLowerCase();
+  const c = normalizeCommand(command);
+  const lower = c.toLowerCase();
   return (
     DEFAULT_DESTRUCTIVE_PATTERNS.some((p) => lower.includes(p.toLowerCase())) ||
-    [' > ', '>>', 'tee '].some((s) => command.includes(s))
+    REDIRECT.test(c.replace(/\d*>&\d/g, '')) ||
+    /(?:^|[\s;&|(])tee\s/.test(c) ||
+    WRITERS.test(c) ||
+    // an allowed git read can still write with --output
+    /\bgit\b[^;&|]*--output(?:=|\s)/.test(c)
   );
 }
 
