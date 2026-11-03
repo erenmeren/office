@@ -22,6 +22,7 @@ import {
   roomOrigin,
   sprite,
   themeFor,
+  type Mail,
   type OfficeRoom,
 } from '@/lib/office';
 import { elapsed } from '@/lib/sessions';
@@ -202,7 +203,7 @@ function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: numb
 const MONO: CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: 10 };
 
 /** The flat layer over the floor: subagent tags, typing dots, marks, sleep, and the clickable plate. */
-function Overlay({ room, i, P, now, selected, onSelect }: { room: OfficeRoom; i: number; P: ReturnType<typeof floorLayout>['P']; now: number; selected: boolean; onSelect: () => void }) {
+function Overlay({ room, i, P, now, selected, onSelect, bubble }: { room: OfficeRoom; i: number; P: ReturnType<typeof floorLayout>['P']; now: number; selected: boolean; onSelect: () => void; bubble?: string }) {
   const { rx, ry } = roomOrigin(i);
   const toneKey = statusTone(room.status);
   const tone = TONE[toneKey];
@@ -210,8 +211,17 @@ function Overlay({ room, i, P, now, selected, onSelect }: { room: OfficeRoom; i:
   const row = Math.floor(i / 3);
   const plate = row === 0 ? { l: P(rx, ry).x - 60, t: head.y - 160 } : { l: P(rx + ROOM_W, ry + ROOM_H).x - 72, t: P(rx + ROOM_W, ry + ROOM_H).y + 10 };
   const mark = MARK[room.status];
+  const flip = row === 0;
   return (
     <>
+      {bubble && toneKey !== 'idle' && (
+        <div
+          title={bubble}
+          style={{ position: 'absolute', left: flip ? head.x - 22 : head.x + 22, top: head.y - 30, maxWidth: 176, padding: '5px 8px', borderRadius: flip ? '10px 10px 2px 10px' : '10px 10px 10px 2px', transform: flip ? 'translateX(-100%)' : 'none', background: '#f6f5ff', color: '#0b0820', fontSize: 11, lineHeight: 1.3, boxShadow: '0 4px 14px rgba(0,0,0,.4)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+        >
+          {bubble}
+        </div>
+      )}
       {room.subs.map((s, j) => {
         const [x, y] = SUBPOS[Math.min(j, SUBPOS.length - 1)];
         const tag = P(rx + x, ry + y + 2, 30);
@@ -266,8 +276,21 @@ function Overlay({ room, i, P, now, selected, onSelect }: { room: OfficeRoom; i:
 }
 
 /** The isometric floor: one themed room per team member, scaled to the width it is given. */
-export function OfficeFloor({ rooms, selected, onSelect, now }: { rooms: OfficeRoom[]; selected: string | null; onSelect: (agentId: string) => void; now: number }) {
+/** Head-to-head arc between two rooms, the envelope's track. */
+function mailPath(P: ReturnType<typeof floorLayout>['P'], from: number, to: number): string {
+  const head = (i: number) => {
+    const { rx, ry } = roomOrigin(i);
+    return P(rx + HEAD.x, ry + HEAD.y, HEAD.z);
+  };
+  const a = head(from);
+  const b = head(to);
+  return `M ${a.x.toFixed(1)} ${(a.y - 12).toFixed(1)} Q ${((a.x + b.x) / 2).toFixed(1)} ${(Math.min(a.y, b.y) - 90).toFixed(1)} ${b.x.toFixed(1)} ${(b.y - 12).toFixed(1)}`;
+}
+
+export function OfficeFloor({ rooms, selected, onSelect, now, mail = [], bubbles = {} }: { rooms: OfficeRoom[]; selected: string | null; onSelect: (agentId: string) => void; now: number; mail?: Mail[]; bubbles?: Record<string, string> }) {
   const layout = floorLayout(rooms.length);
+  const index = (agentId: string) => rooms.findIndex((r) => r.agentId === agentId);
+  const flights = mail.filter((m) => index(m.from) >= 0 && index(m.to) >= 0);
   const ref = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   useEffect(() => {
@@ -287,8 +310,24 @@ export function OfficeFloor({ rooms, selected, onSelect, now }: { rooms: OfficeR
           ))}
         </div>
         <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+          {flights.length > 0 && (
+            <svg aria-label="Messages in flight" style={{ position: 'absolute', inset: 0, overflow: 'visible' }} width={STAGE_W} height={layout.stageH} viewBox={`0 0 ${STAGE_W} ${layout.stageH}`}>
+              {flights.map((m) => (
+                <g key={m.id}>
+                  <path id={`mail-${m.id}`} d={mailPath(layout.P, index(m.from), index(m.to))} fill="none" stroke="rgba(255,106,213,.7)" strokeWidth="1.5" strokeDasharray="3 5" />
+                  <g>
+                    <rect x="-7" y="-5" width="14" height="10" rx="1.5" fill="#fff" stroke="#ff6ad5" />
+                    <path d="M-7 -5 L0 1 L7 -5" fill="none" stroke="#ff6ad5" />
+                    <animateMotion dur="3.2s" repeatCount="indefinite">
+                      <mpath href={`#mail-${m.id}`} />
+                    </animateMotion>
+                  </g>
+                </g>
+              ))}
+            </svg>
+          )}
           {rooms.map((r, i) => (
-            <Overlay key={r.agentId} room={r} i={i} P={layout.P} now={now} selected={r.agentId === selected} onSelect={() => onSelect(r.agentId)} />
+            <Overlay key={r.agentId} room={r} i={i} P={layout.P} now={now} selected={r.agentId === selected} onSelect={() => onSelect(r.agentId)} bubble={bubbles[r.agentId]} />
           ))}
         </div>
       </div>

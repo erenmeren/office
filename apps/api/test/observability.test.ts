@@ -143,9 +143,27 @@ describe('observability read models', () => {
     expect(live[0].subagents).toEqual([
       expect.objectContaining({ toolUseId: 'tu-1', subagentType: 'helper', description: 'look', status: 'running', commands: 1, files: 1 }),
     ]);
+    expect(live[0].waitingFor).toBeNull();
     expect((await get(`/sessions?projectId=${q}&status=live`)).json()).toEqual([]);
     expect((await get(`/sessions?projectId=${q}&status=all`)).json()).toHaveLength(1);
     expect((await get(`/sessions`)).statusCode).toBe(400);
+  });
+
+  it('a waiting_reply session carries the waited message and its recipients', async () => {
+    const other = (await req('POST', '/agents', { name: 'Bob', slug: 'bob', role: 'qa', config: { systemPrompt: 'x', model: 'sonnet', allowedTools: [] } })).json().id;
+    const conv = await t.prisma.conversation.create({ data: { projectId: p, kind: 'direct', title: 'x' } });
+    const msg = await t.prisma.message.create({
+      data: { conversationId: conv.id, projectId: p, type: 'question', body: 'Envelope stutters?', senderAgentId: agentId, awaitingReply: true },
+    });
+    await t.prisma.messageDelivery.create({ data: { messageId: msg.id, recipientAgentId: other } });
+    await t.prisma.taskRun.update({ where: { id: r1.runId }, data: { status: 'waiting_reply', waitingForMessageId: msg.id } });
+    try {
+      const live = (await get(`/sessions?projectId=${p}&status=live`)).json();
+      expect(live[0]).toMatchObject({ status: 'waiting_reply', waitingFor: { messageId: msg.id, body: 'Envelope stutters?', recipientAgentIds: [other] } });
+      expect((await get(`/sessions/${r1.runId}`)).json().waitingFor).toEqual({ messageId: msg.id, body: 'Envelope stutters?', recipientAgentIds: [other] });
+    } finally {
+      await t.prisma.taskRun.update({ where: { id: r1.runId }, data: { status: 'running', waitingForMessageId: null } });
+    }
   });
 
   it('sessions/:runId exposes usage, skills snapshot, commands and files', async () => {

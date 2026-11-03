@@ -161,7 +161,25 @@ function counts(events: EventRow[], parent?: string) {
   return { commands: mine.filter((e) => e.type === COMMAND).length, files: paths.size };
 }
 
-function sessionItem(run: RunRow, all: EventRow[]) {
+type WaitingFor = { messageId: string; body: string; recipientAgentIds: string[] };
+
+/** The message each `waiting_reply` run waits on, by run id: its body and the agents it was sent to. */
+async function waitingMessages(db: Db, runs: RunRow[]): Promise<Map<string, WaitingFor>> {
+  const waiting = runs.filter((r) => r.status === 'waiting_reply' && r.waitingForMessageId);
+  if (waiting.length === 0) return new Map();
+  const messages = await db.message.findMany({
+    where: { id: { in: waiting.map((r) => r.waitingForMessageId!) } },
+    include: { deliveries: { select: { recipientAgentId: true } } },
+  });
+  return new Map(
+    waiting.flatMap((r) => {
+      const m = messages.find((x) => x.id === r.waitingForMessageId);
+      return m ? [[r.id, { messageId: m.id, body: m.body, recipientAgentIds: m.deliveries.map((d) => d.recipientAgentId).filter((id): id is string => !!id) }]] : [];
+    }),
+  );
+}
+
+function sessionItem(run: RunRow, all: EventRow[], waitingFor: WaitingFor | null) {
   const events = run.session ? all.filter((e) => e.sessionId === run.session!.id) : [];
   return {
     runId: run.id,
@@ -176,6 +194,7 @@ function sessionItem(run: RunRow, all: EventRow[]) {
     workerName: run.worker?.name ?? null,
     startedAt: run.startedAt ?? run.session?.startedAt ?? null,
     costUsd: run.costUsd,
+    waitingFor,
     ...counts(events),
     subagents: (run.session?.subagentRuns ?? []).map((s) => ({
       id: s.id, toolUseId: s.toolUseId, subagentType: s.subagentType, description: s.description, status: s.status, startedAt: s.startedAt, endedAt: s.endedAt,
@@ -193,17 +212,18 @@ export async function listSessions(db: Db, projectId: string, status: 'live' | '
     include: runInclude,
   });
   // shortcut: loads every command/file event of up to 100 sessions to count them; move counts to SQL if status=all gets slow
-  const events = await activityEvents(db, runs.map((r) => r.session!.id));
-  return runs.map((r) => sessionItem(r, events));
+  const [events, waiting] = await Promise.all([activityEvents(db, runs.map((r) => r.session!.id)), waitingMessages(db, runs)]);
+  return runs.map((r) => sessionItem(r, events, waiting.get(r.id) ?? null));
 }
 
 export async function sessionDetail(db: Db, runId: string) {
   const run = await db.taskRun.findUnique({ where: { id: runId }, include: { ...runInclude, agentVersion: { select: { version: true } } } });
   if (!run) throw new HttpError(404, 'not_found');
-  const [events, usage, approval] = await Promise.all([
+  const [events, usage, approval, waiting] = await Promise.all([
     run.session ? activityEvents(db, [run.session.id]) : Promise.resolve([]),
     db.usageRecord.aggregate({ where: { runId }, _sum: { inputTokens: true, outputTokens: true } }),
     db.approval.findFirst({ where: { runId, status: 'pending' }, orderBy: { createdAt: 'desc' } }),
+    waitingMessages(db, [run]),
   ]);
   const files = new Map<string, { path: string; adds?: number; dels?: number; bySubagent?: string }>();
   for (const e of events.filter((e) => e.type === FILE)) {
@@ -218,7 +238,7 @@ export async function sessionDetail(db: Db, runId: string) {
     files.set(path, f);
   }
   return {
-    ...sessionItem(run, events),
+    ...sessionItem(run, events, waiting.get(run.id) ?? null),
     projectId: run.projectId,
     finishedAt: run.finishedAt,
     model: run.session?.model ?? null,

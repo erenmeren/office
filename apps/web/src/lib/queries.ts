@@ -384,6 +384,8 @@ export interface LiveSession {
   workerName: string | null;
   startedAt: string | null;
   costUsd: number;
+  /** the message a `waiting_reply` run waits on */
+  waitingFor: { messageId: string; body: string; recipientAgentIds: string[] } | null;
   commands: number;
   files: number;
   subagents: SessionSubagent[];
