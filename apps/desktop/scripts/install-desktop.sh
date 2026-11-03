@@ -6,9 +6,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -x release/linux-unpacked/office ] || { echo "release/linux-unpacked missing; run: pnpm --filter @office/desktop dist" >&2; exit 1; }
 APP="$HOME/.local/lib/office"
-mkdir -p "$APP" "$HOME/.local/share/icons/hicolor/512x512/apps" "$HOME/.local/share/applications"
+mkdir -p "$APP" "$HOME/.local/share/icons/hicolor/512x512/apps" "$HOME/.local/share/icons/hicolor/256x256/apps" "$HOME/.local/share/applications"
 rsync -a --delete release/linux-unpacked/ "$APP/"
 cp assets/icon.png "$HOME/.local/share/icons/hicolor/512x512/apps/office.png"
+rsvg-convert -w 256 -h 256 assets/icon.svg -o "$HOME/.local/share/icons/hicolor/256x256/apps/office.png" 2>/dev/null || cp assets/icon.png "$HOME/.local/share/icons/hicolor/256x256/apps/office.png"
 ENTRY="$HOME/.local/share/applications/office.desktop"
 cat > "$ENTRY" <<DESKTOP
 [Desktop Entry]
@@ -16,7 +17,7 @@ Type=Application
 Name=Office
 Comment=Claude Agent Office
 Exec=$APP/office %U
-Icon=office
+Icon=$APP/resources/icon.png
 Terminal=false
 Categories=Development;
 StartupWMClass=office
