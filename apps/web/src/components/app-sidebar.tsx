@@ -77,7 +77,7 @@ export function AppSidebar({ className }: { className?: string }) {
   const busy = new Set(tasks.data?.filter((t) => t.status === 'running').map((t) => t.agentId));
 
   return (
-    <aside className={cn('glass my-4 ml-4 flex w-[232px] shrink-0 flex-col gap-5 self-start rounded-[22px] px-3 py-4', className)}>
+    <aside className={cn('glass sticky top-4 my-4 ml-4 flex max-h-[calc(100dvh-2rem)] w-[232px] shrink-0 flex-col gap-5 self-start overflow-y-auto rounded-[22px] px-3 py-4', className)}>
       <div className="flex h-[34px] items-center gap-2.5 px-1">
         <BrandMark />
         <span className="font-heading text-[19px] font-semibold tracking-[-0.01em]">Agent Office</span>
