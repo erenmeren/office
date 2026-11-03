@@ -206,6 +206,7 @@ Two environment variables are new in Phase 6 (both optional, see `.env.example`)
 pnpm --filter @office/desktop bundle   # builds api/worker/db, the web standalone build, pnpm deploy into apps/desktop/build
 pnpm --filter @office/desktop start    # run unpackaged from apps/desktop/build
 pnpm --filter @office/desktop dist     # bundle + AppImage in apps/desktop/release/office-<version>.AppImage
+pnpm --filter @office/desktop install-desktop  # copy release/linux-unpacked to ~/.local/lib/office, icon + office.desktop (menu and Desktop)
 ```
 
 State lives under `$XDG_DATA_HOME/office` (default `~/.local/share/office`): `pg/` (database cluster), `data/` (`OFFICE_DATA_DIR`: artifacts, greenfield repositories under `data/repos`), `workspaces/` (the seeded sandbox repository), `worker/` (worker home and credential), `logs/` (`postgres.log`, `boot.log`, `api.log`, `web.log`, `worker.log`), `pg-password` and `cookie-secret` (0600). `OFFICE_DESKTOP_DATA` overrides the directory.

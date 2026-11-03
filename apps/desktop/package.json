@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "bundle": "scripts/bundle.sh",
     "start": "pnpm build && electron .",
-    "dist": "pnpm bundle && pnpm build && electron-builder --linux AppImage"
+    "dist": "pnpm bundle && pnpm build && electron-builder --linux AppImage",
+    "install-desktop": "scripts/install-desktop.sh"
   },
   "devDependencies": {
     "electron": "^45.2.1",
@@ -40,7 +41,13 @@
       "target": [
         "AppImage"
       ],
-      "category": "Development"
-    }
+      "category": "Development",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "office"
+        }
+      }
+    },
+    "icon": "assets/icon.png"
   }
 }

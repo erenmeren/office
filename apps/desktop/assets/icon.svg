@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1640"/>
+      <stop offset="1" stop-color="#0d0b1f"/>
+    </linearGradient>
+    <radialGradient id="aurora" cx="0.3" cy="0.2" r="0.8">
+      <stop offset="0" stop-color="#7c5cff" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#2ed8ff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#2ed8ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8d74ff"/>
+      <stop offset="1" stop-color="#5a3fd6"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a2b8a"/>
+      <stop offset="1" stop-color="#241b5c"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#aurora)"/>
+  <!-- floor glow -->
+  <ellipse cx="256" cy="400" rx="150" ry="46" fill="#2ed8ff" opacity="0.35" filter="url(#glow)"/>
+  <!-- ground plate -->
+  <polygon points="256,296 386,361 256,426 126,361" fill="#2ed8ff" opacity="0.18"/>
+  <!-- building: left face (violet), right face (deep), top (mint-cyan) -->
+  <polygon points="156,176 256,226 256,400 156,350" fill="url(#left)"/>
+  <polygon points="256,226 356,176 356,350 256,400" fill="url(#right)"/>
+  <polygon points="256,126 356,176 256,226 156,176" fill="#3df5c8"/>
+  <polygon points="256,126 356,176 256,226 156,176" fill="#2ed8ff" opacity="0.35"/>
+  <!-- windows, left face: (156+u, 176+u/2+v) -->
+  <g>
+    <polygon points="174,210 192,219 192,245 174,236" fill="#3df5c8"/>
+    <polygon points="212,229 230,238 230,264 212,255" fill="#3df5c8"/>
+    <polygon points="174,266 192,275 192,301 174,292" fill="#ffc247"/>
+    <polygon points="212,285 230,294 230,320 212,311" fill="#3df5c8"/>
+    <polygon points="174,322 192,331 192,357 174,348" fill="#3df5c8"/>
+    <polygon points="212,341 230,350 230,376 212,367" fill="#2a2550"/>
+  </g>
+  <!-- windows, right face: (256+u, 226-u/2+v) -->
+  <g>
+    <polygon points="282,243 300,234 300,260 282,269" fill="#2ed8ff"/>
+    <polygon points="320,224 338,215 338,241 320,250" fill="#2ed8ff"/>
+    <polygon points="282,299 300,290 300,316 282,325" fill="#2ed8ff"/>
+    <polygon points="320,280 338,271 338,297 320,306" fill="#2a2550"/>
+    <polygon points="282,355 300,346 300,372 282,381" fill="#2ed8ff"/>
+    <polygon points="320,336 338,327 338,353 320,362" fill="#ff6b9a"/>
+  </g>
+  <!-- rooftop block and antenna -->
+  <polygon points="236,116 256,106 276,116 256,126" fill="#dffdf4"/>
+  <polygon points="236,116 256,126 256,146 236,136" fill="#8d74ff"/>
+  <polygon points="256,126 276,116 276,136 256,146" fill="#3a2b8a"/>
+  <line x1="256" y1="106" x2="256" y2="72" stroke="#dffdf4" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="256" cy="66" r="7" fill="#ff6b9a"/>
+  <circle cx="256" cy="66" r="14" fill="#ff6b9a" opacity="0.35" filter="url(#glow)"/>
+</svg>

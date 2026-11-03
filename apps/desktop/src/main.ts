@@ -144,7 +144,7 @@ async function start(): Promise<void> {
   });
   await waitFor(WEB_ORIGIN);
 
-  const win = new BrowserWindow({ width: 1600, height: 1000, autoHideMenuBar: true, title: 'Office' });
+  const win = new BrowserWindow({ width: 1600, height: 1000, autoHideMenuBar: true, title: 'Office', icon: join(RES, 'icon.png') });
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url);
     return { action: 'deny' };
