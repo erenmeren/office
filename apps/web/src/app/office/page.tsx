@@ -6,11 +6,12 @@ import { OfficeAgentPanel, OfficeApprovals } from '@/components/office-panel';
 import { Card, CardContent } from '@/components/ui/card';
 import { DashboardStack } from '@/components/ui/kpi-card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
-import { officeRooms } from '@/lib/office';
+import { mailFromMessage, officeRooms, oneLine, waitingMail, type Mail } from '@/lib/office';
 import { useProject } from '@/lib/project';
-import { useAgents, useLiveSessions, useOverview } from '@/lib/queries';
+import { useActivity, useAgents, useLiveSessions, useOverview, type Project } from '@/lib/queries';
 import { statusTone } from '@/lib/status';
 import { useMounted } from '@/lib/use-mounted';
+import { uiSocket } from '@/lib/ws';
 
 /** Wall clock, ticking once a second. */
 function useNow() {
@@ -28,20 +29,60 @@ const LEGEND: [string, string][] = [
   ['#8d8ab3', 'idle'],
 ];
 
+/**
+ * What each room says and sends, live: the agent's latest `agent.text` or sent message as its bubble,
+ * and an envelope per `message.created` between agents of this project.
+ */
+function useFloorLive(projectId: string) {
+  const [said, setSaid] = useState<Record<string, string>>({});
+  const [mail, setMail] = useState<Mail[]>([]);
+  useEffect(() => {
+    const unsubProject = uiSocket().subscribe(`project:${projectId}`, 0, (m) => {
+      if (m.type !== 'event' || m.event.type !== 'agent.text') return;
+      const text = (m.event.payload as { text?: unknown } | undefined)?.text;
+      if (typeof text === 'string' && text.trim()) setSaid((s) => ({ ...s, [m.event.agentId]: oneLine(text) }));
+    });
+    const unsubGlobal = uiSocket().subscribe('global', 0, (m) => {
+      if (m.type !== 'message.created') return;
+      const now = Date.now();
+      const flights = mailFromMessage(m.message, projectId, now);
+      if (flights.length === 0) return;
+      setSaid((s) => ({ ...s, [flights[0].from]: oneLine(m.message.body) }));
+      setMail((list) => [...list.filter((x) => x.until > now), ...flights]);
+    });
+    return () => {
+      unsubProject();
+      unsubGlobal();
+    };
+  }, [projectId]);
+  return { said, mail };
+}
+
 /** Pixel Office: the team as an isometric floor, one themed room per agent, live from the overview and sessions. */
 export default function OfficePage() {
   const mounted = useMounted();
   const project = useProject();
-  const overview = useOverview(project?.id).data;
-  const sessions = useLiveSessions(project?.id).data ?? [];
+  if (!mounted || !project) return null;
+  // remounted per project so the live bubbles and envelopes of the previous one are dropped
+  return <OfficeBody key={project.id} project={project} />;
+}
+
+function OfficeBody({ project }: { project: Project }) {
+  const overview = useOverview(project.id).data;
+  const activity = useActivity(project.id).data ?? [];
+  const live = useFloorLive(project.id);
+  const sessions = useLiveSessions(project.id).data ?? [];
   const agents = useAgents().data ?? [];
   const now = useNow();
   const [picked, setPicked] = useState<string | null>(null);
   const rooms = officeRooms(overview?.team ?? [], sessions, agents);
   const selected = rooms.find((r) => r.agentId === picked) ?? rooms.find((r) => r.status !== 'idle') ?? rooms[0];
   const count = (f: (status: string) => boolean) => rooms.filter((r) => f(r.status)).length;
-
-  if (!mounted || !project) return null;
+  // bubble: what arrived live, else the waited question, else the last stored agent.text
+  const bubbles = Object.fromEntries(
+    rooms.map((r) => [r.agentId, live.said[r.agentId] ?? (r.waitingFor && oneLine(r.waitingFor.body)) ?? oneLine(activity.find((e) => e.agentId === r.agentId && e.type === 'agent.text')?.detail ?? '')]),
+  );
+  const mail = [...waitingMail(rooms), ...live.mail.filter((m) => m.until > now)];
 
   return (
     <DashboardStack>
@@ -74,7 +115,7 @@ export default function OfficePage() {
           {rooms.length === 0 ? (
             <CardContent className="py-10 text-center text-[13px] text-ink-3">No agents on the team of this project yet.</CardContent>
           ) : (
-            <OfficeFloor rooms={rooms} selected={selected?.agentId ?? null} onSelect={setPicked} now={now} />
+            <OfficeFloor rooms={rooms} selected={selected?.agentId ?? null} onSelect={setPicked} now={now} mail={mail} bubbles={bubbles} />
           )}
         </Card>
         <DashboardStack>

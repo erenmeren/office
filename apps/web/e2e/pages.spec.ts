@@ -150,7 +150,7 @@ authed.describe('every page renders without console noise', () => {
     const sub = { id: 'sub-fixture-41c', toolUseId: 'tu-sub', subagentType: 'Test Writer', description: 'write tests', status: 'running', startedAt: at(10), endedAt: null, commands: 1, files: 1 };
     const item = {
       runId: 'run-fixture', sessionId: 'ses-fixture', agentId: agent.id, agentName: agent.name, kind: 'task', status: 'running', taskId: 't', taskKey: 'T-104',
-      taskTitle: 'Login form', workerName: 'dev-laptop', startedAt: at(0), costUsd: 0.09, commands: 2, files: 2, subagents: [sub],
+      taskTitle: 'Login form', workerName: 'dev-laptop', startedAt: at(0), costUsd: 0.09, waitingFor: null, commands: 2, files: 2, subagents: [sub],
     };
     await page.route(`${API}/sessions?projectId=${project.id}&status=live`, (route) => route.fulfill({ json: [item] }));
     await page.route(`${API}/sessions/run-fixture`, (route) =>

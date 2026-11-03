@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { creatureFor, floorLayout, officeRooms, projector, roomOrigin, sprite, themeFor } from './office';
+import type { MessageView } from '@office/shared';
+import { creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, projector, roomOrigin, sprite, themeFor, waitingMail } from './office';
 import type { Agent, LiveSession, Overview } from './queries';
 
 describe('floorLayout', () => {
@@ -36,11 +37,28 @@ it('officeRooms joins the team with live sessions', () => {
     { agentId: 'a2', name: 'QA', role: 'qa', status: 'idle', currentWork: null, workerName: null, costTodayUsd: 0.5 },
   ];
   const sessions = [
-    { runId: 'r1', agentId: 'a1', status: 'waiting_reply', taskTitle: 'Ship it', kind: 'task', workerName: 'w', startedAt: 't', costUsd: 1.5, subagents: [{ subagentType: 'tester', status: 'running' }, { description: 'review', status: 'completed' }] },
+    { runId: 'r1', agentId: 'a1', status: 'waiting_reply', taskTitle: 'Ship it', kind: 'task', workerName: 'w', startedAt: 't', costUsd: 1.5, subagents: [{ subagentType: 'tester', status: 'running' }, { description: 'review', status: 'completed' }], waitingFor: { messageId: 'm', body: 'Why?', recipientAgentIds: ['a2'] } },
   ] as unknown as LiveSession[];
   const agents = [{ id: 'a1', slug: 'developer' }] as Agent[];
   expect(officeRooms(team, sessions, agents)).toEqual([
-    { agentId: 'a1', slug: 'developer', name: 'Developer', status: 'waiting_reply', task: 'Ship it', workerName: 'w', runId: 'r1', startedAt: 't', costUsd: 1.5, subs: [{ name: 'tester', done: false }, { name: 'review', done: true }] },
-    { agentId: 'a2', slug: 'qa', name: 'QA', status: 'idle', task: 'No assigned work', workerName: null, runId: null, startedAt: null, costUsd: 0.5, subs: [] },
+    { agentId: 'a1', slug: 'developer', name: 'Developer', status: 'waiting_reply', task: 'Ship it', workerName: 'w', runId: 'r1', startedAt: 't', costUsd: 1.5, subs: [{ name: 'tester', done: false }, { name: 'review', done: true }], waitingFor: { body: 'Why?', recipientAgentIds: ['a2'] } },
+    { agentId: 'a2', slug: 'qa', name: 'QA', status: 'idle', task: 'No assigned work', workerName: null, runId: null, startedAt: null, costUsd: 0.5, subs: [], waitingFor: null },
   ]);
+});
+
+it('mail: live messages fly for 3.2 s, waited questions stay, own project only', () => {
+  const m = { id: 'm1', projectId: 'p', senderAgentId: 'a1', deliveries: [{ recipientAgentId: 'a2' }, { recipientAgentId: 'a1' }, { recipientUserId: 'u', recipientAgentId: null }] } as unknown as MessageView;
+  expect(mailFromMessage(m, 'p', 1000)).toEqual([{ id: 'm1:a2', from: 'a1', to: 'a2', until: 4200 }]);
+  expect(mailFromMessage(m, 'other', 1000)).toEqual([]);
+  const rooms = officeRooms(
+    [{ agentId: 'a1', name: 'A', role: 'qa', status: 'running', currentWork: null, workerName: null, costTodayUsd: 0 }],
+    [{ runId: 'r', agentId: 'a1', status: 'waiting_reply', kind: 'task', subagents: [], waitingFor: { messageId: 'm', body: 'Why?', recipientAgentIds: ['a2'] } }] as unknown as LiveSession[],
+    [],
+  );
+  expect(waitingMail(rooms)).toEqual([{ id: 'wait:a1:a2', from: 'a1', to: 'a2', until: Infinity }]);
+});
+
+it('oneLine keeps the first line and cuts long text', () => {
+  expect(oneLine('  Typecheck green\nwiring SSE')).toBe('Typecheck green');
+  expect(oneLine('x'.repeat(80), 10)).toBe('xxxxxxxxx…');
 });

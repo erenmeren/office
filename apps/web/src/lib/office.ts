@@ -1,3 +1,4 @@
+import type { MessageView } from '@office/shared';
 import type { Agent, LiveSession, Overview } from './queries';
 
 /** Floor geometry of the Pixel Office (design option 3a): 300×260 rooms on a 430×390 grid, three per row. */
@@ -121,6 +122,33 @@ export interface OfficeRoom {
   startedAt: string | null;
   costUsd: number;
   subs: { name: string; done: boolean }[];
+  /** the question this agent waits an answer to, and who it asked */
+  waitingFor: { body: string; recipientAgentIds: string[] } | null;
+}
+
+/** An envelope in flight from one room to another; `until` is when a transient one disappears. */
+export interface Mail {
+  id: string;
+  from: string;
+  to: string;
+  until: number;
+}
+
+/** Envelopes for a live `message.created` of this project sent by an agent to agents, shown for 3.2 s. */
+export function mailFromMessage(m: MessageView, projectId: string, now: number): Mail[] {
+  if (m.projectId !== projectId || !m.senderAgentId) return [];
+  const from = m.senderAgentId;
+  return m.deliveries.flatMap((d) => (d.recipientAgentId && d.recipientAgentId !== from ? [{ id: `${m.id}:${d.recipientAgentId}`, from, to: d.recipientAgentId, until: now + 3200 }] : []));
+}
+
+/** Envelopes that stay while a room waits for its reply. */
+export const waitingMail = (rooms: OfficeRoom[]): Mail[] =>
+  rooms.flatMap((r) => (r.status === 'waiting_reply' && r.waitingFor ? r.waitingFor.recipientAgentIds.map((to) => ({ id: `wait:${r.agentId}:${to}`, from: r.agentId, to, until: Infinity })) : []));
+
+/** The first line of an agent's text, cut for a speech bubble. */
+export function oneLine(text: string, max = 64): string {
+  const line = text.trim().split('\n')[0].trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 }
 
 /** One room per team member: the overview row plus its live session, if any. */
@@ -138,6 +166,7 @@ export function officeRooms(team: Overview['team'], sessions: LiveSession[], age
       startedAt: s?.startedAt ?? null,
       costUsd: s?.costUsd ?? m.costTodayUsd,
       subs: (s?.subagents ?? []).map((x) => ({ name: x.subagentType ?? x.description ?? 'subagent', done: x.status !== 'running' })),
+      waitingFor: s?.waitingFor ? { body: s.waitingFor.body, recipientAgentIds: s.waitingFor.recipientAgentIds } : null,
     };
   });
 }
