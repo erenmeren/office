@@ -198,6 +198,20 @@ Stopping a run (`POST /runs/:id/cancel`) marks it `cancelled` and writes an audi
 
 Two environment variables are new in Phase 6 (both optional, see `.env.example`): `OFFICE_MACHINE_ID` replaces `/etc/machine-id` on the API and on workers of the same machine (for hosts without one), and `OFFICE_GIT_TIMEOUT_SECONDS` (default 600) limits one request on the git endpoint.
 
+## 17. Desktop app (Linux)
+
+`apps/desktop` packages the whole stack as one Electron app, so Docker, `.env` and the three dev servers are not needed. The app starts a bundled Postgres 17 (`@embedded-postgres/linux-x64`, TCP on `127.0.0.1:5440`, scram password generated on first run), runs `apps/desktop/server/boot.mjs` (creates the `office` database, applies `packages/db/prisma/migrations` with Prisma's `_prisma_migrations` bookkeeping, seeds, enrolls the bundled worker), then the API on `127.0.0.1:4100`, the Next.js standalone server on `127.0.0.1:3100` and the local worker (`claude` runtime, capacity 2, name `desktop`), and opens the UI in a window. Closing the window stops everything, Postgres included.
+
+```bash
+pnpm --filter @office/desktop bundle   # builds api/worker/db, the web standalone build, pnpm deploy into apps/desktop/build
+pnpm --filter @office/desktop start    # run unpackaged from apps/desktop/build
+pnpm --filter @office/desktop dist     # bundle + AppImage in apps/desktop/release/office-<version>.AppImage
+```
+
+State lives under `$XDG_DATA_HOME/office` (default `~/.local/share/office`): `pg/` (database cluster), `data/` (`OFFICE_DATA_DIR`: artifacts, greenfield repositories under `data/repos`), `workspaces/` (the seeded sandbox repository), `worker/` (worker home and credential), `logs/` (`postgres.log`, `boot.log`, `api.log`, `web.log`, `worker.log`), `pg-password` and `cookie-secret` (0600). `OFFICE_DESKTOP_DATA` overrides the directory.
+
+Optional `~/.local/share/office/env` holds `KEY=VALUE` lines passed to the API and the worker; `OFFICE_WORKSPACE_ROOTS` there is appended to the defaults (`workspaces` and `data/repos`), so add the repositories you want missions to run on, e.g. `OFFICE_WORKSPACE_ROOTS=/home/me/projects`. The worker uses the machine's Claude Code login as usual. Limits: Linux x64 only; the bundled Postgres has no pgvector, so the unused `embedding` column is created with a stub `vector` type (`apps/desktop/pgstub`); the ports 5440, 4100 and 3100 are fixed (the web bundle is built with `NEXT_PUBLIC_API_URL=http://127.0.0.1:4100`); the Docker database is not migrated into the app. The AppImage (about 420 MB) needs `libfuse.so.2` (`fuse2` on Arch-based systems); without it run `release/linux-unpacked/office` or extract with `--appimage-extract`.
+
 ## Claude authentication
 
 The worker inherits the machine's Claude Code login (`claude login`) or `ANTHROPIC_API_KEY`; nothing is configured in Agent Office itself.

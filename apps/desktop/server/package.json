@@ -1,0 +1,14 @@
+{
+  "name": "@office/desktop-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime bundle of the desktop app: API, worker, db client and the Postgres binaries, deployed by apps/desktop/scripts/bundle.sh",
+  "dependencies": {
+    "@embedded-postgres/linux-x64": "17.11.0-beta.19",
+    "@office/api": "workspace:*",
+    "@office/db": "workspace:*",
+    "@office/worker": "workspace:*",
+    "pg": "^8.23.1"
+  }
+}

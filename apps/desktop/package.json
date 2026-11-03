@@ -1,0 +1,46 @@
+{
+  "name": "@office/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Office desktop app (Linux): Electron shell that runs the bundled Postgres, API, worker and web UI",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "bundle": "scripts/bundle.sh",
+    "start": "pnpm build && electron .",
+    "dist": "pnpm bundle && pnpm build && electron-builder --linux AppImage"
+  },
+  "devDependencies": {
+    "electron": "^45.2.1",
+    "electron-builder": "^26.18.0",
+    "typescript": "~5.9"
+  },
+  "build": {
+    "appId": "dev.office.desktop",
+    "productName": "Office",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build",
+        "to": "."
+      }
+    ],
+    "npmRebuild": false,
+    "linux": {
+      "executableName": "office",
+      "artifactName": "office-${version}.${ext}",
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    }
+  }
+}
