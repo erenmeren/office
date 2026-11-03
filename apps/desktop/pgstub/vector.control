@@ -1,0 +1,5 @@
+# Stand-in for pgvector in the desktop build: the bundled Postgres has no pgvector and the
+# embedding column is unused (CLAUDE.md: keyword search first). Replace with real pgvector before any vector query.
+comment = 'stub vector type (desktop build, pgvector not bundled)'
+default_version = '0.0.0'
+relocatable = true
