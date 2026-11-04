@@ -235,5 +235,39 @@ export async function machineSkills(prisma: PrismaClient, home = homedir()): Pro
   await walkPlugins(join(home, '.claude', 'plugins', 'cache'), PLUGIN_DEPTH - 1);
   const imported = await prisma.skill.findMany({ where: { source: 'local', sourceRef: { in: found.map((f) => f.path) } }, select: { id: true, sourceRef: true } });
   const byPath = new Map(imported.map((s) => [s.sourceRef, s.id]));
-  return found.sort((a, b) => a.origin.localeCompare(b.origin) || a.name.localeCompare(b.name)).map((f) => ({ ...f, skillId: byPath.get(f.path) ?? null }));
+  // the owner's own skills first: on a name clash with a plugin's skill, theirs is the one imported
+  const rank = (o: string) => (o === 'user' ? 0 : 1);
+  return found.sort((a, b) => rank(a.origin) - rank(b.origin) || a.origin.localeCompare(b.origin) || a.name.localeCompare(b.name)).map((f) => ({ ...f, skillId: byPath.get(f.path) ?? null }));
+}
+
+/**
+ * Keeps the owner's Claude Code skills in the library without a click: every skill found on this machine is imported
+ * `approved` (they are the owner's own), an already imported one gets a new version when its files changed. A skill whose
+ * name is taken by another skill is skipped and logged once per sync. Runs at API start and every few minutes.
+ */
+export async function syncMachineSkills(prisma: PrismaClient, log: { info: (o: object, m: string) => void; warn: (o: object, m: string) => void }, home = homedir()) {
+  const counts = { imported: 0, updated: 0, skipped: 0 };
+  for (const found of await machineSkills(prisma, home)) {
+    try {
+      if (found.skillId) {
+        const { created } = await addSkillVersion(prisma, found.skillId, await readSkillDir(found.path));
+        if (created) counts.updated++;
+        continue;
+      }
+      const files = await readSkillDir(found.path);
+      const { name } = validateSkillFiles(files, basename(found.path));
+      if (await prisma.skill.findUnique({ where: { name } })) {
+        counts.skipped++;
+        log.warn({ name, path: found.path }, 'machine skill not imported: a skill of that name exists');
+        continue;
+      }
+      await createSkill(prisma, { name, files, source: 'local', sourceRef: found.path, status: 'approved' });
+      counts.imported++;
+    } catch (err) {
+      counts.skipped++;
+      log.warn({ err, path: found.path }, 'machine skill not imported');
+    }
+  }
+  if (counts.imported || counts.updated) log.info(counts, 'machine skills synced');
+  return counts;
 }

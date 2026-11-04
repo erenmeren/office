@@ -32,6 +32,9 @@ import { claudeSessionRoutes } from './routes/claude-sessions.js';
 import { terminalRoutes } from './routes/terminals.js';
 import { browseRoutes } from './routes/browse.js';
 import { WorkerGateway } from './ws/worker-gateway.js';
+import { syncMachineSkills } from './services/skill-service.js';
+
+const MACHINE_SKILL_SYNC_MS = 10 * 60_000;
 import { UiGateway } from './ws/ui-gateway.js';
 
 declare module 'fastify' {
@@ -108,11 +111,22 @@ export async function buildApp(
   await app.register(claudeSessionRoutes);
   await app.register(terminalRoutes);
   await app.register(browseRoutes, { config });
+  // the owner's own Claude skills (~/.claude) flow into the library on their own; tests run the sync themselves
+  const syncSkills = () => syncMachineSkills(app.prisma, app.log).catch((err: unknown) => app.log.error({ err }, 'machine skill sync failed'));
+  let skillSync: NodeJS.Timeout | undefined;
   app.addHook('onReady', async () => {
     await gateway.terminals.load();
     scheduler.start();
+    if (config.schedulerIntervalMs > 0) {
+      void syncSkills();
+      skillSync = setInterval(() => void syncSkills(), MACHINE_SKILL_SYNC_MS);
+      skillSync.unref();
+    }
   });
-  app.addHook('onClose', async () => scheduler.stop());
+  app.addHook('onClose', async () => {
+    clearInterval(skillSync);
+    scheduler.stop();
+  });
 
   return app;
 }
