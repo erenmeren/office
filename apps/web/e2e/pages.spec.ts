@@ -97,6 +97,17 @@ authed.describe('every page renders without console noise', () => {
     await expect(page.getByText('E2E verdict: all tasks done')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Review run events' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'mission-review.md' })).toBeVisible();
+
+    // handoff to a manual session: the terminal opens with the mission's summary beside it
+    const term = { id: 'term-handoff', projectId: project.id, dir: '/tmp/office-e2e/p', workerId: 'w', claudeSessionId: 'cli-eeee-5555', status: 'running', pid: 7, startedAt: new Date().toISOString() };
+    await page.route(`${API}/terminals`, (route) => (route.request().method() === 'POST' ? route.fulfill({ status: 201, json: term }) : route.fulfill({ json: [term] })));
+    await page.route(`${API}/claude-sessions`, (route) => route.fulfill({ json: { sessions: [] } }));
+    await page.getByRole('button', { name: 'Open a manual session here' }).click();
+    await page.waitForURL(`**/sessions?terminal=term-handoff&mission=${id}`);
+    await expect(page.getByText('From mission:')).toBeVisible();
+    await expect(page.getByText('E2E verdict: all tasks done')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Copy summary' })).toBeVisible();
+    await expect(page.getByRole('application', { name: 'Terminal' })).toBeVisible();
     expectQuiet(noise);
   });
 
@@ -405,13 +416,17 @@ authed('audit: rows render, action filter narrows, load older appends', async ({
 authed('claude cli sessions: grouped by project and folder, read-only transcript, open in terminal', async ({ page, request: api, noise }) => {
   const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string; name: string; repoPath: string }[];
   const now = Date.now();
-  const mine = { sessionId: 'cli-aaaa-1111', title: 'Fix the login form', cwd: project.repoPath, gitBranch: 'main', createdAt: now - 7200_000, lastModified: now - 60_000, projectId: project.id };
-  const other = { sessionId: 'cli-bbbb-2222', title: 'Scratch notes', cwd: '/tmp/office-e2e/elsewhere', lastModified: now - 300_000, live: { pid: 4242, kind: 'interactive', status: 'busy' }, projectId: null };
-  await page.route(`${API}/claude-sessions`, (route) => route.fulfill({ json: { sessions: [mine, other] } }));
+  const w = { workerId: 'w-fixture', workerName: 'dev-laptop' };
+  const mine = { ...w, sessionId: 'cli-aaaa-1111', title: 'Fix the login form', cwd: project.repoPath, gitBranch: 'main', createdAt: now - 7200_000, lastModified: now - 60_000, projectId: project.id };
+  const other = { ...w, sessionId: 'cli-bbbb-2222', title: 'Scratch notes', cwd: '/tmp/office-e2e/elsewhere', lastModified: now - 300_000, live: { pid: 4242, kind: 'interactive', status: 'busy' }, projectId: null };
+  const bg = { ...w, sessionId: 'cli-dddd-4444', title: 'Nightly refactor', cwd: project.repoPath, lastModified: now - 120_000, live: { pid: 4343, kind: 'background', state: 'running', id: 'cli-dddd', name: 'nightly' }, projectId: project.id };
+  await page.route(`${API}/claude-sessions`, (route) => route.fulfill({ json: { sessions: [mine, other, bg] } }));
   await page.route(`${API}/claude-sessions/cli-aaaa-1111/messages?**`, (route) =>
     route.fulfill({ json: { kind: 'messages', entries: [{ uuid: 'u1', role: 'user', text: 'please fix the login form', tools: [] }, { uuid: 'a1', role: 'assistant', text: 'On it.', tools: ['Read', 'Edit'] }], nextOffset: null } }),
   );
   await page.route(`${API}/claude-sessions/cli-bbbb-2222/messages?**`, (route) => route.fulfill({ json: { kind: 'messages', entries: [], nextOffset: null } }));
+  await page.route(`${API}/claude-sessions/cli-dddd-4444/messages?**`, (route) => route.fulfill({ json: { kind: 'messages', entries: [], nextOffset: null } }));
+  await page.route(`${API}/claude-sessions/background/cli-dddd/stop`, (route) => route.fulfill({ json: { kind: 'background', output: 'stopped cli-dddd\n' } }));
   await page.route(`${API}/claude-sessions/cli-aaaa-1111/open`, (route) => route.fulfill({ json: { kind: 'open', terminal: 'kitty' } }));
   await page.goto('/sessions');
   await page.waitForLoadState('networkidle');
@@ -432,6 +447,23 @@ authed('claude cli sessions: grouped by project and folder, read-only transcript
 
   await folder.getByRole('button', { name: /Scratch notes/ }).click();
   await expect(page.getByRole('button', { name: 'Open in terminal' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Resume here' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Fork here' })).toBeEnabled();
+
+  // a background session: attach and stop instead of resume; the filter and the search narrow the list
+  const cliFilter = page.getByRole('radiogroup', { name: 'Filter Claude sessions' });
+  await cliFilter.getByRole('radio', { name: 'Background' }).click();
+  await expect(card.getByRole('button', { name: /Nightly refactor/ })).toBeVisible();
+  await expect(card.getByRole('button', { name: /Fix the login form/ })).toHaveCount(0);
+  await card.getByRole('button', { name: /Nightly refactor/ }).click();
+  await expect(page.getByRole('button', { name: 'Attach here' })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.getByRole('status')).toHaveText('stopped cli-dddd');
+  await cliFilter.getByRole('radio', { name: 'All' }).click();
+  await page.getByLabel('Search sessions').fill('scratch');
+  await expect(card).toHaveCount(0);
+  await expect(folder.getByRole('button', { name: /Scratch notes/ })).toBeVisible();
+  await page.getByLabel('Search sessions').fill('');
   await folder.getByRole('button', { name: 'Add as project' }).click();
   await expect(page.getByRole('dialog').getByLabel('Repository path')).toHaveValue('/tmp/office-e2e/elsewhere');
   await expect(page.getByRole('dialog').getByLabel('Slug')).toHaveValue('elsewhere');
@@ -453,4 +485,24 @@ authed('manual sessions: an exited Office terminal is listed and shown, with its
   await expect(page.getByRole('application', { name: 'Terminal' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Dismiss' })).toBeVisible();
   expectQuiet(noise);
+});
+
+// a real manual session through the local worker: only with a worker connected (OFFICE_E2E_REAL_TERMINAL=1)
+authed('manual sessions: a real claude runs in the Office terminal and its exit is shown', async ({ page }) => {
+  authed.skip(!process.env.OFFICE_E2E_REAL_TERMINAL, 'needs a local worker with claude; set OFFICE_E2E_REAL_TERMINAL=1');
+  await page.goto('/sessions');
+  await page.waitForLoadState('networkidle');
+  await page.getByRole('button', { name: 'New manual session' }).click();
+  const manual = page.getByRole('region', { name: 'Manual sessions' });
+  await expect(manual.getByText('running')).toBeVisible({ timeout: 15_000 });
+  const term = page.getByRole('application', { name: 'Terminal' });
+  await expect(term.locator('.xterm-rows')).toContainText(/Claude|trust|❯|>/, { timeout: 30_000 });
+  await term.click();
+  // whatever Claude asks first (folder trust or the prompt), Ctrl+C twice ends it
+  await page.keyboard.press('Control+C');
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Control+C');
+  await expect(manual.getByText('exited')).toBeVisible({ timeout: 20_000 });
+  await page.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(manual).toHaveCount(0);
 });

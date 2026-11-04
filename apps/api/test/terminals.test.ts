@@ -39,7 +39,7 @@ describe('manual sessions (terminals on the local worker)', () => {
     const project = (await req('POST', '/projects', { name: 'P', slug: 'p', repoPath: '/tmp/office-ws/p' })).json();
     const opening = req('POST', '/terminals', { projectId: project.id, cols: 100, rows: 30 });
     const open = await w.waitFor('terminal.open');
-    expect(open).toMatchObject({ dir: '/tmp/office-ws/p', cols: 100, rows: 30 });
+    expect(open).toMatchObject({ dir: '/tmp/office-ws/p', cols: 100, rows: 30, fork: false });
     expect(open.resumeSessionId).toBeUndefined();
     w.send({ type: 'terminal.opened', terminalId: open.terminalId, pid: 42, dir: open.dir, claudeSessionId: open.claudeSessionId, startedAt: new Date().toISOString() });
     const res = await opening;
@@ -51,14 +51,28 @@ describe('manual sessions (terminals on the local worker)', () => {
     await until(() => t.app.gateway.terminals.scrollback(open.terminalId) !== '', 'scrollback');
     const ui = await uiClient();
     ui.send({ type: 'subscribe', topic: `terminal:${open.terminalId}` });
-    await until(() => ui.msgs.length >= 1, 'replay');
+    await until(() => ui.msgs.length >= 2, 'replay');
     expect(ui.msgs[0]).toEqual({ type: 'terminal.output', topic: `terminal:${open.terminalId}`, data: b64('hello ') });
+    expect(ui.msgs[1]).toEqual({ type: 'terminal.control', topic: `terminal:${open.terminalId}`, yours: true });
     w.send({ type: 'terminal.output', terminalId: open.terminalId, data: b64('world') });
-    await until(() => ui.msgs.length >= 2, 'live output');
-    expect(ui.msgs[1]).toMatchObject({ type: 'terminal.output', data: b64('world') });
+    await until(() => ui.msgs.length >= 3, 'live output');
+    expect(ui.msgs[2]).toMatchObject({ type: 'terminal.output', data: b64('world') });
 
     ui.send({ type: 'terminal.input', terminalId: open.terminalId, data: 'ls\r' });
     expect(await w.waitFor('terminal.input')).toEqual({ type: 'terminal.input', terminalId: open.terminalId, data: 'ls\r' });
+
+    // a second tab takes the keyboard; the first is told and its keystrokes are dropped until it takes it back
+    const ui2 = await uiClient();
+    ui2.send({ type: 'subscribe', topic: `terminal:${open.terminalId}` });
+    await until(() => ui.msgs.some((m) => m.type === 'terminal.control' && !m.yours), 'control lost');
+    ui.send({ type: 'terminal.input', terminalId: open.terminalId, data: 'ignored' });
+    ui2.send({ type: 'terminal.input', terminalId: open.terminalId, data: 'typed' });
+    expect(await w.waitFor('terminal.input')).toMatchObject({ data: 'typed' });
+    ui.send({ type: 'terminal.control', terminalId: open.terminalId });
+    await until(() => ui2.msgs.some((m) => m.type === 'terminal.control' && !m.yours), 'control taken back');
+    ui.send({ type: 'terminal.input', terminalId: open.terminalId, data: 'again' });
+    expect(await w.waitFor('terminal.input')).toMatchObject({ data: 'again' });
+    ui2.ws.close();
     ui.send({ type: 'terminal.resize', terminalId: open.terminalId, cols: 80, rows: 24 });
     expect(await w.waitFor('terminal.resize')).toMatchObject({ cols: 80, rows: 24 });
 
@@ -85,6 +99,18 @@ describe('manual sessions (terminals on the local worker)', () => {
     w.send({ type: 'terminal.error', terminalId: open.terminalId, code: 'session_live', message: 'pid 7' });
     expect((await live).statusCode).toBe(409);
     expect((await req('GET', '/terminals')).json()).toEqual([]);
+
+    // a fork gets a new session id; attach carries the background id
+    const forking = req('POST', '/terminals', { dir: '/tmp/office-ws/p', resumeSessionId: 'old-1', fork: true });
+    const fork = await w.waitFor('terminal.open');
+    expect(fork).toMatchObject({ resumeSessionId: 'old-1', fork: true });
+    expect(fork.claudeSessionId).not.toBe('old-1');
+    w.send({ type: 'terminal.error', terminalId: fork.terminalId, code: 'spawn_failed', message: 'x' });
+    expect((await forking).statusCode).toBe(502);
+    const attaching = req('POST', '/terminals', { dir: '/tmp/office-ws/p', attachId: 'ab12cd34' });
+    expect(await w.waitFor('terminal.open')).toMatchObject({ attachId: 'ab12cd34' });
+    expect((await req('POST', '/terminals', { dir: '/tmp/office-ws/p', workerId: 'nope' })).json()).toMatchObject({ error: 'worker_offline' });
+    void attaching;
 
     // a terminal from before an API restart: announced by the worker, joined with the project by its folder
     w.send({ type: 'terminal.opened', terminalId: 'old-term', pid: 5, dir: '/tmp/office-ws/p/deep', claudeSessionId: 'c1', startedAt: '2026-11-04T00:00:00.000Z' });

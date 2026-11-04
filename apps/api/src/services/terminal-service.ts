@@ -13,6 +13,10 @@ export interface TerminalView {
   workerId: string;
   claudeSessionId: string;
   resumedSessionId?: string;
+  /** a fork of `resumedSessionId` into a new session */
+  forked?: boolean;
+  /** `claude attach <id>` to a background session */
+  attachId?: string;
   pid?: number;
   status: TerminalStatus;
   exitCode?: number | null;
@@ -28,6 +32,7 @@ interface Entry extends TerminalView {
 export interface TerminalTransport {
   send(workerId: string, msg: ApiToWorker): boolean;
   localWorkerId(): string | undefined;
+  isConnected(workerId: string): boolean;
 }
 
 const OPEN_TIMEOUT_MS = 10_000;
@@ -65,28 +70,46 @@ export class TerminalRegistry {
     return e ? Buffer.concat(e.chunks).toString('base64') : '';
   }
 
-  open(opts: { projectId: string | null; dir: string; resumeSessionId?: string; cols: number; rows: number }): Promise<TerminalView> {
-    const workerId = this.transport.localWorkerId();
-    if (!workerId) return Promise.reject(new HttpError(503, 'no_local_worker', 'no worker is connected from this machine'));
+  open(opts: { projectId: string | null; dir: string; resumeSessionId?: string; fork?: boolean; attachId?: string; workerId?: string; cols: number; rows: number }): Promise<TerminalView> {
+    const workerId = opts.workerId ? (this.transport.isConnected(opts.workerId) ? opts.workerId : undefined) : this.transport.localWorkerId();
+    if (!workerId) return Promise.reject(new HttpError(503, opts.workerId ? 'worker_offline' : 'no_local_worker', opts.workerId ? 'that worker is not connected' : 'no worker is connected from this machine'));
     if ([...this.entries.values()].filter((e) => e.status !== 'exited').length >= MAX_RUNNING) {
       return Promise.reject(new HttpError(409, 'too_many_terminals', `at most ${MAX_RUNNING} manual sessions at once`));
     }
     const id = randomUUID();
-    const claudeSessionId = opts.resumeSessionId ?? randomUUID();
+    // a plain resume keeps the session id; a fork and a new session get a fresh one; attach shows the background session itself
+    const claudeSessionId = opts.resumeSessionId && !opts.fork ? opts.resumeSessionId : randomUUID();
     this.entries.set(id, {
-      id, projectId: opts.projectId, dir: opts.dir, workerId, claudeSessionId, resumedSessionId: opts.resumeSessionId,
+      id, projectId: opts.projectId, dir: opts.dir, workerId, claudeSessionId, resumedSessionId: opts.resumeSessionId, forked: opts.fork || undefined, attachId: opts.attachId,
       status: 'starting', startedAt: new Date().toISOString(), chunks: [], bytes: 0,
     });
     return new Promise<TerminalView>((resolve, reject) => {
       const timer = setTimeout(() => this.settle(id, new HttpError(504, 'worker_timeout', 'the worker did not start the session in time')), OPEN_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
-      this.transport.send(workerId, { type: 'terminal.open', terminalId: id, dir: opts.dir, claudeSessionId, resumeSessionId: opts.resumeSessionId, cols: opts.cols, rows: opts.rows });
+      this.transport.send(workerId, { type: 'terminal.open', terminalId: id, dir: opts.dir, claudeSessionId, resumeSessionId: opts.resumeSessionId, fork: !!opts.fork, attachId: opts.attachId, cols: opts.cols, rows: opts.rows });
     });
   }
 
-  input(id: string, data: string) {
+  private controllers = new Map<string, object>();
+
+  /** Gives the keyboard of `id` to `holder` (a UI socket); the previous holder is told through `onLost`. */
+  takeControl(id: string, holder: object, onLost: (previous: object) => void) {
+    const previous = this.controllers.get(id);
+    if (previous === holder) return;
+    this.controllers.set(id, holder);
+    if (previous) onLost(previous);
+  }
+
+  releaseControl(holder: object) {
+    for (const [id, h] of this.controllers) if (h === holder) this.controllers.delete(id);
+  }
+
+  /** Keystrokes from `holder`; ignored unless it holds the keyboard. */
+  input(id: string, data: string, holder?: object) {
     const e = this.entries.get(id);
-    if (e && e.status === 'running') this.transport.send(e.workerId, { type: 'terminal.input', terminalId: id, data });
+    if (!e || e.status !== 'running') return;
+    if (holder && this.controllers.get(id) !== holder) return;
+    this.transport.send(e.workerId, { type: 'terminal.input', terminalId: id, data });
   }
 
   resize(id: string, cols: number, rows: number) {
@@ -100,6 +123,7 @@ export class TerminalRegistry {
     if (!e) throw new HttpError(404, 'not_found');
     if (e.status === 'exited') {
       this.entries.delete(id);
+      this.controllers.delete(id);
       this.hub.publish('global', { type: 'terminal.changed', terminalId: id });
     } else this.transport.send(e.workerId, { type: 'terminal.close', terminalId: id });
     return view(e);

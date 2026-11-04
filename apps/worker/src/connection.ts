@@ -75,8 +75,12 @@ export class WorkerConnection {
     this.heartbeatMs = opts.heartbeatMs ?? 10_000;
     this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
     this.backoffMs = this.reconnectBaseMs;
-    this.sessions = opts.sessions ?? { store: claudeSessionStore, liveSessions: readLiveSessions, spawnTerminal: openTerminal };
-    this.terminals = new TerminalManager(config.workspaceRoots, (msg) => this.send(msg), { liveSessions: this.sessions.liveSessions, ...opts.terminals });
+    this.sessions = opts.sessions ?? { store: claudeSessionStore, liveSessions: () => readLiveSessions((m) => this.log.warn(m)), spawnTerminal: openTerminal };
+    this.terminals = new TerminalManager(config.workspaceRoots, (msg) => this.send(msg), {
+      liveSessions: this.sessions.liveSessions,
+      connected: () => this.welcomed && this.socket?.readyState === WebSocket.OPEN,
+      ...opts.terminals,
+    });
     this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log, {
       apiUrl: config.apiUrl,
       canClone: config.canClone,

@@ -18,7 +18,7 @@ export function DashboardKpis() {
         label="Running sessions"
         value={o?.runningSessions ?? '–'}
         of={o && `/ ${o.maxConcurrentRuns}`}
-        sub={o && `${o.team.filter((m) => m.status === 'needs_approval').length} paused for approval`}
+        sub={o && `${o.team.filter((m) => m.status === 'needs_approval').length} paused for approval${o.manualSessions ? ` · ${o.manualSessions} manual` : ''}`}
       />
       <KpiCard label="Pending tasks" value={o?.pendingTasks ?? '–'} sub={o && `${o.awaitingApproval} awaiting approval`} />
       <KpiCard label="Cost today" value={o ? usd(o.costTodayUsd) : '–'} sub={o && `${pct}% of ${usd(o.dailyBudgetUsd)} daily budget`} />

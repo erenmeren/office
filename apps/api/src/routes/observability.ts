@@ -20,7 +20,12 @@ export async function observabilityRoutes(app: FastifyInstance) {
     return projectCosts(app.prisma, id, q.days, q.groupBy);
   });
 
-  app.get('/projects/:id/overview', async (req) => projectOverview(app.prisma, Id.parse(req.params).id));
+  app.get('/projects/:id/overview', async (req) => {
+    const { id } = Id.parse(req.params);
+    const overview = await projectOverview(app.prisma, id);
+    // manual sessions live in the gateway, not the database
+    return { ...overview, manualSessions: app.gateway.terminals.list().filter((t) => t.projectId === id && t.status !== 'exited').length };
+  });
 
   app.get('/projects/:id/activity', async (req) => {
     const { id } = Id.parse(req.params);

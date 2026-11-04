@@ -11,6 +11,12 @@ const Open = z
     /** a folder instead of a project (an unregistered folder from the Claude CLI list) */
     dir: z.string().min(1).optional(),
     resumeSessionId: z.string().min(1).optional(),
+    /** with resumeSessionId: continue in a copy (`--fork-session`), the source may keep running */
+    fork: z.boolean().default(false),
+    /** `claude attach <id>` to a background session (its short id or session id) */
+    attachId: z.string().min(1).optional(),
+    /** a connected worker other than the local one (sessions found on it) */
+    workerId: z.string().min(1).optional(),
     cols: TerminalSizeSchema.shape.cols.default(120),
     rows: TerminalSizeSchema.shape.rows.default(32),
   })
@@ -32,8 +38,11 @@ export async function terminalRoutes(app: FastifyInstance) {
       const projects = await app.prisma.project.findMany({ select: { id: true, repoPath: true } });
       projectId = projects.find((p) => dir === p.repoPath || dir.startsWith(p.repoPath + '/'))?.id ?? null;
     }
-    const t = await app.gateway.terminals.open({ projectId, dir, resumeSessionId: body.resumeSessionId, cols: body.cols, rows: body.rows });
-    await audit(app.prisma, { userId: req.user?.id, action: 'terminal.opened', targetType: 'terminal', targetId: t.id, detail: { dir, claudeSessionId: t.claudeSessionId, resumed: !!body.resumeSessionId } });
+    const t = await app.gateway.terminals.open({ projectId, dir, resumeSessionId: body.resumeSessionId, fork: body.fork, attachId: body.attachId, workerId: body.workerId, cols: body.cols, rows: body.rows });
+    await audit(app.prisma, {
+      userId: req.user?.id, action: 'terminal.opened', targetType: 'terminal', targetId: t.id,
+      detail: { dir, workerId: t.workerId, claudeSessionId: t.claudeSessionId, resumed: !!body.resumeSessionId, forked: body.fork, attached: body.attachId ?? null },
+    });
     return reply.code(201).send(t);
   });
 

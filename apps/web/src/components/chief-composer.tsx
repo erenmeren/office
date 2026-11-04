@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { clearMissionDraft, useMissionDraft } from '@/lib/mission-draft';
 import { useQueryClient } from '@tanstack/react-query';
 import { FolderGit2, Send, ShieldCheck, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -22,7 +23,11 @@ function Chip({ icon: Icon, children }: { icon: typeof FolderGit2; children: Rea
 /** "Request to Chief": starts a mission; the first line becomes its title, the whole text its request. */
 export function ChiefComposer({ project, chief, onCreated }: { project?: Project; chief?: Agent; onCreated: (mission: MissionSummary) => void }) {
   const qc = useQueryClient();
-  const [text, setText] = useState('');
+  // a draft handed over from a Claude session's transcript fills the box until the owner edits or sends it
+  const draft = useMissionDraft();
+  const [edited, setEdited] = useState<string>();
+  const text = edited ?? draft ?? '';
+  const setText = setEdited;
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const settings = useProjectSettings(project?.id).data;
@@ -34,6 +39,7 @@ export function ChiefComposer({ project, chief, onCreated }: { project?: Project
     try {
       const title = text.trim().split('\n')[0].slice(0, 120);
       const mission = await post<MissionSummary>('/missions', { projectId: project.id, title, request: text.trim() });
+      clearMissionDraft();
       setText('');
       await qc.invalidateQueries({ queryKey: ['missions'] });
       onCreated(mission);

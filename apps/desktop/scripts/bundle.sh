@@ -21,6 +21,12 @@ cp apps/desktop/pgstub/* "$PG/share/postgresql/extension/"
 find "$PG/lib" -type l -exec sh -c 'cp --remove-destination "$(readlink -f "$1")" "$1"' _ {} \;
 # dev-only trees that pnpm deploy copies along with the workspace packages
 rm -rf "$OUT"/server/node_modules/@office/*/{src,test,data,tsconfig.json,vitest.config.ts}
+# node-pty (manual sessions) is a native module: the worker runs under Electron's Node (ELECTRON_RUN_AS_NODE), whose ABI differs
+# from the system Node that pnpm built it with, so rebuild it against Electron's headers (node-addon-api is hoisted next to it)
+ELECTRON_VERSION=$(node -p "require('./apps/desktop/node_modules/electron/package.json').version")
+NODE_GYP=$(ls -d node_modules/.pnpm/node-gyp@*/node_modules/node-gyp/bin/node-gyp.js | head -1)
+(cd "$OUT/server/node_modules/node-pty" && node "$OLDPWD/$NODE_GYP" rebuild --target="$ELECTRON_VERSION" --arch=x64 --dist-url=https://electronjs.org/headers)
+ELECTRON_RUN_AS_NODE=1 apps/desktop/node_modules/.bin/electron -e "require('./$OUT/server/node_modules/node-pty')" && echo "node-pty loads under Electron $ELECTRON_VERSION"
 
 cp -r apps/web/.next/standalone "$OUT/web"
 mkdir -p "$OUT/web/apps/web/.next"

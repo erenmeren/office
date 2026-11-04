@@ -289,6 +289,7 @@ export const useMemoryCounts = (projectId: string | undefined) =>
 export type { ApprovalView, MissionStatus, Plan };
 export interface MissionSummary {
   id: string;
+  projectId: string;
   createdAt: string;
   title: string;
   status: MissionStatus;
@@ -344,6 +345,8 @@ export interface Overview {
   agentsAvailable: number;
   agentsTotal: number;
   runningSessions: number;
+  /** manual Claude sessions (Office terminals) running on this project */
+  manualSessions: number;
   maxConcurrentRuns: number;
   pendingTasks: number;
   awaitingApproval: number;
@@ -470,10 +473,16 @@ export interface ClaudeSession {
   createdAt?: number;
   lastModified: number;
   fileSize?: number;
-  live?: { pid: number; kind: string; status: string; name?: string };
+  /** present while `claude agents --json --all` lists it: interactive ones alive, background ones with their `state` */
+  live?: { pid?: number; kind: string; status?: string; state?: string; id?: string; name?: string };
   /** the project whose repository holds `cwd`, or null for an unregistered folder */
   projectId: string | null;
+  /** the worker whose machine holds the session */
+  workerId: string;
+  workerName: string;
 }
+/** A process holds the session right now: resuming it elsewhere is refused. */
+export const isSessionRunning = (s: Pick<ClaudeSession, 'live'>) => !!s.live && (s.live.kind !== 'background' || s.live.state === 'running' || s.live.state === undefined);
 export interface TranscriptEntry {
   uuid: string;
   role: 'user' | 'assistant';
@@ -491,8 +500,8 @@ export const useClaudeSessions = () =>
     queryFn: () => api<{ sessions: ClaudeSession[]; unavailable?: string }>('/claude-sessions'),
     refetchInterval: 15_000,
   });
-export const fetchTranscript = (sessionId: string, dir: string, offset: number) =>
-  api<TranscriptPage>(`/claude-sessions/${sessionId}/messages?dir=${encodeURIComponent(dir)}&offset=${offset}&limit=200`);
+export const fetchTranscript = (sessionId: string, dir: string, offset: number, workerId?: string) =>
+  api<TranscriptPage>(`/claude-sessions/${sessionId}/messages?dir=${encodeURIComponent(dir)}&offset=${offset}&limit=200${workerId ? `&workerId=${workerId}` : ''}`);
 /** An Office-managed manual Claude session: a `claude` process under a PTY on the local worker. */
 export interface TerminalView {
   id: string;
@@ -501,6 +510,8 @@ export interface TerminalView {
   workerId: string;
   claudeSessionId: string;
   resumedSessionId?: string;
+  forked?: boolean;
+  attachId?: string;
   pid?: number;
   status: 'starting' | 'running' | 'exited';
   exitCode?: number | null;

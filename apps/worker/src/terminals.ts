@@ -2,7 +2,7 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type * as pty from 'node-pty';
 import type { ApiToWorker, WorkerToApi } from '@office/shared';
-import type { LiveAgent } from './sessions.js';
+import { isRunning, type LiveAgent } from './sessions.js';
 
 type Open = Extract<ApiToWorker, { type: 'terminal.open' }>;
 
@@ -12,6 +12,8 @@ export interface TerminalDeps {
   /** the program to run and its arguments; tests use a shell with none */
   command?: { exe: string; args: string[] };
   env?: NodeJS.ProcessEnv;
+  /** false while the API cannot be reached: output is kept and flushed after the next welcome */
+  connected?: () => boolean;
 }
 
 interface Terminal {
@@ -19,14 +21,25 @@ interface Terminal {
   proc: pty.IPty;
   opened: Extract<WorkerToApi, { type: 'terminal.opened' }>;
   killTimer?: NodeJS.Timeout;
+  /** output produced while disconnected, oldest dropped past MAX_PENDING */
+  pending: Buffer[];
+  pendingBytes: number;
 }
 
 // the manual session is the owner's own Claude: keep CLAUDE* and the plugins, drop only Office's secrets and settings
 const STRIP = /^(DATABASE_URL|OFFICE_)|^(COOKIE_SECRET|REDIS_URL)$/;
 const KILL_GRACE_MS = 5000;
+const MAX_PENDING = 256 * 1024;
 
 function isUnderRoot(path: string, root: string): boolean {
   return path === root || path.startsWith(root.endsWith('/') ? root : root + '/');
+}
+
+/** The `claude` argv for a terminal: attach to a background session, resume (or fork) a session, or start a new one. */
+export function claudeArgs(msg: Pick<Open, 'attachId' | 'resumeSessionId' | 'fork' | 'claudeSessionId'>): string[] {
+  if (msg.attachId) return ['attach', msg.attachId];
+  if (!msg.resumeSessionId) return ['--session-id', msg.claudeSessionId];
+  return msg.fork ? ['--resume', msg.resumeSessionId, '--fork-session', '--session-id', msg.claudeSessionId] : ['--resume', msg.resumeSessionId];
 }
 
 /** Office-managed manual Claude sessions: `claude` under a PTY, output streamed to the API, killed with the worker. */
@@ -50,13 +63,14 @@ export class TerminalManager {
       return fail('outside_roots', `${msg.dir} does not exist`);
     }
     if (!this.roots.some((r) => isUnderRoot(dir, r))) return fail('outside_roots', `${msg.dir} is outside the workspace roots`);
-    if (msg.resumeSessionId) {
-      const running = (await this.deps.liveSessions()).find((l) => l.sessionId === msg.resumeSessionId);
-      if (running) return fail('session_live', `session is running in another process (pid ${running.pid})`);
+    // a fork reads the source and writes a new session, so the source may keep running
+    if (msg.resumeSessionId && !msg.fork) {
+      const running = (await this.deps.liveSessions()).find((l) => l.sessionId === msg.resumeSessionId && isRunning(l));
+      if (running) return fail('session_live', `session is running in another process (pid ${running.pid ?? running.id})`);
     }
     const env: Record<string, string> = { TERM: 'xterm-256color', COLORTERM: 'truecolor' };
     for (const [k, v] of Object.entries(this.deps.env ?? process.env)) if (v !== undefined && !STRIP.test(k)) env[k] = v;
-    const cmd = this.deps.command ?? { exe: 'claude', args: msg.resumeSessionId ? ['--resume', msg.resumeSessionId] : ['--session-id', msg.claudeSessionId] };
+    const cmd = this.deps.command ?? { exe: 'claude', args: claudeArgs(msg) };
     let proc: pty.IPty;
     try {
       // loaded on first use: a worker whose node-pty binary does not match its Node (the desktop app's Electron) still runs agents
@@ -74,9 +88,18 @@ export class TerminalManager {
       resumedSessionId: msg.resumeSessionId,
       startedAt: new Date().toISOString(),
     };
-    const t: Terminal = { id: msg.terminalId, proc, opened };
+    const t: Terminal = { id: msg.terminalId, proc, opened, pending: [], pendingBytes: 0 };
     this.terminals.set(t.id, t);
-    proc.onData((data) => this.send({ type: 'terminal.output', terminalId: t.id, data: Buffer.from(data, 'utf8').toString('base64') }));
+    proc.onData((data) => {
+      const chunk = Buffer.from(data, 'utf8');
+      if (this.deps.connected?.() === false) {
+        t.pending.push(chunk);
+        t.pendingBytes += chunk.length;
+        while (t.pendingBytes > MAX_PENDING && t.pending.length > 1) t.pendingBytes -= t.pending.shift()!.length;
+        return;
+      }
+      this.send({ type: 'terminal.output', terminalId: t.id, data: chunk.toString('base64') });
+    });
     proc.onExit(({ exitCode, signal }) => {
       clearTimeout(t.killTimer);
       this.terminals.delete(t.id);
@@ -101,9 +124,14 @@ export class TerminalManager {
     t.killTimer ??= setTimeout(() => this.terminals.has(terminalId) && t.proc.kill('SIGKILL'), KILL_GRACE_MS).unref();
   }
 
-  /** After a reconnect: tells the API about every terminal still alive here. */
+  /** After a reconnect: tells the API about every terminal still alive here, then the output it missed. */
   announce() {
-    for (const t of this.terminals.values()) this.send(t.opened);
+    for (const t of this.terminals.values()) {
+      this.send(t.opened);
+      if (t.pending.length) this.send({ type: 'terminal.output', terminalId: t.id, data: Buffer.concat(t.pending).toString('base64') });
+      t.pending = [];
+      t.pendingBytes = 0;
+    }
   }
 
   closeAll() {

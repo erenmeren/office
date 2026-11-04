@@ -2,8 +2,9 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Activity, FileText } from 'lucide-react';
+import { Activity, FileText, TerminalSquare } from 'lucide-react';
 import { PlanGraph, type PlanGraphNode } from '@/components/plan-graph';
 import { RunEvents } from '@/components/run-events';
 import { ArtifactOutput } from '@/components/task-detail';
@@ -73,12 +74,33 @@ const noop = () => {};
 /** The Chief's verdict on a finished mission: its summary and the review run's events and mission-review.md. */
 function MissionVerdict({ m }: { m: Mission }) {
   const [open, setOpen] = useState<'events' | 'review'>();
+  const [handoffError, setHandoffError] = useState('');
+  const router = useRouter();
   const toggle = (k: 'events' | 'review') => setOpen((cur) => (cur === k ? undefined : k));
   const finished = (m.status === 'done' || m.status === 'failed') && m.reviewRunId;
-  if (!m.summary && !finished) return null;
+  const over = m.status === 'done' || m.status === 'failed' || m.status === 'cancelled';
+  // handoff to the owner: a manual Claude session on the project's checkout, the mission's summary shown beside it
+  const openManual = async () => {
+    setHandoffError('');
+    try {
+      const t = await post<{ id: string }>('/terminals', { projectId: m.projectId });
+      router.push(`/sessions?terminal=${t.id}&mission=${m.id}`);
+    } catch (err) {
+      setHandoffError(`Could not start a manual session: ${String(err)}`);
+    }
+  };
+  if (!m.summary && !finished && !over) return null;
   return (
     <div className="space-y-2">
       {m.summary && <p className="text-sm whitespace-pre-wrap text-ink-2">{m.summary}</p>}
+      {over && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={openManual} title="Your own Claude Code on this project, with the mission's summary to copy in. It works on the checkout, not the mission branch.">
+            <TerminalSquare aria-hidden /> Open a manual session here
+          </Button>
+          {handoffError && <span className="text-sm text-destructive">{handoffError}</span>}
+        </div>
+      )}
       {finished && (
         <div className="flex flex-wrap gap-2">
           <EvidenceChip tone={m.status === 'done' ? 'passed' : 'failed'} aria-expanded={open === 'events'} onClick={() => toggle('events')}>

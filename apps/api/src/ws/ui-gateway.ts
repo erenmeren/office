@@ -46,6 +46,14 @@ export class UiGateway {
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(msg));
     };
 
+    const control = (id: string) => {
+      this.terminals?.takeControl(id, socket, (previous) => {
+        const ws = previous as WebSocket;
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'terminal.control', topic: `terminal:${id}`, yours: false } satisfies UiServerMessage));
+      });
+      send({ type: 'terminal.control', topic: `terminal:${id}`, yours: true });
+    };
+
     const subscribe = async (topic: string, afterSeq = 0) => {
       subs.get(topic)?.unsubscribe();
       subs.delete(topic);
@@ -56,12 +64,13 @@ export class UiGateway {
         return;
       }
       if (topic.startsWith('terminal:')) {
-        // the kept scrollback first, then live output; both as base64
+        // the kept scrollback first, then live output; both as base64. Subscribing takes the keyboard from any other tab.
         const id = topic.slice(9);
         if (!this.terminals?.get(id)) return send({ type: 'error', message: 'terminal not found' });
         const sub: Sub = { lastSeq: 0, unsubscribe: this.hub.subscribe(topic, (m) => send({ ...(m as object), topic } as UiServerMessage)) };
         subs.set(topic, sub);
         send({ type: 'terminal.output', topic, data: this.terminals.scrollback(id) });
+        control(id);
         return;
       }
       if (!topic.startsWith('run:')) {
@@ -126,7 +135,8 @@ export class UiGateway {
       }
       const parsed = UiClientMessageSchema.safeParse(json);
       if (!parsed.success) return send({ type: 'error', message: 'invalid message' });
-      if (parsed.data.type === 'terminal.input') return this.terminals?.input(parsed.data.terminalId, parsed.data.data);
+      if (parsed.data.type === 'terminal.input') return this.terminals?.input(parsed.data.terminalId, parsed.data.data, socket);
+      if (parsed.data.type === 'terminal.control') return control(parsed.data.terminalId);
       if (parsed.data.type === 'terminal.resize') return this.terminals?.resize(parsed.data.terminalId, parsed.data.cols, parsed.data.rows);
       if (parsed.data.type === 'unsubscribe') {
         subs.get(parsed.data.topic)?.unsubscribe();
@@ -143,6 +153,7 @@ export class UiGateway {
       closed = true;
       for (const s of subs.values()) s.unsubscribe();
       subs.clear();
+      this.terminals?.releaseControl(socket);
     });
   }
 }
