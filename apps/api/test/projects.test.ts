@@ -97,17 +97,20 @@ describe('project settings, agents, audit, artifacts', () => {
     }
   });
 
-  it('project update and delete; delete refused while tasks exist', async () => {
+  it('project update and delete; delete refused while a mission is live, finished history goes with the project', async () => {
     const p = (await t.prisma.project.create({ data: { name: 'D', slug: 'd', repoPath: '/tmp/d' } })).id;
     const up = await t.app.inject({ method: 'PUT', url: `/projects/${p}`, headers: { cookie }, payload: { name: 'D2', defaultBranch: 'dev' } });
     expect(up.statusCode).toBe(200);
     expect(up.json()).toMatchObject({ name: 'D2', defaultBranch: 'dev' });
     await call('PUT', `/projects/${p}/agents`, { agentIds: [a1] });
     const task = await t.prisma.task.create({ data: { projectId: p, agentId: a1, title: 't', description: '' } });
+    const mission = await t.prisma.mission.create({ data: { projectId: p, title: 'M', request: 'r', status: 'running' } });
     expect((await t.app.inject({ method: 'DELETE', url: `/projects/${p}`, headers: { cookie } })).statusCode).toBe(409);
-    await t.prisma.task.delete({ where: { id: task.id } });
+    await t.prisma.mission.update({ where: { id: mission.id }, data: { status: 'cancelled' } });
     expect((await t.app.inject({ method: 'DELETE', url: `/projects/${p}`, headers: { cookie } })).statusCode).toBe(204);
     expect(await t.prisma.project.findUnique({ where: { id: p } })).toBeNull();
+    expect(await t.prisma.task.findUnique({ where: { id: task.id } })).toBeNull();
+    expect(await t.prisma.mission.findUnique({ where: { id: mission.id } })).toBeNull();
     expect((await t.app.inject({ method: 'DELETE', url: `/projects/${p}`, headers: { cookie } })).statusCode).toBe(404);
   });
 
@@ -152,5 +155,29 @@ describe('project settings, agents, audit, artifacts', () => {
     const res = await call('GET', `/artifacts/${art.id}`);
     expect(res.json().content).toContain('end');
     expect((await call('GET', '/artifacts/nope')).statusCode).toBe(404);
+  });
+});
+
+describe('project delete', () => {
+  it('takes the whole history with it, but not while a mission is live', async () => {
+    const t = await makeApp();
+    const cookie = await t.login();
+    const req = (method: 'GET' | 'POST' | 'DELETE', url: string, payload?: object) => t.app.inject({ method, url, headers: { cookie }, payload });
+    await req('POST', '/agents', { name: 'chief', slug: 'chief', role: 'chief', description: 'the chief', config: { systemPrompt: 'plan', model: 'sonnet', allowedTools: ['Read'] } });
+    const p = (await req('POST', '/projects', { name: 'Gone', slug: 'gone', repoPath: '/tmp/office-ws/gone' })).json().id as string;
+    const m = (await req('POST', '/missions', { projectId: p, request: 'do things' })).json().id as string;
+    await t.prisma.task.create({ data: { projectId: p, agentId: (await t.prisma.agent.findFirstOrThrow()).id, title: 'T', missionId: m } });
+    await t.prisma.memoryEntry.create({ data: { projectId: p, scope: 'project', type: 'decision', title: 'd', content: 'c', authorType: 'user' } });
+    const refused = await req('DELETE', `/projects/${p}`);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'project_in_use', message: expect.stringContaining('1 mission(s)') });
+    expect((await req('POST', `/missions/${m}/cancel`)).statusCode).toBe(200);
+    expect((await req('DELETE', `/projects/${p}`)).statusCode).toBe(204);
+    expect(await t.prisma.project.findUnique({ where: { id: p } })).toBeNull();
+    expect(await t.prisma.mission.count({ where: { projectId: p } })).toBe(0);
+    expect(await t.prisma.task.count({ where: { projectId: p } })).toBe(0);
+    expect(await t.prisma.memoryEntry.count({ where: { projectId: p } })).toBe(0);
+    expect((await t.prisma.auditLog.findFirst({ where: { action: 'project.deleted', targetId: p } }))?.detail).toEqual({ slug: 'gone' });
+    await t.close();
   });
 });

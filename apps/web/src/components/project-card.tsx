@@ -30,13 +30,13 @@ export function ProjectCard({ project }: { project: Project }) {
   };
   const confirm = useConfirm();
   const remove = async () => {
-    if (!(await confirm({ title: `Delete project "${project.name}"?`, body: 'The repository on disk is kept.', confirmLabel: 'Delete', destructive: true }))) return;
+    if (!(await confirm({ title: `Delete project "${project.name}"?`, body: 'Its missions, tasks, runs, sessions and memory are deleted too. The repository on disk is kept.', confirmLabel: 'Delete', destructive: true }))) return;
     try {
       await del(`/projects/${project.id}`);
       selectProject('');
       await refresh();
     } catch (err) {
-      setError(String(err).includes('project_in_use') ? 'The project has tasks or missions; it cannot be deleted.' : String(err));
+      setError(String(err).includes('project_in_use') ? 'A mission or a run of this project is still live; cancel it first.' : String(err));
     }
   };
   return (

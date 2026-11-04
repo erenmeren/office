@@ -11,7 +11,7 @@ import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { dailyLimit, spentToday } from '../services/budget-service.js';
 import { expireDailyBudgetApprovals } from '../services/budget-service.js';
-import { getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
+import { deleteProject, getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
 
 const CreateProject = z.object({
   name: z.string().min(1),
@@ -128,15 +128,10 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
   });
 
   // refused while the project has any task, mission or run: their records would lose their project
+  /** Deletes the project with its whole history (missions, tasks, runs, sessions, memory); refused while anything is live. The repository on disk stays. */
   app.delete('/projects/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const project = await app.prisma.project.findUnique({ where: { id }, include: { _count: { select: { tasks: true, missions: true, runs: true } } } });
-    if (!project) throw new HttpError(404, 'not_found');
-    if (project._count.tasks || project._count.missions || project._count.runs) throw new HttpError(409, 'project_in_use');
-    await app.prisma.$transaction([
-      app.prisma.projectAgent.deleteMany({ where: { projectId: id } }),
-      app.prisma.project.delete({ where: { id } }),
-    ]);
+    const project = await deleteProject(app.prisma, id);
     await audit(app.prisma, { userId: req.user!.id, action: 'project.deleted', targetType: 'project', targetId: id, detail: { slug: project.slug } });
     return reply.code(204).send();
   });
