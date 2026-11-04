@@ -6,6 +6,7 @@ import { MessageViewSchema } from './messaging.js';
 import { ToolCallResultSchema } from './office-tools.js';
 import { OfficeEventSchema } from './events.js';
 import { RunResultSchema, RunSpecSchema } from './run-spec.js';
+import { SessionsErrorCodeSchema, SessionsQuerySchema, SessionsResultSchema } from './claude-sessions.js';
 
 export const WorkerTagSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
 
@@ -53,6 +54,13 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
   }),
   /** Asked right before a fast-forward; the API answers `integration.allowed`. */
   z.object({ type: z.literal('integration.check'), runId: z.string() }),
+  /** Answer to `sessions.request` (external Claude Code sessions on this worker's machine). */
+  z.object({
+    type: z.literal('sessions.response'),
+    requestId: z.string(),
+    result: SessionsResultSchema.optional(),
+    error: z.object({ code: SessionsErrorCodeSchema, message: z.string() }).optional(),
+  }),
 ]);
 export type WorkerToApi = z.infer<typeof WorkerToApiSchema>;
 
@@ -67,6 +75,8 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
   /** The run.result was applied (or was already, for a resend); the worker may drop it from its outbox. */
   z.object({ type: z.literal('run.result.ack'), runId: z.string() }),
   z.object({ type: z.literal('integration.allowed'), runId: z.string(), ok: z.boolean(), reason: z.string().optional() }),
+  /** Read the machine's Claude Code sessions (list, transcript page, open in a terminal); answered by `sessions.response`. */
+  z.object({ type: z.literal('sessions.request'), requestId: z.string(), query: SessionsQuerySchema }),
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type ApiToWorker = z.infer<typeof ApiToWorkerSchema>;

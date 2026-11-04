@@ -1,12 +1,13 @@
 import { join } from 'node:path';
 import pino, { type Logger } from 'pino';
 import WebSocket from 'ws';
-import type { RuntimeAdapter } from '@office/runtime';
+import { claudeSessionStore, type RuntimeAdapter } from '@office/runtime';
 import { ApiToWorkerSchema, type ApiToWorker, type OfficeEvent, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import type { WorkerConfig } from './config.js';
 import { loadCredential, saveCredential } from './credentials.js';
 import { Outbox } from './outbox.js';
 import { RunExecutor } from './executor.js';
+import { handleSessionsQuery, openTerminal, readLiveSessions, type SessionsDeps } from './sessions.js';
 import { sweepRunRoots } from './skills.js';
 
 const MIN_BACKOFF_MS = 1000;
@@ -28,9 +29,12 @@ export interface ConnectionOptions {
   /** First reconnect delay; doubles up to 30 s. Default 1 s. */
   reconnectBaseMs?: number;
   logger?: Logger;
+  /** Session discovery backends (tests inject fakes). */
+  sessions?: SessionsDeps;
 }
 
 export class WorkerConnection {
+  private sessions: SessionsDeps;
   private executor: RunExecutor;
   private log: Logger;
   private heartbeatMs: number;
@@ -67,6 +71,7 @@ export class WorkerConnection {
     this.heartbeatMs = opts.heartbeatMs ?? 10_000;
     this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
     this.backoffMs = this.reconnectBaseMs;
+    this.sessions = opts.sessions ?? { store: claudeSessionStore, liveSessions: readLiveSessions, spawnTerminal: openTerminal };
     this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log, {
       apiUrl: config.apiUrl,
       canClone: config.canClone,
@@ -226,6 +231,13 @@ export class WorkerConnection {
         this.log.info({ runId: msg.runId }, 'run interrupted by the owner');
         this.executor.interrupt(msg.runId);
         return;
+      case 'sessions.request': {
+        // answered out of order on purpose: a slow transcript read must not hold up run messages
+        void handleSessionsQuery(msg.query, this.config.workspaceRoots, this.sessions).then((out) =>
+          this.send({ type: 'sessions.response', requestId: msg.requestId, ...out }),
+        );
+        return;
+      }
       case 'error': {
         this.log.warn({ message: msg.message }, 'API reported an error');
         // the lease is gone: the API will retry the run, so the stored result is dead weight

@@ -462,6 +462,37 @@ export const useLiveSessions = (projectId: string | undefined) =>
   });
 export const useSession = (runId: string | undefined) =>
   useQuery({ queryKey: ['session', runId], queryFn: () => api<SessionDetail>(`/sessions/${runId}`), enabled: !!runId, refetchInterval: 10_000 });
+export interface ClaudeSession {
+  sessionId: string;
+  title: string;
+  cwd: string;
+  gitBranch?: string;
+  createdAt?: number;
+  lastModified: number;
+  fileSize?: number;
+  live?: { pid: number; kind: string; status: string; name?: string };
+  /** the project whose repository holds `cwd`, or null for an unregistered folder */
+  projectId: string | null;
+}
+export interface TranscriptEntry {
+  uuid: string;
+  role: 'user' | 'assistant';
+  text: string;
+  tools: string[];
+}
+export interface TranscriptPage {
+  entries: TranscriptEntry[];
+  nextOffset: number | null;
+}
+/** Claude Code sessions on this machine outside Office, read through the local worker; `unavailable` names why there are none. */
+export const useClaudeSessions = () =>
+  useQuery({
+    queryKey: ['claude-sessions'],
+    queryFn: () => api<{ sessions: ClaudeSession[]; unavailable?: string }>('/claude-sessions'),
+    refetchInterval: 15_000,
+  });
+export const fetchTranscript = (sessionId: string, dir: string, offset: number) =>
+  api<TranscriptPage>(`/claude-sessions/${sessionId}/messages?dir=${encodeURIComponent(dir)}&offset=${offset}&limit=200`);
 export const useAgentRuns = (agentId: string | undefined) =>
   useQuery({ queryKey: ['agent-runs', agentId], queryFn: () => api<AgentRunRow[]>(`/agents/${agentId}/runs?limit=20`), enabled: !!agentId });
 

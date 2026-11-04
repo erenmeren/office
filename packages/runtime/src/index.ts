@@ -15,3 +15,4 @@ export { normalizeSdkMessage } from './claude/normalize.js';
 export function createAdapter(name: 'claude' | 'fake'): RuntimeAdapter {
   return name === 'claude' ? new ClaudeAdapter() : new FakeAdapter();
 }
+export { claudeSessionStore, type ClaudeSessionStore } from './claude/sessions.js';
