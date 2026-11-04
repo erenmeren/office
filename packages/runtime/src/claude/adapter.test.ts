@@ -88,6 +88,18 @@ describe('ClaudeAdapter', () => {
     );
   });
 
+  it('closes the sandbox network except the project allowlist', async () => {
+    const gitSpec = { git: { repoPath: '/repo', defaultBranch: 'main', missionBranch: 'office/m', taskSlug: 't', committerName: 'c', committerEmail: 'c@x.invalid', agentName: 'dev' } } as Partial<RunSpec>;
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+    await run(gitSpec);
+    let { options } = h.calls[0] as { options: { sandbox: { network: Record<string, unknown> } } };
+    expect(options.sandbox.network).toEqual({ allowLocalBinding: true });
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+    await run({ ...gitSpec, networkAllowedDomains: ['maratus.co', '*.maratus.co'] });
+    ({ options } = h.calls[1] as { options: { sandbox: { network: Record<string, unknown> } } });
+    expect(options.sandbox.network).toEqual({ allowLocalBinding: true, allowedDomains: ['maratus.co', '*.maratus.co'] });
+  });
+
   it('passes maxBudgetUsd only when positive (0 is no cap)', async () => {
     h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
     await run();

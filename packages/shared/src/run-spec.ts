@@ -54,6 +54,7 @@ export const RunSpecSchema = z.object({
   env: z.object({ file: z.string(), vars: z.array(z.object({ name: z.string(), value: z.string() })) }).optional(),
   approvalPolicy: ApprovalPolicySchema.optional(),
   approvalTimeoutMinutes: z.number().int().positive().default(30),
+  networkAllowedDomains: z.array(z.string()).default([]),
   outputFormat: z.object({ type: z.literal('json_schema'), schema: z.record(z.string(), z.unknown()) }).optional(),
   taskKind: TaskKindSchema.optional(),
 });

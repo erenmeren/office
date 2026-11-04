@@ -145,6 +145,8 @@ export function buildQueryOptions(
  * Bash confinement for a run in a worktree: the SDK sandbox (bubblewrap on Linux) lets commands write only to the
  * worktree, the repository's git dir, the skills dir and the usual caches. Missing sandbox tooling degrades to
  * unsandboxed commands rather than failing the run (`failIfUnavailable: false`); the file tools are gated separately.
+ * Outbound network is closed except for the project's `networkAllowedDomains` (an unlisted host is denied, there is
+ * no one to answer the sandbox prompt).
  */
 export function sandboxFor(spec: RunSpec) {
   const home = homedir();
@@ -157,7 +159,7 @@ export function sandboxFor(spec: RunSpec) {
         (p): p is string => !!p,
       ),
     },
-    network: { allowLocalBinding: true },
+    network: { allowLocalBinding: true, ...(spec.networkAllowedDomains?.length && { allowedDomains: spec.networkAllowedDomains }) },
   };
 }
 

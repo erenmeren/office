@@ -82,8 +82,8 @@ export const OFFICE_TOOLS = {
   },
   review_task: {
     description:
-      'Record your review decision for a task: done, reopen, or failed (when it used all its attempts), with a note (Chief review only).',
-    input: { taskId: z.string(), decision: z.enum(['done', 'reopen', 'failed']), note: z.string().max(2000).default('') },
+      'Record your review decision for a task: done, reopen, failed (when it used all its attempts), or blocked when only the owner can unblock it (network access, credentials, missing input): the task waits for the owner with your note and no attempt is used (Chief review only).',
+    input: { taskId: z.string(), decision: z.enum(['done', 'reopen', 'failed', 'blocked']), note: z.string().max(2000).default('') },
   },
 } as const satisfies Record<string, { description: string; input: z.ZodRawShape }>;
 

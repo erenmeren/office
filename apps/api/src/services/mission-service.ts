@@ -544,6 +544,8 @@ export async function reviewPrompt(db: Db, mission: Mission) {
       'For every task in status review: read its evidence with get_task_evidence, inspect the mission branch read-only,',
       'then call review_task with done (only when the evidence shows the acceptance criteria are met) or reopen with a note saying what is missing.',
       'A task that used all its attempts cannot be reopened: decide done or failed.',
+      'When the run stopped on something only the owner can change (network access, credentials, missing input, a tool the sandbox denies),',
+      'decide blocked with a note telling the owner exactly what to change: a rerun would fail the same way and use an attempt. The task then waits for the owner.',
       'Finish with the review JSON: a mission summary and your decision for each task you reviewed.',
     ].join(' '),
   ].join('\n\n');

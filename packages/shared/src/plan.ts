@@ -29,7 +29,7 @@ export const ReviewDecisionSchema = z.object({
   tasks: z.array(
     z.object({
       taskId: z.string(),
-      decision: z.enum(['done', 'reopen', 'failed']),
+      decision: z.enum(['done', 'reopen', 'failed', 'blocked']),
       note: z.string().max(2000).default(''),
     }),
   ),
@@ -115,7 +115,7 @@ export const REVIEW_JSON_SCHEMA = {
         required: ['taskId', 'decision'],
         properties: {
           taskId: { type: 'string' },
-          decision: { type: 'string', enum: ['done', 'reopen', 'failed'] },
+          decision: { type: 'string', enum: ['done', 'reopen', 'failed', 'blocked'] },
           note: { type: 'string', maxLength: 2000 },
         },
       },

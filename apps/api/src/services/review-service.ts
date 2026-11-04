@@ -96,6 +96,8 @@ export async function consultationsSatisfied(db: Db, task: Task): Promise<{ ok: 
   return { ok: missing.length === 0, missing };
 }
 
+export type ReviewDecisionKind = 'done' | 'reopen' | 'failed' | 'blocked';
+
 /** `runId`: the Chief's review run deciding through review_task. */
 export type CloseBy = { chief?: true; runId?: string; userId?: string; override?: boolean };
 
@@ -103,12 +105,14 @@ export type CloseBy = { chief?: true; runId?: string; userId?: string; override?
  * review -> done, ready (reopen) or failed. `done` needs the evidence rule and the required consultations
  * unless the owner overrides. Throws 409 `evidence_missing` / `consultation_missing` with the reason as detail.
  * The Chief's reopen leads to another run, so it cannot reopen a task that used all its attempts (409 `max_attempts`).
+ * `blocked` (Chief only): something only the owner can change stops the task; it stays in `review` with the note,
+ * no attempt is used, and the owner later reopens or fails it.
  */
 export async function closeTask(
   prisma: PrismaClient,
   hub: EventHub,
   taskId: string,
-  decision: 'done' | 'reopen' | 'failed',
+  decision: ReviewDecisionKind,
   note: string | undefined,
   by: CloseBy,
 ) {
@@ -132,8 +136,15 @@ export async function closeTask(
         `task used ${task.attempts} of ${task.maxAttempts} attempts and cannot be reopened; decide done or failed`,
       );
     }
+    if (decision === 'blocked') {
+      if (!by.chief) throw new HttpError(409, 'invalid_transition', 'only the Chief review marks a task blocked; reopen or fail it');
+      if (!note) throw new HttpError(409, 'note_required', 'blocked needs a note telling the owner what to change');
+    }
     if (note || decision === 'reopen') await tx.task.update({ where: { id: taskId }, data: { reviewNote: note || 'reopened' } });
-    const updated = await setTaskStatus(tx, outbox, taskId, decision === 'reopen' ? 'ready' : decision);
+    const updated =
+      decision === 'blocked'
+        ? await tx.task.findUniqueOrThrow({ where: { id: taskId } })
+        : await setTaskStatus(tx, outbox, taskId, decision === 'reopen' ? 'ready' : decision);
     await audit(tx, {
       userId: by.userId,
       action: by.override ? 'task.override' : 'task.reviewed',
