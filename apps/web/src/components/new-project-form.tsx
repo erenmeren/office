@@ -12,7 +12,7 @@ import type { Project } from '@/lib/queries';
 const FIELDS = [
   { key: 'name', label: 'Name' },
   { key: 'slug', label: 'Slug' },
-  { key: 'repoPath', label: 'Repository path', placeholder: 'empty: a new repository is created' },
+  { key: 'repoPath', label: 'Repository path', placeholder: 'a repository, an empty folder, or empty: Office creates one' },
   { key: 'defaultBranch', label: 'Default branch', placeholder: 'main' },
 ] as const;
 
@@ -44,6 +44,8 @@ export function NewProjectForm({ onDone, initial }: { onDone: () => void; initia
           <Label htmlFor={`project-${f.key}`}>{f.label}</Label>
           <Input
             id={`project-${f.key}`}
+            autoComplete="off"
+            spellCheck={false}
             required={f.key === 'name' || f.key === 'slug'}
             placeholder={'placeholder' in f ? f.placeholder : undefined}
             value={form[f.key]}

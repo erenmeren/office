@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -22,16 +23,23 @@ const CreateProject = z.object({
 
 const run = promisify(execFile);
 
-/** `git init` plus one empty commit on `branch`, so the worker can create mission branches from it. */
-async function initRepository(path: string, branch: string): Promise<void> {
+/**
+ * `git init` plus one empty commit on `branch`, so the worker can create mission branches from it.
+ * `inPlace`: the owner's own folder, existing or not (files in it stay untracked); otherwise a new directory is required.
+ */
+async function initRepository(path: string, branch: string, inPlace = false): Promise<void> {
   const { committerName, committerEmail } = ProjectSettingsSchema.parse({});
-  // mkdir without `recursive` refuses an existing directory: never init over somebody's files
   await mkdir(join(path, '..'), { recursive: true });
-  await mkdir(path);
+  // mkdir without `recursive` refuses an existing directory: never init over somebody's files unless asked
+  if (inPlace) await mkdir(path, { recursive: true });
+  else await mkdir(path);
   const git = (...args: string[]) => run('git', ['-c', `user.name=${committerName}`, '-c', `user.email=${committerEmail}`, ...args], { cwd: path });
   await git('init', '-q', '-b', branch);
   await git('commit', '-q', '--allow-empty', '-m', 'Initial commit');
 }
+
+/** The repository root that holds `path`, or null outside any repository. */
+const repoRootOf = (path: string) => run('git', ['rev-parse', '--show-toplevel'], { cwd: path }).then((r) => resolve(r.stdout.trim())).catch(() => null);
 
 export async function projectRoutes(app: FastifyInstance, opts: { config: Config }) {
   app.get('/settings/runtime', async () => ({ leaseSeconds: opts.config.leaseSeconds, heartbeatSeconds: opts.config.heartbeatSeconds }));
@@ -52,10 +60,21 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
         throw err;
       });
     }
-    else if (!data.defaultBranch) {
-      // an existing repository: its checked-out branch is the default, not the form's "main" (the repo may use master)
-      const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repoPath }).then((r) => r.stdout.trim()).catch(() => '');
-      if (head) data.defaultBranch = head;
+    else {
+      repoPath = resolve(repoPath);
+      const root = existsSync(repoPath) ? await repoRootOf(repoPath) : null;
+      if (root && root !== repoPath) {
+        // a folder inside somebody's repository would make the whole repository the project's working tree
+        throw new HttpError(400, 'not_repo_root', `${repoPath} is inside the repository at ${root}; give that path, or an empty folder for a new repository`);
+      }
+      if (!root) {
+        // the owner's own new folder (or a path that does not exist yet): make it a repository
+        await initRepository(repoPath, data.defaultBranch ?? 'main', true);
+      } else if (!data.defaultBranch) {
+        // an existing repository: its checked-out branch is the default, not the form's "main" (the repo may use master)
+        const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repoPath }).then((r) => r.stdout.trim()).catch(() => '');
+        if (head) data.defaultBranch = head;
+      }
     }
     return reply.code(201).send(await app.prisma.project.create({ data: { ...data, repoPath } }));
   });

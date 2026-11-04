@@ -61,7 +61,21 @@ describe('project settings, agents, audit, artifacts', () => {
     expect(res.json().defaultBranch).toBe('master');
     const explicit = await post({ name: 'M2', slug: 'm-explicit', repoPath: dir, defaultBranch: 'main' });
     expect(explicit.json().defaultBranch).toBe('main');
+    // a folder inside that repository is refused with the root named; an empty folder becomes a repository
+    execFileSync('mkdir', ['-p', join(dir, 'sub')]);
+    const inside = await post({ name: 'S', slug: 'm-sub', repoPath: join(dir, 'sub') });
+    expect(inside.statusCode).toBe(400);
+    expect(inside.json()).toMatchObject({ error: 'not_repo_root', message: expect.stringContaining(`inside the repository at ${dir}`) });
+    const fresh = mkdtempSync(join(tmpdir(), 'office-empty-'));
+    const made = await post({ name: 'E', slug: 'm-empty', repoPath: fresh });
+    expect(made.statusCode).toBe(201);
+    expect(made.json().defaultBranch).toBe('main');
+    expect(execFileSync('git', ['log', '--oneline'], { cwd: fresh }).toString()).toContain('Initial commit');
+    const missing = join(fresh, 'deeper', 'new');
+    expect((await post({ name: 'N', slug: 'm-new', repoPath: missing, defaultBranch: 'trunk' })).statusCode).toBe(201);
+    expect(execFileSync('git', ['branch', '--show-current'], { cwd: missing }).toString().trim()).toBe('trunk');
     rmSync(dir, { recursive: true, force: true });
+    rmSync(fresh, { recursive: true, force: true });
   });
 
   it('project without repoPath gets a fresh repository under <dataDir>/repos/<slug>', async () => {
