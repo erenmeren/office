@@ -262,6 +262,9 @@ export async function createRunForTask(
       task.requirements.length ? `Requirements:\n${task.requirements.map((r) => `- ${r}`).join('\n')}` : '',
       task.acceptanceCriteria.length ? `Acceptance criteria:\n${task.acceptanceCriteria.map((r) => `- ${r}`).join('\n')}` : '',
       task.reviewNote ? `Review note:\n${task.reviewNote}` : '',
+      task.kind === 'code'
+        ? 'Commit your work on the current branch before you finish (keep build output such as dist/ and node_modules/ out of git). Anything left uncommitted is committed for you as "Office auto-commit"; the branch is then rebased onto the mission head and fast-forwarded when the project check passes.'
+        : '',
     ]
       .filter(Boolean)
       .join('\n\n'),

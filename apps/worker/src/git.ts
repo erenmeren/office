@@ -113,6 +113,38 @@ export async function installTrailerHook(worktreePath: string, who: { agentName:
   await excludeFromGit(worktreePath, '/.office-hooks/');
 }
 
+export type GitIdentity = { name: string; email: string };
+const identity = (who: GitIdentity) => ['-c', `user.name=${who.name}`, '-c', `user.email=${who.email}`];
+
+/**
+ * Commits whatever the run left uncommitted (changed and new files), so finished work is never lost when the agent
+ * forgets `git commit`. Returns false when there was nothing to commit.
+ */
+export async function commitLeftovers(worktreePath: string, who: GitIdentity, message: string): Promise<boolean> {
+  // shortcut: build output is excluded by these names when the project has no .gitignore yet; extend when a project needs more
+  await git(worktreePath, 'add', '-A', '--', '.', ':!node_modules', ':!dist', ':!build', ':!.next', ':!coverage', ':!out');
+  if (await succeeds(worktreePath, 'diff', '--cached', '--quiet')) return false;
+  await git(worktreePath, ...identity(who), 'commit', '-q', '-m', message);
+  return true;
+}
+
+/**
+ * Rebases the run branch onto `target` (the mission head) when the mission moved under it, so parallel tasks that
+ * touch different files still fast-forward. A conflict aborts the rebase and leaves the branch as it was.
+ */
+export async function rebaseOnto(worktreePath: string, target: string, who: GitIdentity): Promise<{ ok: true; base: string } | { ok: false; reason: string }> {
+  const base = await git(worktreePath, 'rev-parse', '--verify', `${target}^{commit}`);
+  if (await succeeds(worktreePath, 'merge-base', '--is-ancestor', base, 'HEAD')) return { ok: true, base };
+  try {
+    await git(worktreePath, ...identity(who), 'rebase', '-q', base);
+    return { ok: true, base };
+  } catch (err) {
+    await git(worktreePath, 'rebase', '--abort').catch(() => {});
+    const detail = String((err as { stderr?: string; message?: string }).stderr || (err as Error).message || '').trim().slice(0, 500);
+    return { ok: false, reason: `rebase onto the mission head ${base.slice(0, 7)} conflicts; integrate by hand. ${detail}` };
+  }
+}
+
 export async function collectResult(worktreePath: string, baseCommit: string) {
   const range = `${baseCommit}..HEAD`;
   const headCommit = await git(worktreePath, 'rev-parse', 'HEAD');

@@ -275,7 +275,7 @@ describe('phase 4 end to end with the fake runtime', () => {
     expect(all.some((e) => e.type === 'agent.command.executed' && e.payload.command === 'rm -rf node_modules')).toBe(false);
   }, 60_000);
 
-  it('a run whose base went stale is kept for manual integration', async () => {
+  it('a run whose base went stale is rebased onto the mission head and fast-forwarded', async () => {
     const codeTask = (key: string, file: string) => ({
       key, title: `Write ${file}`, description: `COMMIT:${file}:${PASSING_TEST}`, kind: 'code', agent: 'developer',
       requirements: ['a test'], acceptanceCriteria: ['node --test passes'],
@@ -313,14 +313,14 @@ describe('phase 4 end to end with the fake runtime', () => {
     }, 'b review');
     const bRunId: string = bDone.runs[0].id;
     const bRun = await prisma.taskRun.findUniqueOrThrow({ where: { id: bRunId } });
-    expect(bRun.integration).toBe('needs_integration');
-    expect(bDone.reviewNote).toContain('needs integration');
-    expect(bRun.baseCommit).toBe(aDone.git.headCommit);
-    const branch = (await getMission(missionId)).branch as string;
+    expect(bRun.integration).toBe('fast_forwarded');
+    // the base is the moved mission head, not the commit the worktree was created from
     expect(manual).not.toBe('');
-    expect(git('rev-parse', branch)).toBe(manual);
-    const worktree = join(home, 'worktrees', bRunId);
-    expect(bRun.worktreePath).toBe(worktree);
-    expect(existsSync(join(worktree, 'two.test.js'))).toBe(true);
+    expect(bRun.baseCommit).toBe(manual);
+    const branch = (await getMission(missionId)).branch as string;
+    expect(git('rev-parse', branch)).toBe(bRun.headCommit);
+    expect(git('rev-parse', `${branch}^`)).toBe(manual);
+    expect(git('ls-tree', '--name-only', branch)).toContain('two.test.js');
+    expect(bRun.worktreePath).toBeNull();
   }, 60_000);
 });
