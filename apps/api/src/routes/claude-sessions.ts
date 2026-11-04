@@ -25,12 +25,12 @@ export async function claudeSessionRoutes(app: FastifyInstance) {
       Promise.allSettled(workers.map((w) => app.gateway.requestSessions({ kind: 'list', limit: 200 }, w.workerId))),
     ]);
     const nameOf = new Map(names.map((n) => [n.id, n.name]));
-    const sessions: (SessionRow & { workerId: string; workerName: string; projectId: string | null })[] = [];
+    const sessions: (SessionRow & { workerId: string; workerName: string; local: boolean; projectId: string | null })[] = [];
     const failed: string[] = [];
     workers.forEach((w, i) => {
       const a = answers[i]!;
       if (a.status !== 'fulfilled' || a.value.kind !== 'list') return failed.push(nameOf.get(w.workerId) ?? w.workerId);
-      for (const s of a.value.sessions) sessions.push({ ...s, workerId: w.workerId, workerName: nameOf.get(w.workerId) ?? w.workerId, projectId: projectOf(s.cwd, projects, w.local) });
+      for (const s of a.value.sessions) sessions.push({ ...s, workerId: w.workerId, workerName: nameOf.get(w.workerId) ?? w.workerId, local: w.local, projectId: projectOf(s.cwd, projects, w.local) });
     });
     const office = await app.prisma.agentSession.findMany({ where: { sdkSessionId: { in: sessions.map((s) => s.sessionId) } }, select: { sdkSessionId: true } });
     const ours = new Set(office.map((s) => s.sdkSessionId));
@@ -65,17 +65,36 @@ export async function claudeSessionRoutes(app: FastifyInstance) {
   });
 
   app.post('/claude-sessions/background/:id/:action', async (req) => {
-    const { id, action } = z.object({ id: z.string().min(1).max(64), action: z.enum(['stop', 'rm']) }).parse(req.params);
+    const { id, action } = z.object({ id: z.string().min(1).max(64), action: z.enum(['stop', 'rm', 'logs']) }).parse(req.params);
     const { workerId } = WorkerQ.parse(req.body ?? {});
     const r = await app.gateway.requestSessions({ kind: 'background', action, id }, workerId);
-    await audit(app.prisma, { userId: req.user?.id, action: `background.${action === 'rm' ? 'removed' : 'stopped'}`, targetType: 'claude_session', targetId: id });
+    if (action !== 'logs') await audit(app.prisma, { userId: req.user?.id, action: `background.${action === 'rm' ? 'removed' : 'stopped'}`, targetType: 'claude_session', targetId: id });
     return r;
   });
 
+  // a terminal emulator opens on the worker's own display: only this machine's worker can show one to the owner
   app.post('/claude-sessions/:id/open', async (req) => {
     const { id } = Id.parse(req.params);
     const { dir, workerId } = z.object({ dir: z.string().min(1), ...WorkerQ.shape }).parse(req.body);
+    if (workerId && !app.gateway.sessionWorkers().find((w) => w.workerId === workerId)?.local) throw new HttpError(400, 'not_local', 'that session is on another machine; resume it in an Office terminal instead');
     return app.gateway.requestSessions({ kind: 'open', sessionId: id, dir }, workerId);
+  });
+
+  app.post('/claude-sessions/:id/rename', async (req) => {
+    const { id } = Id.parse(req.params);
+    const { dir, title, workerId } = z.object({ dir: z.string().min(1), title: z.string().trim().min(1).max(200), ...WorkerQ.shape }).parse(req.body);
+    const r = await app.gateway.requestSessions({ kind: 'rename', sessionId: id, dir, title }, workerId);
+    await audit(app.prisma, { userId: req.user?.id, action: 'claude_session.renamed', targetType: 'claude_session', targetId: id, detail: { title } });
+    return r;
+  });
+
+  /** Deletes the transcript Claude saved (SDK `deleteSession`); refused while a process holds the session. */
+  app.delete('/claude-sessions/:id', async (req) => {
+    const { id } = Id.parse(req.params);
+    const { dir, workerId } = z.object({ dir: z.string().min(1), ...WorkerQ.shape }).parse(req.query);
+    const r = await app.gateway.requestSessions({ kind: 'delete', sessionId: id, dir }, workerId);
+    await audit(app.prisma, { userId: req.user?.id, action: 'claude_session.deleted', targetType: 'claude_session', targetId: id, detail: { dir } });
+    return r;
   });
 }
 

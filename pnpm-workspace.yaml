@@ -5,6 +5,8 @@ packages:
 allowBuilds:
   "@embedded-postgres/linux-x64": true
   node-pty: true
+  # desktop packaging only, Windows installer: not needed on Linux; listed so a container install does not stop on it
+  electron-winstaller: false
   esbuild: true
   "@prisma/engines": true
   prisma: true

@@ -14,20 +14,43 @@ const decode = (b64: string) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0
 export function OfficeTerminal({ terminalId, live, className }: { terminalId: string; live: boolean; className?: string }) {
   const host = useRef<HTMLDivElement>(null);
   const [control, setControl] = useState(true);
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState('');
   const stdin = useRef<(on: boolean) => void>(() => {});
+  const searcher = useRef<{ next: (q: string) => void; prev: (q: string) => void; clear: () => void } | null>(null);
   useEffect(() => {
     const el = host.current;
     if (!el) return;
     let disposed = false;
     const cleanups: (() => void)[] = [];
     // browser only: xterm touches `window` at import time
-    void Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit')]).then(([{ Terminal }, { FitAddon }]) => {
+    void Promise.all([import('@xterm/xterm'), import('@xterm/addon-fit'), import('@xterm/addon-search')]).then(([{ Terminal }, { FitAddon }, { SearchAddon }]) => {
       if (disposed) return;
       const term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'var(--font-mono, ui-monospace, monospace)', theme: { background: '#0f0d1a' }, scrollback: 5000 });
       const fit = new FitAddon();
+      const search = new SearchAddon();
       term.loadAddon(fit);
+      term.loadAddon(search);
       term.open(el);
       fit.fit();
+      searcher.current = { next: (q) => search.findNext(q), prev: (q) => search.findPrevious(q), clear: () => search.clearDecorations() };
+      // Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes, Ctrl+Shift+F opens search; plain Ctrl+C still interrupts Claude
+      term.attachCustomKeyEventHandler((ev) => {
+        if (ev.type !== 'keydown' || !ev.ctrlKey || !ev.shiftKey) return true;
+        if (ev.key === 'C' || ev.key === 'c') {
+          if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection());
+          return false;
+        }
+        if (ev.key === 'V' || ev.key === 'v') {
+          void navigator.clipboard.readText().then((text) => text && term.paste(text));
+          return false;
+        }
+        if (ev.key === 'F' || ev.key === 'f') {
+          setSearching(true);
+          return false;
+        }
+        return true;
+      });
       stdin.current = (on) => (term.options.disableStdin = !on);
       const socket = uiSocket();
       const resize = () => socket.send({ type: 'terminal.resize', terminalId, cols: term.cols, rows: term.rows });
@@ -58,6 +81,39 @@ export function OfficeTerminal({ terminalId, live, className }: { terminalId: st
   return (
     <div className={`relative ${className ?? 'h-[520px]'} w-full`}>
       <div ref={host} aria-label="Terminal" role="application" className={live ? 'h-full w-full' : 'h-full w-full opacity-70'} />
+      {searching && (
+        <form
+          className="absolute top-2 right-4 flex items-center gap-1 rounded-lg border border-white/13 bg-black/80 p-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            searcher.current?.next(query);
+          }}
+        >
+          <input
+            aria-label="Search terminal"
+            autoFocus
+            className="h-7 w-48 rounded-md bg-white/7 px-2 font-mono text-xs text-ink outline-none"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              searcher.current?.next(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                searcher.current?.clear();
+                setSearching(false);
+              }
+              if (e.key === 'Enter' && e.shiftKey) {
+                e.preventDefault();
+                searcher.current?.prev(query);
+              }
+            }}
+          />
+          <Button type="button" size="xs" variant="ghost" onClick={() => searcher.current?.prev(query)} title="Previous (Shift+Enter)">↑</Button>
+          <Button type="submit" size="xs" variant="ghost" title="Next (Enter)">↓</Button>
+          <Button type="button" size="xs" variant="ghost" aria-label="Close search" onClick={() => { searcher.current?.clear(); setSearching(false); }}>✕</Button>
+        </form>
+      )}
       {!control && live && (
         <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 border-t border-white/13 bg-black/70 px-3 py-2 text-[13px] text-ink-2" role="status">
           <span>Another tab is typing here. You see everything; keystrokes are off.</span>

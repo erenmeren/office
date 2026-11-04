@@ -38,7 +38,7 @@ describe('claude sessions (external CLI sessions through the local worker)', () 
     const res = await pending;
     expect(res.statusCode).toBe(200);
     const wid = w.workerId!;
-    expect(res.json()).toEqual({ sessions: [{ ...sessions[0], projectId: p, workerId: wid, workerName: 'w1' }, { ...sessions[1], projectId: null, workerId: wid, workerName: 'w1' }] });
+    expect(res.json()).toEqual({ sessions: [{ ...sessions[0], projectId: p, workerId: wid, workerName: 'w1', local: true }, { ...sessions[1], projectId: null, workerId: wid, workerName: 'w1', local: true }] });
     await w.close();
   });
 
@@ -51,14 +51,19 @@ describe('claude sessions (external CLI sessions through the local worker)', () 
     await answer(remote, { result: { kind: 'list', sessions: [{ sessionId: 'r1', title: 'there', cwd: `/srv/worker/repos/${p}/x`, lastModified: 2 }] } });
     expect((await pending).json()).toEqual({
       sessions: [
-        { sessionId: 'l1', title: 'here', cwd: '/tmp/office-ws/p', lastModified: 1, workerId: local.workerId, workerName: 'w1', projectId: p },
-        { sessionId: 'r1', title: 'there', cwd: `/srv/worker/repos/${p}/x`, lastModified: 2, workerId: remote.workerId, workerName: 'far', projectId: p },
+        { sessionId: 'l1', title: 'here', cwd: '/tmp/office-ws/p', lastModified: 1, workerId: local.workerId, workerName: 'w1', local: true, projectId: p },
+        { sessionId: 'r1', title: 'there', cwd: `/srv/worker/repos/${p}/x`, lastModified: 2, workerId: remote.workerId, workerName: 'far', local: false, projectId: p },
       ],
     });
     // a transcript on the remote worker goes to that worker
     const page = req('GET', `/claude-sessions/r1/messages?dir=/srv/worker/repos/${p}/x&workerId=${remote.workerId}`);
     expect(await answer(remote, { result: { kind: 'messages', entries: [], nextOffset: null } })).toMatchObject({ kind: 'messages', sessionId: 'r1' });
     expect((await page).statusCode).toBe(200);
+    // no terminal emulator on another machine; rename goes there like a transcript
+    expect((await req('POST', '/claude-sessions/r1/open', { dir: '/x', workerId: remote.workerId })).json()).toMatchObject({ error: 'not_local' });
+    const renaming = req('POST', '/claude-sessions/r1/rename', { dir: '/x', title: ' Better ', workerId: remote.workerId });
+    expect(await answer(remote, { result: { kind: 'rename' } })).toEqual({ kind: 'rename', sessionId: 'r1', dir: '/x', title: 'Better' });
+    expect((await renaming).statusCode).toBe(200);
     await remote.close();
     await until(() => !t.app.gateway.isConnected(remote.workerId!), 'remote gone');
     expect((await req('GET', `/claude-sessions/r1/messages?dir=/x&workerId=${remote.workerId}`)).json()).toMatchObject({ error: 'worker_offline' });
@@ -100,8 +105,14 @@ describe('claude sessions (external CLI sessions through the local worker)', () 
     const failing = req('POST', '/claude-sessions/background', { dir: '/tmp/office-ws/q', prompt: 'x' });
     await answer(w, { error: { code: 'claude_failed', message: 'Workspace not trusted' } });
     expect((await failing).statusCode).toBe(409);
+    const logs = req('POST', '/claude-sessions/background/ab12cd34/logs');
+    expect(await answer(w, { result: { kind: 'background', output: 'screen text' } })).toEqual({ kind: 'background', action: 'logs', id: 'ab12cd34' });
+    expect((await logs).json()).toMatchObject({ output: 'screen text' });
+    const deleting = req('DELETE', '/claude-sessions/s9?dir=/tmp/office-ws/p');
+    expect(await answer(w, { result: { kind: 'delete' } })).toEqual({ kind: 'delete', sessionId: 's9', dir: '/tmp/office-ws/p' });
+    expect((await deleting).statusCode).toBe(200);
     const audits = await t.prisma.auditLog.findMany({ where: { targetType: 'claude_session' }, orderBy: { createdAt: 'asc' } });
-    expect(audits.map((a) => a.action)).toEqual(['background.started', 'background.stopped']);
+    expect(audits.map((a) => a.action)).toEqual(['background.started', 'background.stopped', 'claude_session.deleted']);
     await w.close();
   });
 });

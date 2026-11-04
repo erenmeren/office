@@ -477,9 +477,10 @@ export interface ClaudeSession {
   live?: { pid?: number; kind: string; status?: string; state?: string; id?: string; name?: string };
   /** the project whose repository holds `cwd`, or null for an unregistered folder */
   projectId: string | null;
-  /** the worker whose machine holds the session */
+  /** the worker whose machine holds the session; `local` when that is the API's machine (a terminal emulator can open there) */
   workerId: string;
   workerName: string;
+  local: boolean;
 }
 /** A process holds the session right now: resuming it elsewhere is refused. */
 export const isSessionRunning = (s: Pick<ClaudeSession, 'live'>) => !!s.live && (s.live.kind !== 'background' || s.live.state === 'running' || s.live.state === undefined);

@@ -1,6 +1,9 @@
 # Remote Agent Office worker. Build from the repo root:
 #   docker compose -f infra/compose.yaml --profile remote build worker-remote
 FROM node:22-bookworm-slim AS build
+# node-pty (manual sessions) compiles from source on Linux
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g pnpm@12
 WORKDIR /repo
 COPY . .
