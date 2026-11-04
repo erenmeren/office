@@ -201,6 +201,24 @@ export class Scheduler {
    * for `needsRepoAccess: 'any'` (mission runs with git) one that clones. Mission runs also need every required
    * tag; local-only runs (chat, inbox, summary, non-mission tasks) ignore tags. Local first, then fewest active runs.
    */
+  /**
+   * Why no connected worker could ever take this project's mission runs (ignoring free slots), or null when one can.
+   * Shown on a mission that waits for a worker, so the owner knows what to change.
+   */
+  noWorkerReason(project: { repoPath: string; settings: unknown }): string | null {
+    const { requiredWorkerTags } = ProjectSettingsSchema.parse(project.settings ?? {});
+    const workers = this.gateway.onlineWorkers();
+    if (workers.length === 0) return 'No worker is online. Start a worker on this machine or connect a remote one.';
+    const reaching = workers.filter((w) => w.local(project.repoPath) || w.canClone);
+    if (reaching.length === 0) {
+      return `No online worker can reach ${project.repoPath}: add it (or a parent directory) to a worker's OFFICE_WORKSPACE_ROOTS and restart that worker, or start a worker that can clone.`;
+    }
+    if (!reaching.some((w) => requiredWorkerTags.every((t) => w.tags.includes(t)))) {
+      return `No worker that reaches the repository has the required tags (${requiredWorkerTags.join(', ')}); change the project's required tags or tag a worker.`;
+    }
+    return null;
+  }
+
   private pickWorker(project: { repoPath: string; settings: unknown }, opts: { needsRepoAccess: 'local' | 'any' }) {
     const { requiredWorkerTags } = ProjectSettingsSchema.parse(project.settings ?? {});
     return this.gateway

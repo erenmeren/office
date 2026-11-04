@@ -825,6 +825,10 @@ Owner request: see the Claude Code sessions started from a terminal (any folder 
 - Tests: `apps/worker/test/sessions.test.ts` (roots and symlinks, transcript reduction and paging, live refusal, terminal errors), `apps/api/test/claude-sessions.test.ts` (project join, error mapping, no local worker, worker drop). Verified on the owner's machine with the real SDK and CLI: 66 sessions listed under `/home/meren/projects`, the running session flagged live and refused for `open`, `/etc` refused.
 - Not built (later phases): Office-managed manual sessions with a PTY, background-agent attach, handoffs to and from missions, remote workers, transcript search.
 
+## A mission that waits for a worker says why (2026-11-04)
+
+Owner: a mission ("tetris") on a project whose `repoPath` lay outside the desktop worker's `OFFICE_WORKSPACE_ROOTS` sat in `planning` with no explanation. `Scheduler.noWorkerReason(project)` now tells, for a planning mission without a plan run, whether no worker is online, none reaches the repository (with the path and the `OFFICE_WORKSPACE_ROOTS` fix), or none has the required tags; `GET /missions/:id` returns it as `blocked`, and `missionStatusLine` shows "Waiting for a worker: …" in amber on the PlanCard. Test `apps/api/test/mission-blocked.test.ts`. The desktop app reads extra roots from `<data>/env` (`OFFICE_WORKSPACE_ROOTS=/home/meren/projects` was added for the owner); it takes effect at the next app start.
+
 ## Unified sessions: last sweep (2026-11-04)
 
 - `docs/security.md` and `docs/architecture.md` describe discovery, terminals, background sessions and handoffs.

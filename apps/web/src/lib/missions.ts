@@ -68,6 +68,8 @@ export interface MissionStatusInput {
   taskCounts: Record<string, number>;
   summary?: string | null;
   planError?: string | null;
+  /** why no worker can take a planning mission (mission detail `blocked`) */
+  blocked?: string | null;
   /** tasks of this mission waiting for the owner's review decision (overview attention `task_decision`) */
   decisions?: number;
 }
@@ -83,6 +85,7 @@ export function missionStatusLine(m: MissionStatusInput): { text: string; yours:
   const first = (s: string | null | undefined) => s?.split(/(?<=\.)\s/)[0] ?? '';
   switch (m.status) {
     case 'planning':
+      if (m.blocked) return { text: `Waiting for a worker: ${m.blocked}`, yours: true };
       return { text: 'Chief is writing the plan. Nothing to decide yet.', yours: false };
     case 'plan_failed':
       return { text: `Planning failed${m.planError ? `: ${first(m.planError)}` : ''}. Replan or cancel the mission.`, yours: true };

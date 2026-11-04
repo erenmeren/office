@@ -61,6 +61,8 @@ describe('mission helpers', () => {
 describe('missionStatusLine', () => {
   it('says who the mission waits for', () => {
     expect(missionStatusLine({ status: 'awaiting_approval', taskCounts: {} })).toEqual({ text: 'Waiting for you: approve the plan to start the tasks.', yours: true });
+    expect(missionStatusLine({ status: 'planning', taskCounts: {}, blocked: 'No worker is online.' })).toEqual({ text: 'Waiting for a worker: No worker is online.', yours: true });
+    expect(missionStatusLine({ status: 'planning', taskCounts: {}, blocked: null }).yours).toBe(false);
     expect(missionStatusLine({ status: 'running', taskCounts: { running: 1, ready: 2, done: 1 } })).toEqual({
       text: 'Running: 1 task active, 2 waiting for a worker or a dependency, 1 of 4 done.',
       yours: false,

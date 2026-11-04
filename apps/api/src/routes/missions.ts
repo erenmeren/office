@@ -56,6 +56,11 @@ export async function missionRoutes(app: FastifyInstance) {
           select: { id: true, status: true, costUsd: true, error: true },
         })
       : null;
+    // a planning mission without a plan run waits for a worker; say why none can take it
+    const project = mission.status === 'planning' && !mission.planRunId
+      ? await app.prisma.project.findUnique({ where: { id: mission.projectId }, select: { repoPath: true, settings: true } })
+      : null;
+    const blocked = project ? app.scheduler.noWorkerReason(project) : null;
     const [spentUsd, reviewArtifact] = await Promise.all([
       missionSpent(app.prisma, id),
       mission.reviewRunId
@@ -73,6 +78,7 @@ export async function missionRoutes(app: FastifyInstance) {
         dependents: dependents.map((d) => d.taskId),
       })),
       planRun,
+      blocked,
     };
   });
 
