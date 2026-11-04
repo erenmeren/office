@@ -22,11 +22,15 @@ export interface TerminalView {
   exitCode?: number | null;
   startedAt: string;
   exitedAt?: string;
+  /** last `terminal.opened` from the worker */
+  seenAt?: string;
 }
 
 interface Entry extends TerminalView {
   chunks: Buffer[];
   bytes: number;
+  /** the last row write, so a delete never races an upsert */
+  saving?: Promise<unknown>;
 }
 
 export interface TerminalTransport {
@@ -54,6 +58,39 @@ export class TerminalRegistry {
     private transport: TerminalTransport,
     private log: FastifyBaseLogger,
   ) {}
+
+  /** Rows from before this API process: exited ones for the list, running ones until their worker re-announces or a heartbeat proves them gone. */
+  async load() {
+    for (const r of await this.prisma.manualSession.findMany()) {
+      if (this.entries.has(r.id)) continue;
+      this.entries.set(r.id, {
+        id: r.id, projectId: r.projectId, dir: r.dir, workerId: r.workerId, claudeSessionId: r.claudeSessionId,
+        resumedSessionId: r.resumedSessionId ?? undefined, forked: r.forked || undefined, attachId: r.attachId ?? undefined, pid: r.pid ?? undefined,
+        status: r.status as TerminalStatus, exitCode: r.exitCode, startedAt: r.startedAt.toISOString(), exitedAt: r.exitedAt?.toISOString(),
+        seenAt: r.seenAt?.toISOString(), chunks: [], bytes: 0,
+      });
+    }
+  }
+
+  private persist(e: Entry) {
+    const data = {
+      projectId: e.projectId, dir: e.dir, workerId: e.workerId, claudeSessionId: e.claudeSessionId, resumedSessionId: e.resumedSessionId ?? null,
+      forked: !!e.forked, attachId: e.attachId ?? null, pid: e.pid ?? null, status: e.status, exitCode: e.exitCode ?? null,
+      startedAt: new Date(e.startedAt), exitedAt: e.exitedAt ? new Date(e.exitedAt) : null, seenAt: e.seenAt ? new Date(e.seenAt) : null,
+    };
+    // writes of one terminal run in order (Prisma queries only run once awaited)
+    e.saving = (e.saving ?? Promise.resolve())
+      .then(() => this.prisma.manualSession.upsert({ where: { id: e.id }, create: { id: e.id, ...data }, update: data }))
+      .catch((err: unknown) => this.log.error({ err, terminalId: e.id }, 'manual session row not saved'));
+    return e.saving;
+  }
+
+  /** A worker's running terminals it has not re-announced since `since` (its connection) are gone: called on its heartbeats. */
+  markStale(workerId: string, since: Date) {
+    for (const e of this.entries.values()) {
+      if (e.workerId === workerId && e.status === 'running' && (!e.seenAt || new Date(e.seenAt) < since)) this.exited(e, null);
+    }
+  }
 
   list(): TerminalView[] {
     return [...this.entries.values()].map(view);
@@ -117,13 +154,15 @@ export class TerminalRegistry {
     if (e && e.status === 'running') this.transport.send(e.workerId, { type: 'terminal.resize', terminalId: id, cols, rows });
   }
 
-  /** Stops a running terminal; forgets an exited one. */
-  close(id: string): TerminalView {
+  /** Stops a running terminal; forgets an exited one (row included). */
+  async close(id: string): Promise<TerminalView> {
     const e = this.entries.get(id);
     if (!e) throw new HttpError(404, 'not_found');
     if (e.status === 'exited') {
       this.entries.delete(id);
       this.controllers.delete(id);
+      await e.saving;
+      await this.prisma.manualSession.deleteMany({ where: { id } });
       this.hub.publish('global', { type: 'terminal.changed', terminalId: id });
     } else this.transport.send(e.workerId, { type: 'terminal.close', terminalId: id });
     return view(e);
@@ -171,13 +210,15 @@ export class TerminalRegistry {
       this.entries.set(e.id, e);
     }
     if (e.status === 'exited') return;
-    Object.assign(e, { pid: msg.pid, status: 'running' as const, dir: msg.dir });
+    Object.assign(e, { pid: msg.pid, status: 'running' as const, dir: msg.dir, seenAt: new Date().toISOString() });
+    void this.persist(e);
     this.settle(e.id, view(e));
     this.hub.publish('global', { type: 'terminal.changed', terminalId: e.id });
   }
 
   private exited(e: Entry, exitCode: number | null) {
     Object.assign(e, { status: 'exited' as const, exitCode, exitedAt: new Date().toISOString() });
+    void this.persist(e);
     this.settle(e.id, new HttpError(502, 'exited', 'the session ended before it started'));
     this.hub.publish(`terminal:${e.id}`, { type: 'terminal.exit', exitCode });
     this.hub.publish('global', { type: 'terminal.changed', terminalId: e.id });
@@ -196,4 +237,4 @@ export class TerminalRegistry {
   }
 }
 
-const view = ({ chunks: _c, bytes: _b, ...rest }: Entry): TerminalView => rest;
+const view = ({ chunks: _c, bytes: _b, seenAt: _s, saving: _p, ...rest }: Entry): TerminalView => rest;

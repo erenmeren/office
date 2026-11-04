@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { UiClientMessage, UiServerMessage } from '@office/shared';
 import { makeApp } from './helpers.js';
 import { connectFakeWorker, until } from './fake-worker.js';
+import { TerminalRegistry } from '../src/services/terminal-service.js';
 
 describe('manual sessions (terminals on the local worker)', () => {
   let t: Awaited<ReturnType<typeof makeApp>>;
@@ -81,12 +82,18 @@ describe('manual sessions (terminals on the local worker)', () => {
     w.send({ type: 'terminal.exit', terminalId: open.terminalId, exitCode: 0 });
     await until(() => ui.msgs.some((m) => m.type === 'terminal.exit'), 'exit');
     expect((await req('GET', '/terminals')).json()).toMatchObject([{ id: open.terminalId, status: 'exited', exitCode: 0 }]);
+    // the row outlives the registry: a fresh one loads it back
+    await until(async () => (await t.prisma.manualSession.findUnique({ where: { id: open.terminalId } }))?.status === 'exited', 'row saved');
+    const fresh = new TerminalRegistry(t.prisma, t.app.hub, t.app.gateway, t.app.log);
+    await fresh.load();
+    expect(fresh.get(open.terminalId)).toMatchObject({ status: 'exited', exitCode: 0, projectId: project.id, pid: 42 });
     expect((await req('DELETE', `/terminals/${open.terminalId}`)).json()).toMatchObject({ status: 'exited' });
     expect((await req('GET', '/terminals')).json()).toEqual([]);
+    await until(async () => !(await t.prisma.manualSession.findUnique({ where: { id: open.terminalId } })), 'row deleted');
     const audits = await t.prisma.auditLog.findMany({ where: { targetId: open.terminalId }, orderBy: { createdAt: 'asc' } });
     expect(audits.map((a) => a.action)).toEqual(['terminal.opened', 'terminal.closed']);
     await w.close();
-  });
+  }, 15_000);
 
   it('maps refusals, re-adopts an announced terminal and ends terminals of a gone worker', async () => {
     expect((await req('POST', '/terminals', { dir: '/tmp/office-ws/x' })).statusCode).toBe(503);
@@ -119,5 +126,21 @@ describe('manual sessions (terminals on the local worker)', () => {
     await w.close();
     await until(() => t.app.gateway.terminals.get('old-term')?.status === 'exited', 'exited with the worker');
     expect(t.app.gateway.terminals.get('old-term')).toMatchObject({ exitCode: null });
+  });
+
+  it('ends a loaded running terminal its worker does not re-announce by the first heartbeat', async () => {
+    const { enrollToken } = (await req('POST', '/workers', { name: 'w1' })).json();
+    const id = (await t.prisma.worker.findFirstOrThrow()).id;
+    await t.prisma.manualSession.create({ data: { id: 'stale-term', dir: '/tmp/office-ws/p', workerId: id, claudeSessionId: 'c9', status: 'running', pid: 3, startedAt: new Date(Date.now() - 60_000) } });
+    await t.prisma.manualSession.create({ data: { id: 'live-term', dir: '/tmp/office-ws/p', workerId: id, claudeSessionId: 'c8', status: 'running', pid: 4, startedAt: new Date(Date.now() - 60_000) } });
+    await t.app.gateway.terminals.load();
+    expect(t.app.gateway.terminals.get('stale-term')).toMatchObject({ status: 'running' });
+    const w = await connectFakeWorker(t.app, { enrollToken, allowedRoots: ['/tmp/office-ws'] });
+    w.send({ type: 'terminal.opened', terminalId: 'live-term', pid: 4, dir: '/tmp/office-ws/p', claudeSessionId: 'c8', startedAt: new Date(Date.now() - 60_000).toISOString() });
+    await until(() => t.app.gateway.terminals.get('live-term')?.pid === 4, 'announced');
+    w.send({ type: 'heartbeat', capacity: 1, activeRunIds: [] });
+    await until(() => t.app.gateway.terminals.get('stale-term')?.status === 'exited', 'stale ended');
+    expect(t.app.gateway.terminals.get('live-term')).toMatchObject({ status: 'running' });
+    await w.close();
   });
 });

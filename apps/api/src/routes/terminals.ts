@@ -48,7 +48,7 @@ export async function terminalRoutes(app: FastifyInstance) {
 
   app.delete('/terminals/:id', async (req) => {
     const { id } = Id.parse(req.params);
-    const t = app.gateway.terminals.close(id);
+    const t = await app.gateway.terminals.close(id);
     if (t.status !== 'exited') await audit(app.prisma, { userId: req.user?.id, action: 'terminal.closed', targetType: 'terminal', targetId: id });
     return t;
   });

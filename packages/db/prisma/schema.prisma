@@ -703,3 +703,25 @@ model MemorySource {
 
   @@index([memoryEntryId])
 }
+
+/// An Office-managed manual Claude session (a `claude` process under a PTY on a worker); the row outlives the API process.
+model ManualSession {
+  id               String    @id
+  projectId        String?
+  dir              String
+  workerId         String
+  claudeSessionId  String
+  resumedSessionId String?
+  forked           Boolean   @default(false)
+  attachId         String?
+  pid              Int?
+  status           String
+  exitCode         Int?
+  startedAt        DateTime
+  exitedAt         DateTime?
+  /** last `terminal.opened` from its worker; a running row not seen since the worker's connection is over */
+  seenAt           DateTime?
+
+  @@index([projectId, status])
+  @@index([workerId, status])
+}

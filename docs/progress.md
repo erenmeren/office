@@ -825,6 +825,12 @@ Owner request: see the Claude Code sessions started from a terminal (any folder 
 - Tests: `apps/worker/test/sessions.test.ts` (roots and symlinks, transcript reduction and paging, live refusal, terminal errors), `apps/api/test/claude-sessions.test.ts` (project join, error mapping, no local worker, worker drop). Verified on the owner's machine with the real SDK and CLI: 66 sessions listed under `/home/meren/projects`, the running session flagged live and refused for `open`, `/etc` refused.
 - Not built (later phases): Office-managed manual sessions with a PTY, background-agent attach, handoffs to and from missions, remote workers, transcript search.
 
+## Unified sessions: manual session rows and the owner's room (2026-11-04)
+
+The two leftovers after Phase 4:
+- `ManualSession` table (migration `20261104142521_manual_sessions`; the generated SQL's drift noise about the generated `MemoryEntry.search` column was removed by hand): `TerminalRegistry` upserts a row on `terminal.opened` and on exit (writes of one terminal queued in order, since Prisma queries run only when awaited; `void prisma.x()` runs nothing), deletes it when an exited terminal is dismissed, and `load()`s every row at API start (`onReady`). A loaded `running` row stays running until its worker re-announces it (`seenAt`) or, on the worker's first heartbeat after connecting, is marked exited (`markStale(workerId, connectedAt)`). Scrollback is not persisted.
+- Pixel Office: a last room "You" (`ownerRoom`, slug `owner`, couch theme, its own sprite) shows the project's running manual sessions and background sessions as creatures at desks, the header counts "N yours", and the right panel (`OfficeOwnerPanel`) lists them with links to `/sessions?terminal=` and `?session=`. Dashboard already counts manual sessions.
+
 ## Unified sessions, Phase 4: handoffs (2026-11-04)
 
 - Session → Mission: "Start a mission from this" on a Claude session's transcript writes a draft request (`draftFromTranscript`: title, a line naming the session and folder, the newest turns trimmed to 600 characters each and 6000 in all; no model call) to `sessionStorage` and opens Mission Control, where the composer shows it until the owner edits or sends it (`useMissionDraft`, `clearMissionDraft` on send). The CLI session is never handed to the Chief; the owner's edited words are the request.

@@ -27,6 +27,8 @@ interface Connection {
   tags: string[];
   canClone: boolean;
   machineId?: string;
+  /** when this connection was welcomed; terminals not re-announced since are stale */
+  connectedAt: Date;
 }
 
 export type OnlineWorker = ReturnType<WorkerGateway['onlineWorkers']>[number];
@@ -265,7 +267,7 @@ export class WorkerGateway {
     const activeRuns = await this.leasedRuns(worker.id);
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');
     this.conns.set(worker.id, {
-      socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, tags: msg.tags, canClone: msg.canClone, machineId: msg.machineId, activeRuns,
+      socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, tags: msg.tags, canClone: msg.canClone, machineId: msg.machineId, activeRuns, connectedAt: new Date(),
     });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
     this.cancelUnleased(worker.id, msg.activeRunIds, activeRuns);
@@ -307,6 +309,8 @@ export class WorkerGateway {
         // keep runs assigned while the query ran; they may not have been visible to it
         for (const id of conn.activeRuns) if (!before.has(id)) activeRuns.add(id);
         Object.assign(conn, { capacity: msg.capacity, activeRuns });
+        // the worker re-announces live terminals right after welcome, before its first heartbeat
+        this.terminals.markStale(workerId, conn.connectedAt);
         return;
       }
       case 'run.accepted':
