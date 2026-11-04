@@ -14,6 +14,7 @@
   "dependencies": {
     "@office/runtime": "workspace:*",
     "@office/shared": "workspace:*",
+    "node-pty": "1.1.0",
     "pino": "^10.4.0",
     "ws": "^8.22.0"
   },

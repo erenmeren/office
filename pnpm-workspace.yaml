@@ -4,6 +4,7 @@ packages:
   - "packages/*"
 allowBuilds:
   "@embedded-postgres/linux-x64": true
+  node-pty: true
   esbuild: true
   "@prisma/engines": true
   prisma: true

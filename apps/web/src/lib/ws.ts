@@ -41,7 +41,8 @@ export class UiSocket {
     };
   }
 
-  private send(m: UiClientMessage) {
+  /** Sends when connected; terminal keystrokes are not queued, a dropped one is retyped. */
+  send(m: UiClientMessage) {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify(m));
   }
 

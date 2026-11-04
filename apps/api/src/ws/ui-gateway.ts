@@ -4,6 +4,7 @@ import type { PrismaClient } from '@office/db';
 import { UiClientMessageSchema, type OfficeEvent, type UiServerMessage } from '@office/shared';
 import type { EventHub } from '../services/event-hub.js';
 import { listEvents } from '../services/event-store.js';
+import type { TerminalRegistry } from '../services/terminal-service.js';
 
 interface Sub {
   unsubscribe: () => void;
@@ -18,6 +19,7 @@ export class UiGateway {
     private hub: EventHub,
     private log: FastifyBaseLogger,
     private list: typeof listEvents = listEvents,
+    private terminals?: TerminalRegistry,
   ) {}
 
   /** Authentication is done by the app-wide onRequest hook: an unauthenticated upgrade gets HTTP 401. */
@@ -51,6 +53,15 @@ export class UiGateway {
         // live only: the project feed carries stored events of all its runs, with no replay
         const sub: Sub = { lastSeq: 0, unsubscribe: this.hub.subscribe(topic, (m) => send({ type: 'event', topic, event: m as OfficeEvent })) };
         subs.set(topic, sub);
+        return;
+      }
+      if (topic.startsWith('terminal:')) {
+        // the kept scrollback first, then live output; both as base64
+        const id = topic.slice(9);
+        if (!this.terminals?.get(id)) return send({ type: 'error', message: 'terminal not found' });
+        const sub: Sub = { lastSeq: 0, unsubscribe: this.hub.subscribe(topic, (m) => send({ ...(m as object), topic } as UiServerMessage)) };
+        subs.set(topic, sub);
+        send({ type: 'terminal.output', topic, data: this.terminals.scrollback(id) });
         return;
       }
       if (!topic.startsWith('run:')) {
@@ -115,6 +126,8 @@ export class UiGateway {
       }
       const parsed = UiClientMessageSchema.safeParse(json);
       if (!parsed.success) return send({ type: 'error', message: 'invalid message' });
+      if (parsed.data.type === 'terminal.input') return this.terminals?.input(parsed.data.terminalId, parsed.data.data);
+      if (parsed.data.type === 'terminal.resize') return this.terminals?.resize(parsed.data.terminalId, parsed.data.cols, parsed.data.rows);
       if (parsed.data.type === 'unsubscribe') {
         subs.get(parsed.data.topic)?.unsubscribe();
         subs.delete(parsed.data.topic);

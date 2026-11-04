@@ -30,9 +30,16 @@ Decided on 2026-11-04 after review of the owner's feature text against the insta
 
 **Not built in Phase 1.** Remote workers, searching transcripts, `forkSession`, status hooks, a settings UI for roots.
 
-## Phase 2: Office-managed manual sessions
+## Phase 2: Office-managed manual sessions (built 2026-11-04)
 
-A "New manual session" on a project starts a real `claude` process on the local worker under a PTY (`node-pty`), streamed to a terminal component in the web UI (resize, reconnect, stop, resume with `--resume`). Not an SDK session: the owner's own `CLAUDE.md`, plugins and skills apply, Office's agent prompts and skill pins do not. The scheduler never assigns these. Web first; the desktop (Electron) packaging of the native module is a separate step with its own smoke test.
+"New manual session" on a project (or "Resume here" on an external session) starts a real `claude` process on the local worker under a PTY (`node-pty`), shown in an xterm.js terminal on the Live Sessions page. It is the owner's own Claude Code: the worker passes its environment through minus Office's secrets and settings (`OFFICE_*`, `DATABASE_URL*`, `COOKIE_SECRET`, `REDIS_URL`), so the owner's `CLAUDE.md`, plugins and skills apply and Office's agent prompts, skill pins and approval gate do not. The scheduler never sees these processes.
+
+- Worker (`apps/worker/src/terminals.ts`): `terminal.open { terminalId, dir, claudeSessionId, resumeSessionId?, cols, rows }` spawns `claude --session-id <id>` (new) or `claude --resume <id>` (resume) in `dir`, which must resolve under the workspace roots; a resume is refused `session_live` while `claude agents --json` lists the session. Output goes up as base64 `terminal.output`, keystrokes and resizes come down as `terminal.input` / `terminal.resize`, `terminal.close` sends SIGHUP then SIGKILL after 5 s, and the worker kills every terminal when it stops. After a reconnect it re-announces live terminals with `terminal.opened`, so an API restart re-adopts them. `node-pty` is loaded on first use so a worker whose binary does not match its Node still runs agents.
+- API (`TerminalRegistry`, in memory, no table): `POST /terminals { projectId | dir, resumeSessionId?, cols?, rows? }` (201 with the terminal once the worker reports `terminal.opened`; 503 `no_local_worker`, 409 `too_many_terminals` above 8 running, 409 `session_live`, 400 `outside_roots`), `GET /terminals`, `DELETE /terminals/:id` (stops a running one, forgets an exited one; both audited). The registry keeps 256 KB of scrollback per terminal; a worker that disconnects ends its terminals (`exitCode` null). The pre-generated `claudeSessionId` is what Phase 1 lists afterwards, so a closed manual session shows up under the project with its transcript and can be resumed again.
+- UI socket: subscribing `terminal:<id>` on `/ws/ui` replays the scrollback as one `terminal.output`, then streams; the client sends `terminal.input` (64 KB cap) and `terminal.resize`. `terminal.changed` on `global` refreshes lists. Everything on `/ws/ui` is owner-authenticated by the app-wide hook.
+- Web: "Manual sessions in Office" group at the top of the Claude CLI card, "New manual session" in its header, `TerminalDetail` (status, pid, folder, Stop with confirm / Dismiss) with `OfficeTerminal` (xterm + fit addon, loaded in the browser only).
+
+Not built: the desktop app does not rebuild `node-pty` for Electron's Node yet (the worker inside the AppImage answers `spawn_failed` until it does); terminal sharing between tabs is view-only duplication (both tabs type into the same PTY); no per-terminal buffer on the worker, so output while the worker is disconnected from the API is lost.
 
 ## Phase 3: background agents
 

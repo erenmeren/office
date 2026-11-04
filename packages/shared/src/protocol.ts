@@ -7,6 +7,7 @@ import { ToolCallResultSchema } from './office-tools.js';
 import { OfficeEventSchema } from './events.js';
 import { RunResultSchema, RunSpecSchema } from './run-spec.js';
 import { SessionsErrorCodeSchema, SessionsQuerySchema, SessionsResultSchema } from './claude-sessions.js';
+import { TERMINAL_INPUT_MAX, TerminalErrorCodeSchema, TerminalOpenedSchema, TerminalSizeSchema } from './terminals.js';
 
 export const WorkerTagSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/);
 
@@ -61,6 +62,12 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
     result: SessionsResultSchema.optional(),
     error: z.object({ code: SessionsErrorCodeSchema, message: z.string() }).optional(),
   }),
+  /** Manual sessions (unified sessions Phase 2): a `claude` process under a PTY on this worker. */
+  TerminalOpenedSchema,
+  z.object({ type: z.literal('terminal.error'), terminalId: z.string(), code: TerminalErrorCodeSchema, message: z.string() }),
+  /** base64 PTY output; dropped while disconnected (the API keeps the scrollback) */
+  z.object({ type: z.literal('terminal.output'), terminalId: z.string(), data: z.string() }),
+  z.object({ type: z.literal('terminal.exit'), terminalId: z.string(), exitCode: z.number().int().nullable(), signal: z.number().int().optional() }),
 ]);
 export type WorkerToApi = z.infer<typeof WorkerToApiSchema>;
 
@@ -77,6 +84,18 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('integration.allowed'), runId: z.string(), ok: z.boolean(), reason: z.string().optional() }),
   /** Read the machine's Claude Code sessions (list, transcript page, open in a terminal); answered by `sessions.response`. */
   z.object({ type: z.literal('sessions.request'), requestId: z.string(), query: SessionsQuerySchema }),
+  /** Start `claude` (with `--session-id` or `--resume`) under a PTY in `dir`; answered by `terminal.opened` or `terminal.error`. */
+  z.object({
+    type: z.literal('terminal.open'),
+    terminalId: z.string().min(1),
+    dir: z.string().min(1),
+    claudeSessionId: z.string().min(1),
+    resumeSessionId: z.string().optional(),
+    ...TerminalSizeSchema.shape,
+  }),
+  z.object({ type: z.literal('terminal.input'), terminalId: z.string(), data: z.string().max(TERMINAL_INPUT_MAX) }),
+  z.object({ type: z.literal('terminal.resize'), terminalId: z.string(), ...TerminalSizeSchema.shape }),
+  z.object({ type: z.literal('terminal.close'), terminalId: z.string() }),
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type ApiToWorker = z.infer<typeof ApiToWorkerSchema>;
@@ -84,10 +103,13 @@ export type ApiToWorker = z.infer<typeof ApiToWorkerSchema>;
 export const UiClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('subscribe'),
-    topic: z.string().regex(/^(global|run:.+|task:.+|conversation:.+|mission:.+|project:.+)$/),
+    topic: z.string().regex(/^(global|run:.+|task:.+|conversation:.+|mission:.+|project:.+|terminal:.+)$/),
     afterSeq: z.number().int().nonnegative().optional(),
   }),
   z.object({ type: z.literal('unsubscribe'), topic: z.string() }),
+  /** keystrokes for an Office terminal the owner is attached to (Phase 2) */
+  z.object({ type: z.literal('terminal.input'), terminalId: z.string(), data: z.string().max(TERMINAL_INPUT_MAX) }),
+  z.object({ type: z.literal('terminal.resize'), terminalId: z.string(), ...TerminalSizeSchema.shape }),
 ]);
 export type UiClientMessage = z.infer<typeof UiClientMessageSchema>;
 
@@ -132,6 +154,11 @@ export const UiServerMessageSchema = z.discriminatedUnion('type', [
     mission: z.object({ id: z.string(), status: MissionStatusSchema, updatedAt: z.iso.datetime() }),
   }),
   z.object({ type: z.literal('replay.done'), topic: z.string(), lastSeq: z.number().int().nonnegative() }),
+  /** base64 PTY output on `terminal:<id>`; the first message after a subscribe carries the scrollback */
+  z.object({ type: z.literal('terminal.output'), topic: z.string(), data: z.string() }),
+  z.object({ type: z.literal('terminal.exit'), topic: z.string(), exitCode: z.number().int().nullable() }),
+  /** on `global`: a terminal started or ended, so lists refetch */
+  z.object({ type: z.literal('terminal.changed'), topic: z.literal('global'), terminalId: z.string() }),
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type UiServerMessage = z.infer<typeof UiServerMessageSchema>;
