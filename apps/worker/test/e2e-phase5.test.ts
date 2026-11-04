@@ -180,6 +180,8 @@ describe('phase 5 two workers end to end with the fake runtime', () => {
     projectId = project.json().id;
     const settings = await req('PUT', `/projects/${projectId}/settings`, {
       checkCommand: 'node --test', envFile: '.env.local', envTemplate: [{ name: 'FOO', value: 'bar' }],
+      // these flows exercise plan and tool approvals; a new project's policy is auto everywhere
+      approvalPolicy: { plan: 'ask' },
     });
     expect(settings.statusCode).toBe(200);
 

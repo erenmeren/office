@@ -109,7 +109,7 @@ describe('observability read models', () => {
   it('overview counts running sessions, awaiting approval and cost today like the budget service', async () => {
     const body = (await get(`/projects/${p}/overview`)).json();
     expect(body).toMatchObject({
-      agentsTotal: 1, agentsAvailable: 0, runningSessions: 1, maxConcurrentRuns: 2, pendingTasks: 1, awaitingApproval: 1, dailyBudgetUsd: 50,
+      agentsTotal: 1, agentsAvailable: 0, runningSessions: 1, maxConcurrentRuns: 2, pendingTasks: 1, awaitingApproval: 1, dailyBudgetUsd: 1000,
     });
     expect(body.costTodayUsd).toBe(await spentToday(t.prisma, { projectId: p }));
     expect(body.team).toEqual([

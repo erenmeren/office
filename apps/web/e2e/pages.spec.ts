@@ -189,12 +189,16 @@ authed.describe('every page renders without console noise', () => {
     await expect(page.getByText('Delivered at the next run boundary')).toBeVisible();
     await expect(page.getByRole('radiogroup', { name: 'Recipient' }).getByRole('radio')).toHaveText([agent.name]);
 
-    page.on('dialog', (d) => void d.accept());
+    // the in-app confirm dialog replaces window.confirm
+    const stop = async () => {
+      await page.getByRole('button', { name: 'Stop', exact: true }).click();
+      await page.getByRole('alertdialog').getByRole('button', { name: 'Stop', exact: true }).click();
+    };
     const refetch = page.waitForRequest((r) => r.url() === `${API}/sessions/run-fixture`);
-    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await stop();
     await expect(page.getByRole('alert').filter({ hasText: 'Session already ended' })).toBeVisible();
     await refetch;
-    await page.getByRole('button', { name: 'Stop', exact: true }).click();
+    await stop();
     await expect.poll(() => cancels).toBe(2);
     // the browser logs the stubbed 409 itself; anything else is noise
     noise.console = noise.console.filter((m) => !m.includes('status of 409 (Conflict)'));

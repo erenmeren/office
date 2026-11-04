@@ -33,7 +33,7 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string>();
   const [problems, setProblems] = useState<{ field: string; message: string }[]>([]);
-  const numKeys = ['maxConcurrentRuns', 'defaultMaxAttempts', 'dailyBudgetUsd', 'defaultTaskBudgetUsd', 'approvalTimeoutMinutes', 'checkTimeoutSeconds'] as const;
+  const numKeys = ['maxConcurrentRuns', 'defaultMaxAttempts', 'dailyBudgetUsd', 'defaultTaskBudgetUsd', 'defaultMissionBudgetUsd', 'approvalTimeoutMinutes', 'checkTimeoutSeconds'] as const;
   type NumKey = (typeof numKeys)[number];
   // raw text while typing, so a cleared field stays empty instead of turning into 0
   const rawOf = (s: ProjectSettings) => Object.fromEntries(numKeys.map((k) => [k, String(s[k])])) as Record<NumKey, string>;
@@ -166,6 +166,9 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
           </Field>
           <Field label="Default per task (USD)" htmlFor="defaultTaskBudgetUsd" error={problem('defaultTaskBudgetUsd')}>
             <Input {...num('defaultTaskBudgetUsd')} step="0.01" />
+          </Field>
+          <Field label="Default per mission (USD)" htmlFor="defaultMissionBudgetUsd" error={problem('defaultMissionBudgetUsd')} hint="Hard cap of a new mission; raise it per mission in Mission Control.">
+            <Input {...num('defaultMissionBudgetUsd')} step="1" />
           </Field>
         </CardContent>
       </Card>

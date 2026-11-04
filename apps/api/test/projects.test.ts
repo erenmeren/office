@@ -26,7 +26,7 @@ describe('project settings, agents, audit, artifacts', () => {
   it('settings round-trip with defaults, invalid patch is 400', async () => {
     const s = (await call('GET', `/projects/${projectId}/settings`)).json();
     expect(s.approvalTimeoutMinutes).toBe(30);
-    expect(s.approvalPolicy.plan).toBe('ask');
+    expect(s.approvalPolicy.plan).toBe('auto');
     const put = await call('PUT', `/projects/${projectId}/settings`, { checkCommand: 'pnpm test', dailyBudgetUsd: 10 });
     expect(put.statusCode).toBe(200);
     const again = (await call('GET', `/projects/${projectId}/settings`)).json();

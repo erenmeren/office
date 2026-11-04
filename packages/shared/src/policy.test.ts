@@ -10,7 +10,12 @@ describe('ApprovalPolicySchema', () => {
     for (const k of ['plan', 'git_push', 'merge', 'deploy', 'destructive_command', 'sensitive_path', 'budget_exceeded'] as const) {
       expect(p[k]).toBe('ask');
     }
-    expect(ProjectSettingsSchema.parse({}).approvalPolicy).toEqual(p);
+    // a project's policy defaults to auto everywhere (owner decision); the bare schema stays ask
+    const project = ProjectSettingsSchema.parse({});
+    for (const k of ['plan', 'git_push', 'merge', 'deploy', 'destructive_command', 'sensitive_path', 'budget_exceeded'] as const) expect(project.approvalPolicy[k]).toBe('auto');
+    expect(project.approvalPolicy.destructivePatterns).toEqual(p.destructivePatterns);
+    expect(project.dailyBudgetUsd).toBe(1000);
+    expect(project.defaultMissionBudgetUsd).toBe(5000);
     expect(ProjectSettingsSchema.parse({}).defaultMaxAttempts).toBe(2);
     expect(p.destructivePatterns).toEqual(DEFAULT_DESTRUCTIVE_PATTERNS);
     expect(p.sensitivePaths).toEqual(DEFAULT_SENSITIVE_PATHS);

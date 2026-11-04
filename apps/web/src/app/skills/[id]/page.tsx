@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { del, post } from '@/lib/api';
 import { useSkill } from '@/lib/queries';
 import { skillErrorText, skillSourceLabel } from '@/lib/skills';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const PRE = 'whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-sm';
 
@@ -26,6 +27,7 @@ export default function SkillPage() {
   const files = s?.currentVersion?.files ?? {};
   const others = Object.entries(files).filter(([p]) => p !== 'SKILL.md');
 
+  const confirm = useConfirm();
   const refresh = async () => {
     await qc.invalidateQueries({ queryKey: ['skills'] });
     await qc.invalidateQueries({ queryKey: ['skill', id] });
@@ -69,8 +71,8 @@ export default function SkillPage() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => {
-              if (!window.confirm(`Delete "${s.name}" and all its versions?`)) return;
+            onClick={async () => {
+              if (!(await confirm({ title: `Delete "${s.name}"?`, body: 'All its versions are deleted.', confirmLabel: 'Delete', destructive: true }))) return;
               void act(async () => {
                 await del(`/skills/${id}`);
                 router.push('/skills');

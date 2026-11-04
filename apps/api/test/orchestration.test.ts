@@ -314,7 +314,8 @@ describe('orchestration', () => {
 
     const user = await s.t.prisma.user.findFirstOrThrow();
     await approveBudget(s.t.prisma, s.t.app.hub, fresh.id, user.id);
-    expect((await s.mission(m.id)).budgetUsd).toBeNull();
+    // a daily-budget approval raises the daily budget, never the mission's own cap (the project default)
+    expect((await s.mission(m.id)).budgetUsd).toBe(5000);
     expect((await s.req('GET', `/projects/${s.projectId}/budget`)).json()).toEqual({ spentTodayUsd: 1.5, dailyBudgetUsd: 2 });
     await s.assign(w);
     expect(await s.t.prisma.taskRun.count({ where: { kind: 'task' } })).toBeGreaterThan(0);

@@ -9,6 +9,7 @@ import { MemoryStatusTag, TypeTag } from '@/components/ui/type-tag';
 import { del, post } from '@/lib/api';
 import { sourceLabel } from '@/lib/memory';
 import { useAgents, useMemoryEntry, type MemoryEntry } from '@/lib/queries';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export function MemoryDetail({
   projectId,
@@ -26,6 +27,7 @@ export function MemoryDetail({
   const entry = useMemoryEntry(id, projectId);
   const [error, setError] = useState('');
 
+  const confirm = useConfirm();
   if (entry.isPending) return <p className="text-sm text-ink-3">Loading…</p>;
   if (entry.isError) return <p className="text-sm text-destructive">{String(entry.error)}</p>;
   const e = entry.data;
@@ -40,8 +42,8 @@ export function MemoryDetail({
       setError(String(err));
     }
   };
-  const remove = () => {
-    if (window.confirm(`Delete "${e.title}"?`)) void act(() => del(`/memory/${e.id}`), onDeleted);
+  const remove = async () => {
+    if (await confirm({ title: `Delete "${e.title}"?`, confirmLabel: 'Delete', destructive: true })) void act(() => del(`/memory/${e.id}`), onDeleted);
   };
 
   return (

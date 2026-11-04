@@ -65,7 +65,9 @@ export function ChiefComposer({ project, chief, onCreated }: { project?: Project
             {settings && (
               <>
                 <Chip icon={ShieldCheck}>Plan approval: {settings.approvalPolicy.plan === 'auto' ? 'auto' : 'required'}</Chip>
-                <Chip icon={Wallet}>Budget cap ${settings.defaultTaskBudgetUsd.toFixed(2)}</Chip>
+                <Chip icon={Wallet}>
+                  Mission cap ${settings.defaultMissionBudgetUsd.toFixed(0)} · ${settings.defaultTaskBudgetUsd.toFixed(2)} per task
+                </Chip>
               </>
             )}
           </div>

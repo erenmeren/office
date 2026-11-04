@@ -100,7 +100,7 @@ export async function createMission(
   hub: EventHub,
   input: { projectId: string; request: string; title?: string; budgetUsd?: number },
 ) {
-  await getSettings(prisma, input.projectId); // 404 when the project is missing
+  const settings = await getSettings(prisma, input.projectId); // 404 when the project is missing
   const chief = await prisma.agent.findFirst({ where: { slug: CHIEF_SLUG, isActive: true } });
   if (!chief) throw new HttpError(404, 'no_chief');
   const title = input.title ?? input.request.slice(0, 80);
@@ -119,7 +119,7 @@ export async function createMission(
         projectId: input.projectId,
         title,
         request: input.request,
-        budgetUsd: input.budgetUsd,
+        budgetUsd: input.budgetUsd ?? settings.defaultMissionBudgetUsd,
         status: 'planning',
         conversationId: conversation.id,
       },

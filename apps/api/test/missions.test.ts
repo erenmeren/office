@@ -15,6 +15,8 @@ async function setup() {
     t.app.inject({ method, url, headers: { cookie }, payload });
   const projectId = (await req('POST', '/projects', { name: 'Maratus', slug: 'm1', repoPath: '/tmp/office-ws/m1' })).json()
     .id as string;
+  // these tests drive the plan approval flow; a new project's policy is auto everywhere
+  await req('PUT', `/projects/${projectId}/settings`, { approvalPolicy: { plan: 'ask' } });
   const agent = async (slug: string) =>
     (
       await req('POST', '/agents', {

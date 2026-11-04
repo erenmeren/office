@@ -18,6 +18,7 @@ import { post, put } from '@/lib/api';
 import { missionProgress, missionStatusLine, planGraphNodes, taskCounts } from '@/lib/missions';
 import type { Agent, Mission } from '@/lib/queries';
 import type { Tone } from '@/lib/status';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export const LEGEND: [Tone, string][] = [
   ['done', 'Done'],
@@ -117,6 +118,7 @@ export function PlanCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState(() => (m.plan ? JSON.stringify(m.plan, null, 2) : ''));
+  const confirm = useConfirm();
   const progress = missionProgress(m.tasks);
   const pendingPlan = m.approvals.find((a) => a.type === 'plan' && a.status === 'pending');
   const line = missionStatusLine({ status: m.status, taskCounts: taskCounts(m.tasks), summary: m.summary, planError: m.planRun?.error, decisions });
@@ -203,7 +205,7 @@ export function PlanCard({
             </Button>
           )}
           {CANCELLABLE.includes(m.status) && (
-            <Button variant="destructive" disabled={busy} onClick={() => window.confirm('Cancel this mission? Running tasks are stopped.') && act(() => post(`/missions/${m.id}/cancel`))()}>
+            <Button variant="destructive" disabled={busy} onClick={async () => (await confirm({ title: 'Cancel this mission?', body: 'Running tasks are stopped. Finished work stays on the mission branch.', confirmLabel: 'Cancel mission', destructive: true })) && act(() => post(`/missions/${m.id}/cancel`))()}>
               Cancel mission
             </Button>
           )}
