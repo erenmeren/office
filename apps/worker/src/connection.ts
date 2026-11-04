@@ -1,9 +1,11 @@
-import { join } from 'node:path';
+import { realpathSync, statSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import pino, { type Logger } from 'pino';
 import WebSocket from 'ws';
 import { claudeSessionStore, type RuntimeAdapter } from '@office/runtime';
 import { ApiToWorkerSchema, type ApiToWorker, type OfficeEvent, type ToolCallResult, type WorkerToApi } from '@office/shared';
-import type { WorkerConfig } from './config.js';
+import { GRANTED_ROOTS_FILE, readGrantedRoots, type WorkerConfig } from './config.js';
 import { loadCredential, saveCredential } from './credentials.js';
 import { Outbox } from './outbox.js';
 import { RunExecutor } from './executor.js';
@@ -242,6 +244,9 @@ export class WorkerConnection {
         this.log.info({ runId: msg.runId }, 'run interrupted by the owner');
         this.executor.interrupt(msg.runId);
         return;
+      case 'roots.add':
+        await this.addRoot(msg.requestId, msg.path);
+        return;
       case 'terminal.open':
         await this.terminals.open(msg);
         return;
@@ -272,6 +277,28 @@ export class WorkerConnection {
         return;
       }
     }
+  }
+
+  /** Grants a workspace root the owner chose for a project; the roots array is shared with the executor and the terminals. */
+  private async addRoot(requestId: string, path: string) {
+    const roots = this.config.workspaceRoots;
+    const answer = (error?: string) => this.send({ type: 'roots.changed', requestId, allowedRoots: [...roots], ...(error ? { error } : {}) });
+    let real: string;
+    try {
+      real = realpathSync(resolve(path));
+      if (!statSync(real).isDirectory()) return answer(`${path} is not a directory`);
+    } catch {
+      return answer(`${path} does not exist on this worker`);
+    }
+    if (!roots.some((r) => real === r || real.startsWith(r.endsWith('/') ? r : r + '/'))) {
+      roots.push(real);
+      const granted = [...new Set([...readGrantedRoots(this.config.home), real])];
+      await writeFile(join(this.config.home, GRANTED_ROOTS_FILE), JSON.stringify(granted, null, 2) + '\n', { mode: 0o600 }).catch((err: unknown) =>
+        this.log.error({ err, path: real }, 'granted root not persisted; it is lost at the next restart'),
+      );
+      this.log.info({ path: real }, 'workspace root granted by the owner');
+    }
+    answer();
   }
 
   private failStart(err: Error) {

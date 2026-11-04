@@ -1,4 +1,5 @@
 import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -104,6 +105,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     gitTimeoutSeconds: e.OFFICE_GIT_TIMEOUT_SECONDS,
     trustUnidentifiedWorkers: e.OFFICE_TRUST_UNIDENTIFIED_WORKERS === 'true',
     cookieSecure: env.NODE_ENV === 'production',
-    skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot]).map(realOrGiven),
+    // the owner's own Claude skills (~/.claude/skills, plugin caches) are importable by default
+    skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot, join(homedir(), '.claude')]).map(realOrGiven),
   };
 }

@@ -70,6 +70,7 @@ const SERVER_ONLY_EVENTS = new Set([
 export class WorkerGateway {
   private conns = new Map<string, Connection>();
   private pendingSessions = new Map<string, PendingSessions>();
+  private pendingRoots = new Map<string, { workerId: string; resolve: (roots: string[]) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   /** Office-managed manual sessions (terminals) on local workers. */
   readonly terminals: TerminalRegistry;
 
@@ -155,6 +156,20 @@ export class WorkerGateway {
       }, SESSIONS_TIMEOUT_MS);
       this.pendingSessions.set(requestId, { workerId: worker, resolve, reject, timer });
       this.send(worker, { type: 'sessions.request', requestId, query });
+    });
+  }
+
+  /** Asks a worker to add `path` to its workspace roots (the owner made a project there); resolves with its roots. */
+  grantRoot(workerId: string, path: string): Promise<string[]> {
+    if (!this.isConnected(workerId)) return Promise.reject(new HttpError(503, 'worker_offline', 'that worker is not connected'));
+    const requestId = randomUUID();
+    return new Promise<string[]>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRoots.delete(requestId);
+        reject(new HttpError(504, 'worker_timeout', 'the worker did not answer in time'));
+      }, SESSIONS_TIMEOUT_MS);
+      this.pendingRoots.set(requestId, { workerId, resolve, reject, timer });
+      this.send(workerId, { type: 'roots.add', requestId, path });
     });
   }
 
@@ -398,6 +413,18 @@ export class WorkerGateway {
       case 'terminal.output':
       case 'terminal.exit':
         return this.terminals.onWorkerMessage(workerId, msg);
+      case 'roots.changed': {
+        const conn = this.conns.get(workerId);
+        if (conn) conn.allowedRoots = msg.allowedRoots;
+        await this.prisma.worker.update({ where: { id: workerId }, data: { allowedRoots: msg.allowedRoots } });
+        const p = msg.requestId ? this.pendingRoots.get(msg.requestId) : undefined;
+        if (!p || p.workerId !== workerId) return;
+        clearTimeout(p.timer);
+        this.pendingRoots.delete(msg.requestId!);
+        if (msg.error) p.reject(new HttpError(400, 'root_refused', msg.error));
+        else p.resolve(msg.allowedRoots);
+        return;
+      }
       case 'sessions.response': {
         const p = this.pendingSessions.get(msg.requestId);
         if (!p || p.workerId !== workerId) return;

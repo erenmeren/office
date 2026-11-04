@@ -1,4 +1,4 @@
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { resolve } from 'node:path';
 import { WorkerTagSchema } from '@office/shared';
@@ -33,15 +33,20 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
     if (!WorkerTagSchema.safeParse(t).success) throw new Error(`Invalid tag in OFFICE_WORKER_TAGS: ${t}`);
   }
   const home = resolve(expandHome(env.OFFICE_WORKER_HOME ?? '~/.office-worker'));
+  // roots the owner granted through Office (roots.add), kept across restarts; a missing directory is dropped silently
+  const granted = readGrantedRoots(home).filter((p) => existsSync(p));
   return {
     apiUrl: env.OFFICE_API_URL,
     home,
     enrollToken: env.OFFICE_ENROLL_TOKEN || undefined,
-    workspaceRoots: roots.map((p) => {
-      const abs = resolve(expandHome(p));
-      if (!existsSync(abs)) throw new Error(`Workspace root does not exist: ${abs} (OFFICE_WORKSPACE_ROOTS)`);
-      return realpathSync(abs);
-    }),
+    workspaceRoots: [
+      ...roots.map((p) => {
+        const abs = resolve(expandHome(p));
+        if (!existsSync(abs)) throw new Error(`Workspace root does not exist: ${abs} (OFFICE_WORKSPACE_ROOTS)`);
+        return realpathSync(abs);
+      }),
+      ...granted.map((p) => realpathSync(p)),
+    ].filter((p, i, a) => a.indexOf(p) === i),
     runtime,
     capacity,
     name: env.OFFICE_WORKER_NAME || hostname(),
@@ -49,4 +54,15 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
     canClone,
     machineId: machineId(home, etcMachineId, env.OFFICE_MACHINE_ID?.trim() || undefined),
   };
+}
+
+export const GRANTED_ROOTS_FILE = 'granted-roots.json';
+
+export function readGrantedRoots(home: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(resolve(home, GRANTED_ROOTS_FILE), 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : [];
+  } catch {
+    return [];
+  }
 }

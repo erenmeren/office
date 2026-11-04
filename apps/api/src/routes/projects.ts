@@ -108,7 +108,16 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
         if (head) data.defaultBranch = head;
       }
     }
-    return reply.code(201).send(await app.prisma.project.create({ data: { ...data, repoPath } }));
+    const project = await app.prisma.project.create({ data: { ...data, repoPath } });
+    // the owner chose this folder: the worker on this machine may work in it from now on (persisted on the worker)
+    const local = app.gateway.localWorkerId();
+    if (local && !app.gateway.onlineWorkers().some((w) => w.local(repoPath))) {
+      await app.gateway.grantRoot(local, repoPath).then(
+        (roots) => audit(app.prisma, { userId: req.user?.id, action: 'worker.root_granted', targetType: 'worker', targetId: local, detail: { path: repoPath, roots } }),
+        (err: Error) => app.log.warn({ err, repoPath }, 'workspace root not granted; the project waits for a worker until it is'),
+      );
+    }
+    return reply.code(201).send(project);
   });
 
   app.get('/projects/:id', async (req) => {

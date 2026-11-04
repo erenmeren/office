@@ -186,6 +186,24 @@ export interface MarketSkill {
   installs: number;
 }
 export const useSkills = () => useQuery({ queryKey: ['skills'], queryFn: () => api<Skill[]>('/skills') });
+/** The owner's own Claude Code skills on the API's machine (~/.claude/skills and installed plugins). */
+export interface MachineSkill {
+  name: string;
+  description: string;
+  path: string;
+  origin: string;
+  skillId: string | null;
+}
+export const useMachineSkills = () => useQuery({ queryKey: ['skills', 'machine'], queryFn: () => api<MachineSkill[]>('/skills/machine') });
+export interface BrowseResult {
+  path: string;
+  parent: string | null;
+  isRepo: boolean;
+  dirs: { name: string; path: string; isRepo: boolean }[];
+  roots: string[];
+}
+export const useBrowse = (path: string | undefined, enabled: boolean) =>
+  useQuery({ queryKey: ['browse', path ?? ''], queryFn: () => api<BrowseResult>(`/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`), enabled });
 export const useMarketSearch = (q: string) =>
   useQuery({
     queryKey: ['skills', 'market', q],

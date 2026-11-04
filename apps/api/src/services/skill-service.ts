@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { parseSkillFrontmatter, skillChecksum, validateSkillFiles, type SkillFiles, type SkillStatus } from '@office/shared';
@@ -195,4 +196,44 @@ export async function deleteSkill(prisma: PrismaClient, skillId: string) {
     prisma.skillVersion.deleteMany({ where: { skillId } }),
     prisma.skill.delete({ where: { id: skillId } }),
   ]);
+}
+
+export interface MachineSkill {
+  name: string;
+  description: string;
+  path: string;
+  /** `user` for ~/.claude/skills, else the plugin that ships it */
+  origin: string;
+  /** the Office skill imported from this path, if any */
+  skillId: string | null;
+}
+
+const PLUGIN_DEPTH = 3; // cache/<marketplace>/<plugin>/<version>/skills/<name>
+
+/** The owner's own Claude Code skills on this machine: `~/.claude/skills/*` and every installed plugin's `skills/*`. */
+export async function machineSkills(prisma: PrismaClient, home = homedir()): Promise<MachineSkill[]> {
+  const found: Omit<MachineSkill, 'skillId'>[] = [];
+  const skillDirs = async (dir: string, origin: string) => {
+    for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (!e.isDirectory() && !e.isSymbolicLink()) continue;
+      const path = join(dir, e.name);
+      const text = await readFile(join(path, 'SKILL.md'), 'utf8').catch(() => null);
+      if (text === null) continue;
+      const fm = parseSkillFrontmatter(text);
+      found.push({ name: fm.name || e.name, description: fm.description ?? '', path, origin });
+    }
+  };
+  await skillDirs(join(home, '.claude', 'skills'), 'user');
+  const walkPlugins = async (dir: string, depth: number) => {
+    for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (!e.isDirectory()) continue;
+      const sub = join(dir, e.name);
+      if (depth === 0) await skillDirs(join(sub, 'skills'), `plugin:${basename(dirname(sub))}`);
+      else await walkPlugins(sub, depth - 1);
+    }
+  };
+  await walkPlugins(join(home, '.claude', 'plugins', 'cache'), PLUGIN_DEPTH - 1);
+  const imported = await prisma.skill.findMany({ where: { source: 'local', sourceRef: { in: found.map((f) => f.path) } }, select: { id: true, sourceRef: true } });
+  const byPath = new Map(imported.map((s) => [s.sourceRef, s.id]));
+  return found.sort((a, b) => a.origin.localeCompare(b.origin) || a.name.localeCompare(b.name)).map((f) => ({ ...f, skillId: byPath.get(f.path) ?? null }));
 }

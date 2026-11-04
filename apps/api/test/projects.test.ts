@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentAllowed } from '../src/services/project-service.js';
 import { storeArtifact, readArtifact } from '../src/services/artifact-store.js';
 import { makeApp } from './helpers.js';
+import { connectFakeWorker, until } from './fake-worker.js';
 
 describe('project settings, agents, audit, artifacts', () => {
   let t: Awaited<ReturnType<typeof makeApp>>;
@@ -178,6 +179,58 @@ describe('project delete', () => {
     expect(await t.prisma.task.count({ where: { projectId: p } })).toBe(0);
     expect(await t.prisma.memoryEntry.count({ where: { projectId: p } })).toBe(0);
     expect((await t.prisma.auditLog.findFirst({ where: { action: 'project.deleted', targetId: p } }))?.detail).toEqual({ slug: 'gone' });
+    await t.close();
+  });
+});
+
+describe('project folder grant', () => {
+  it('asks the local worker to add a folder outside its roots, and records the new roots', async () => {
+    const t = await makeApp();
+    const cookie = await t.login();
+    await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const req = (method: 'GET' | 'POST', url: string, payload?: object) => t.app.inject({ method, url, headers: { cookie }, payload });
+    const { id: workerId, enrollToken } = (await req('POST', '/workers', { name: 'w1' })).json();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', allowedRoots: ['/tmp/office-ws'] });
+    const dir = mkdtempSync(join(tmpdir(), 'office-grant-'));
+    const creating = req('POST', '/projects', { name: 'G', slug: 'granted', repoPath: dir });
+    const ask = await w.waitFor('roots.add');
+    expect(ask.path).toBe(dir);
+    w.send({ type: 'roots.changed', requestId: ask.requestId, allowedRoots: ['/tmp/office-ws', dir] });
+    expect((await creating).statusCode).toBe(201);
+    await until(async () => (await t.prisma.worker.findUniqueOrThrow({ where: { id: workerId } })).allowedRoots.includes(dir), 'roots stored');
+    expect(t.app.gateway.onlineWorkers()[0]!.local(dir)).toBe(true);
+    expect((await t.prisma.auditLog.findFirst({ where: { action: 'worker.root_granted' } }))?.detail).toMatchObject({ path: dir });
+    // a folder already under the roots asks nothing
+    const under = await req('POST', '/projects', { name: 'U', slug: 'under', repoPath: '/tmp/office-ws/u' });
+    expect(under.statusCode).toBe(201);
+    expect(w.received.filter((m) => m.type === 'roots.add')).toHaveLength(1);
+    await w.close();
+    rmSync(dir, { recursive: true, force: true });
+    await t.close();
+  });
+});
+
+describe('folder browser', () => {
+  it('lists directories under the home, the data dir and worker roots only', async () => {
+    const t = await makeApp();
+    const cookie = await t.login();
+    const get = (url: string) => t.app.inject({ method: 'GET', url, headers: { cookie } });
+    const base = mkdtempSync(join(tmpdir(), 'office-browse-'));
+    execFileSync('mkdir', ['-p', join(base, 'repo', '.git'), join(base, 'plain'), join(base, '.hidden'), join(base, 'node_modules')]);
+    const outside = await get(`/browse?path=${encodeURIComponent(base)}`);
+    expect(outside.statusCode).toBe(400);
+    expect(outside.json()).toMatchObject({ error: 'outside_scope' });
+    await t.app.listen({ port: 0, host: '127.0.0.1' });
+    const { enrollToken } = (await t.app.inject({ method: 'POST', url: '/workers', headers: { cookie }, payload: { name: 'w' } })).json();
+    const w = await connectFakeWorker(t.app, { enrollToken, allowedRoots: [base] });
+    const listed = await get(`/browse?path=${encodeURIComponent(base)}`);
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toMatchObject({ path: base, parent: null, isRepo: false, dirs: [{ name: 'plain', isRepo: false }, { name: 'repo', isRepo: true }] });
+    expect((await get(`/browse?path=${encodeURIComponent(join(base, 'repo'))}`)).json()).toMatchObject({ parent: base, isRepo: true, dirs: [] });
+    expect((await get(`/browse?path=${encodeURIComponent(join(base, 'missing'))}`)).statusCode).toBe(404);
+    expect((await get('/browse')).json().path).toBe(resolve(process.env.HOME!));
+    await w.close();
+    rmSync(base, { recursive: true, force: true });
     await t.close();
   });
 });

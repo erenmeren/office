@@ -196,3 +196,29 @@ describe('skills', () => {
     expect(await t.prisma.skillVersion.count({ where: { skillId: loose.id } })).toBe(0);
   });
 });
+
+describe('skills on this machine', () => {
+  it('lists ~/.claude/skills and plugin skills with their imported Office skill', async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { machineSkills } = await import('../src/services/skill-service.js');
+    const home = mkdtempSync(join(tmpdir(), 'office-home-'));
+    const mk = (dir: string, name: string, desc: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${desc}\n---\n# ${name}\n`);
+    };
+    mk(join(home, '.claude', 'skills', 'mine'), 'mine', 'my own');
+    mkdirSync(join(home, '.claude', 'skills', 'not-a-skill'), { recursive: true });
+    mk(join(home, '.claude', 'plugins', 'cache', 'market', 'caveman', '1.0.0', 'skills', 'caveman'), 'caveman', 'terse');
+    const t = await makeApp();
+    await t.prisma.skill.create({ data: { name: 'mine', description: 'my own', source: 'local', sourceRef: join(home, '.claude', 'skills', 'mine'), status: 'approved' } });
+    const found = await machineSkills(t.prisma, home);
+    expect(found.map((f) => [f.name, f.origin, !!f.skillId])).toEqual([
+      ['caveman', 'plugin:caveman', false],
+      ['mine', 'user', true],
+    ]);
+    await t.close();
+    rmSync(home, { recursive: true, force: true });
+  });
+});

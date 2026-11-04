@@ -4,7 +4,7 @@ import { SkillFilesSchema, parseSkillFrontmatter } from '@office/shared';
 import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
-import { addSkillVersion, createSkill, deleteSkill, importGit, importLocal, importMarket, refreshSkill } from '../services/skill-service.js';
+import { addSkillVersion, createSkill, deleteSkill, importGit, importLocal, importMarket, machineSkills, refreshSkill } from '../services/skill-service.js';
 
 const CreateSkill = z.object({ name: z.string().min(1).optional(), files: SkillFilesSchema });
 const ImportSkill = z.discriminatedUnion('source', [
@@ -88,6 +88,9 @@ export async function skillRoutes(app: FastifyInstance, opts: { config: Config }
     const skill = await createSkill(app.prisma, { ...body, source: 'ui', status: 'approved' });
     return reply.code(201).send(skill);
   });
+
+  /** The owner's Claude Code skills on the API's machine, with the Office skill each is already imported as. */
+  app.get('/skills/machine', async () => machineSkills(app.prisma));
 
   app.post('/skills/import', async (req, reply) => {
     const body = ImportSkill.parse(req.body);

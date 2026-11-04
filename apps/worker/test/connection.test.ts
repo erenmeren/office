@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pino from 'pino';
@@ -215,4 +215,30 @@ it('re-sends an unacknowledged result on a heartbeat after 30 s on a live socket
   await until(() => received.filter((m) => m.type === 'run.result').length === 2, 'result not resent on heartbeat');
   await until(() => !existsSync(join(home, 'outbox', 'r2.json')), 'outbox entry not removed after ack');
   expect(received.filter((m) => m.type === 'hello')).toHaveLength(1);
+});
+
+it('roots.add grants a directory for the rest of the process and the next start, and refuses a missing one', async () => {
+  const h = harness();
+  const conn = h.make();
+  await conn.start();
+  const extra = mkdirSync(join(h.home, 'granted', 'repo'), { recursive: true }) && join(h.home, 'granted', 'repo');
+  const outside = mkdtempSync(join(tmpdir(), 'office-granted-'));
+  cleanup.push(() => rmSync(outside, { recursive: true, force: true }));
+  h.sockets[0]!.send(JSON.stringify({ type: 'roots.add', requestId: 'r1', path: outside }));
+  await until(() => h.received.some((m) => m.type === 'roots.changed' && m.requestId === 'r1'), 'roots.changed');
+  const changed = h.received.find((m) => m.type === 'roots.changed' && m.requestId === 'r1') as Extract<WorkerToApi, { type: 'roots.changed' }>;
+  expect(changed.error).toBeUndefined();
+  expect(changed.allowedRoots).toEqual([h.home, realpathSync(outside)]);
+  expect(JSON.parse(readFileSync(join(h.home, 'granted-roots.json'), 'utf8'))).toEqual([realpathSync(outside)]);
+  // already under a root: nothing added; a missing directory: refused, roots unchanged
+  h.sockets[0]!.send(JSON.stringify({ type: 'roots.add', requestId: 'r2', path: extra }));
+  h.sockets[0]!.send(JSON.stringify({ type: 'roots.add', requestId: 'r3', path: join(h.home, 'nope') }));
+  await until(() => h.received.some((m) => m.type === 'roots.changed' && m.requestId === 'r3'), 'r3');
+  expect((h.received.find((m) => m.type === 'roots.changed' && m.requestId === 'r2') as { allowedRoots: string[] }).allowedRoots).toHaveLength(2);
+  expect(h.received.find((m) => m.type === 'roots.changed' && m.requestId === 'r3')).toMatchObject({ error: expect.stringContaining('does not exist') });
+  await conn.stop();
+  // the next start reads the granted root back
+  const { loadWorkerConfig } = await import('../src/config.js');
+  const cfg = loadWorkerConfig({ OFFICE_API_URL: 'ws://x', OFFICE_WORKER_HOME: h.home, OFFICE_WORKSPACE_ROOTS: h.home, OFFICE_RUNTIME: 'fake' }, 'm');
+  expect(cfg.workspaceRoots).toEqual([realpathSync(h.home), realpathSync(outside)]);
 });

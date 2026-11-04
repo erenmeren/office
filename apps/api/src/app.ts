@@ -30,6 +30,7 @@ import { EventHub } from './services/event-hub.js';
 import { Scheduler } from './services/scheduler.js';
 import { claudeSessionRoutes } from './routes/claude-sessions.js';
 import { terminalRoutes } from './routes/terminals.js';
+import { browseRoutes } from './routes/browse.js';
 import { WorkerGateway } from './ws/worker-gateway.js';
 import { UiGateway } from './ws/ui-gateway.js';
 
@@ -106,6 +107,7 @@ export async function buildApp(
   await app.register(observabilityRoutes);
   await app.register(claudeSessionRoutes);
   await app.register(terminalRoutes);
+  await app.register(browseRoutes, { config });
   app.addHook('onReady', async () => {
     await gateway.terminals.load();
     scheduler.start();

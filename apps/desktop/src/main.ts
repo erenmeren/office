@@ -123,7 +123,7 @@ async function start(): Promise<void> {
     COOKIE_SECRET: secret('cookie-secret'),
     WEB_ORIGIN,
     OFFICE_DATA_DIR: dataDir,
-    OFFICE_SKILL_IMPORT_ROOTS: join(RES, 'templates', 'skills'),
+    OFFICE_SKILL_IMPORT_ROOTS: [join(RES, 'templates', 'skills'), join(homedir(), '.claude')].join(':'),
     ...extra,
   });
   node('web', join(RES, 'web', 'apps', 'web', 'server.js'), join(RES, 'web', 'apps', 'web'), {

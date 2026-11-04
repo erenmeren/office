@@ -68,6 +68,8 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
   /** base64 PTY output; dropped while disconnected (the API keeps the scrollback) */
   z.object({ type: z.literal('terminal.output'), terminalId: z.string(), data: z.string() }),
   z.object({ type: z.literal('terminal.exit'), terminalId: z.string(), exitCode: z.number().int().nullable(), signal: z.number().int().optional() }),
+  /** Answer to `roots.add`: the worker's workspace roots now (unchanged on error). */
+  z.object({ type: z.literal('roots.changed'), requestId: z.string().optional(), allowedRoots: z.array(z.string()), error: z.string().optional() }),
 ]);
 export type WorkerToApi = z.infer<typeof WorkerToApiSchema>;
 
@@ -100,6 +102,8 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('terminal.input'), terminalId: z.string(), data: z.string().max(TERMINAL_INPUT_MAX) }),
   z.object({ type: z.literal('terminal.resize'), terminalId: z.string(), ...TerminalSizeSchema.shape }),
   z.object({ type: z.literal('terminal.close'), terminalId: z.string() }),
+  /** The owner made a project on `path`: add it to the workspace roots (persisted on the worker); answered by `roots.changed`. */
+  z.object({ type: z.literal('roots.add'), requestId: z.string(), path: z.string().min(1) }),
   z.object({ type: z.literal('error'), message: z.string() }),
 ]);
 export type ApiToWorker = z.infer<typeof ApiToWorkerSchema>;

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import { FolderPicker } from '@/components/folder-picker';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +22,7 @@ export function NewProjectForm({ onDone, initial }: { onDone: () => void; initia
   const qc = useQueryClient();
   const [form, setForm] = useState({ name: '', slug: '', repoPath: '', defaultBranch: '', ...initial });
   const [error, setError] = useState('');
+  const [picking, setPicking] = useState(false);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
@@ -53,6 +55,11 @@ export function NewProjectForm({ onDone, initial }: { onDone: () => void; initia
           />
         </div>
       ))}
+      <p className="text-xs text-ink-3">
+        A repository, an empty folder (Office runs <code className="font-mono">git init</code> there), or nothing: Office creates one. The worker on this machine gets access to the folder you choose.{' '}
+        <button type="button" className="text-ink underline-offset-4 hover:underline" onClick={() => setPicking(true)}>Browse folders…</button>
+      </p>
+      <FolderPicker open={picking} onOpenChange={setPicking} initial={form.repoPath.trim() || undefined} onPick={(path) => setForm({ ...form, repoPath: path })} />
       {error && <p className="text-sm text-destructive">{error}</p>}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onDone}>
