@@ -401,3 +401,39 @@ authed('audit: rows render, action filter narrows, load older appends', async ({
   await expect(page.getByRole('button', { name: 'Load older' })).toHaveCount(0);
   expectQuiet(noise);
 });
+
+authed('claude cli sessions: grouped by project and folder, read-only transcript, open in terminal', async ({ page, request: api, noise }) => {
+  const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string; name: string; repoPath: string }[];
+  const now = Date.now();
+  const mine = { sessionId: 'cli-aaaa-1111', title: 'Fix the login form', cwd: project.repoPath, gitBranch: 'main', createdAt: now - 7200_000, lastModified: now - 60_000, projectId: project.id };
+  const other = { sessionId: 'cli-bbbb-2222', title: 'Scratch notes', cwd: '/tmp/office-e2e/elsewhere', lastModified: now - 300_000, live: { pid: 4242, kind: 'interactive', status: 'busy' }, projectId: null };
+  await page.route(`${API}/claude-sessions`, (route) => route.fulfill({ json: { sessions: [mine, other] } }));
+  await page.route(`${API}/claude-sessions/cli-aaaa-1111/messages?**`, (route) =>
+    route.fulfill({ json: { kind: 'messages', entries: [{ uuid: 'u1', role: 'user', text: 'please fix the login form', tools: [] }, { uuid: 'a1', role: 'assistant', text: 'On it.', tools: ['Read', 'Edit'] }], nextOffset: null } }),
+  );
+  await page.route(`${API}/claude-sessions/cli-bbbb-2222/messages?**`, (route) => route.fulfill({ json: { kind: 'messages', entries: [], nextOffset: null } }));
+  await page.route(`${API}/claude-sessions/cli-aaaa-1111/open`, (route) => route.fulfill({ json: { kind: 'open', terminal: 'kitty' } }));
+  await page.goto('/sessions');
+  await page.waitForLoadState('networkidle');
+
+  const card = page.getByRole('region', { name: project.name });
+  await expect(card.getByRole('button', { name: /Fix the login form/ })).toBeVisible();
+  const folder = page.getByRole('region', { name: '/tmp/office-e2e/elsewhere' });
+  await expect(folder.getByText('running')).toBeVisible();
+  await expect(folder.getByRole('button', { name: 'Add as project' })).toBeVisible();
+
+  await card.getByRole('button', { name: /Fix the login form/ }).click();
+  const transcript = page.getByRole('list', { name: 'Transcript' });
+  await expect(transcript.getByText('please fix the login form')).toBeVisible();
+  await expect(transcript.getByText('Edit', { exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox')).toHaveCount(0); // no message box for an external session
+  await page.getByRole('button', { name: 'Open in terminal' }).click();
+  await expect(page.getByRole('status')).toHaveText('Opened in kitty.');
+
+  await folder.getByRole('button', { name: /Scratch notes/ }).click();
+  await expect(page.getByRole('button', { name: 'Open in terminal' })).toBeDisabled();
+  await folder.getByRole('button', { name: 'Add as project' }).click();
+  await expect(page.getByRole('dialog').getByLabel('Repository path')).toHaveValue('/tmp/office-e2e/elsewhere');
+  await expect(page.getByRole('dialog').getByLabel('Slug')).toHaveValue('elsewhere');
+  expectQuiet(noise);
+});

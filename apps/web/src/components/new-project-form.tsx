@@ -17,9 +17,9 @@ const FIELDS = [
 ] as const;
 
 /** Creates a project and selects it. An empty repository path asks the API for a new repository (greenfield). */
-export function NewProjectForm({ onDone }: { onDone: () => void }) {
+export function NewProjectForm({ onDone, initial }: { onDone: () => void; initial?: Partial<Record<(typeof FIELDS)[number]['key'], string>> }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState({ name: '', slug: '', repoPath: '', defaultBranch: '' });
+  const [form, setForm] = useState({ name: '', slug: '', repoPath: '', defaultBranch: '', ...initial });
   const [error, setError] = useState('');
   const submit = async (e: FormEvent) => {
     e.preventDefault();

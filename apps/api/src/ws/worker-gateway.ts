@@ -3,9 +3,11 @@ import { resolve } from 'node:path';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { PrismaClient } from '@office/db';
-import { WorkerToApiSchema, type ApiToWorker, type ToolCallResult, type WorkerToApi } from '@office/shared';
+import { randomUUID } from 'node:crypto';
+import { WorkerToApiSchema, type ApiToWorker, type SessionsErrorCode, type SessionsQuery, type SessionsResult, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
+import { HttpError } from '../lib/errors.js';
 import { isUnderRoot } from '../lib/paths.js';
 import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
@@ -38,6 +40,16 @@ function realOrResolved(path: string) {
 }
 
 const FINAL_RUN = new Set(['succeeded', 'failed', 'cancelled']);
+const SESSIONS_TIMEOUT_MS = 10_000;
+// worker-side session errors as HTTP statuses
+const SESSIONS_ERROR_STATUS: Record<SessionsErrorCode, number> = { outside_roots: 400, session_live: 409, no_terminal: 409, internal_error: 502 };
+
+interface PendingSessions {
+  workerId: string;
+  resolve: (r: SessionsResult) => void;
+  reject: (e: Error) => void;
+  timer: NodeJS.Timeout;
+}
 
 type Hello = Extract<WorkerToApi, { type: 'hello' }>;
 
@@ -53,6 +65,7 @@ const SERVER_ONLY_EVENTS = new Set([
 
 export class WorkerGateway {
   private conns = new Map<string, Connection>();
+  private pendingSessions = new Map<string, PendingSessions>();
 
   constructor(
     private prisma: PrismaClient,
@@ -93,6 +106,34 @@ export class WorkerGateway {
 
   releaseRun(workerId: string, runId: string) {
     this.conns.get(workerId)?.activeRuns.delete(runId);
+  }
+
+  /**
+   * Asks a worker on this machine about its Claude Code sessions (list, transcript page, open in a terminal).
+   * 503 `no_local_worker` when none is connected; the worker's own refusals map to 400/409.
+   */
+  requestSessions(query: SessionsQuery): Promise<SessionsResult> {
+    const isLocal = (c: Connection) => (c.machineId === undefined ? this.config.trustUnidentifiedWorkers : c.machineId === this.config.machineId);
+    const worker = [...this.conns].find(([, c]) => isLocal(c) && c.socket.readyState === c.socket.OPEN)?.[0];
+    if (!worker) return Promise.reject(new HttpError(503, 'no_local_worker', 'no worker is connected from this machine'));
+    const requestId = randomUUID();
+    return new Promise<SessionsResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSessions.delete(requestId);
+        reject(new HttpError(504, 'worker_timeout', 'the worker did not answer in time'));
+      }, SESSIONS_TIMEOUT_MS);
+      this.pendingSessions.set(requestId, { workerId: worker, resolve, reject, timer });
+      this.send(worker, { type: 'sessions.request', requestId, query });
+    });
+  }
+
+  private failPendingSessions(workerId: string, err: Error) {
+    for (const [id, p] of this.pendingSessions) {
+      if (p.workerId !== workerId) continue;
+      clearTimeout(p.timer);
+      this.pendingSessions.delete(id);
+      p.reject(err);
+    }
   }
 
   /** Closes the worker's socket, if connected (used on revoke). */
@@ -142,6 +183,7 @@ export class WorkerGateway {
       chain = chain.then(async () => {
         if (!workerId || this.conns.get(workerId)?.socket !== socket) return;
         this.conns.delete(workerId);
+        this.failPendingSessions(workerId, new HttpError(503, 'worker_disconnected', 'the worker disconnected'));
         // runs stay leased; expireLeases reclaims them if the worker does not come back
         await this.prisma.worker
           .updateMany({ where: { id: workerId, status: 'online' }, data: { status: 'offline' } })
@@ -315,6 +357,18 @@ export class WorkerGateway {
       case 'integration.check': {
         const run = await findLeasedRun(this.prisma, msg.runId, workerId);
         this.send(workerId, { type: 'integration.allowed', runId: msg.runId, ...(run ? { ok: true } : { ok: false, reason: 'lease lost' }) });
+        return;
+      }
+      case 'sessions.response': {
+        const p = this.pendingSessions.get(msg.requestId);
+        if (!p || p.workerId !== workerId) return;
+        clearTimeout(p.timer);
+        this.pendingSessions.delete(msg.requestId);
+        if (msg.result) p.resolve(msg.result);
+        else {
+          const e = msg.error ?? { code: 'internal_error' as const, message: 'empty response' };
+          p.reject(new HttpError(SESSIONS_ERROR_STATUS[e.code], e.code, e.message));
+        }
         return;
       }
     }

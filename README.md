@@ -52,6 +52,8 @@ The API and the worker read their configuration from the process environment onl
 set -a; . ./.env; set +a
 ```
 
+The Live Sessions page also lists the Claude Code sessions you started yourself from a terminal in any folder under `OFFICE_WORKSPACE_ROOTS` (read by the local worker through the Agent SDK, never copied), with a read-only transcript and "Open in terminal", which runs `claude --resume <id>` in `$TERMINAL` or the first terminal emulator found on the worker's `PATH` (the worker needs `DISPLAY` or `WAYLAND_DISPLAY`); a session still running in a terminal is only shown, never resumed twice.
+
 The worker needs only the `OFFICE_*` variables: `OFFICE_API_URL`, `OFFICE_WORKER_HOME`, `OFFICE_WORKSPACE_ROOTS`, `OFFICE_RUNTIME`, `OFFICE_WORKER_CAPACITY`, and optionally `OFFICE_ENROLL_TOKEN` and `OFFICE_WORKER_NAME`. Agent sessions inherit the worker's environment minus `CLAUDE*`, `AI_AGENT`, `DATABASE_URL*`, `COOKIE_SECRET`, `REDIS_URL` and `OFFICE_*`; any other secret exported into the worker's shell reaches every agent session. Export only the `OFFICE_*` variables for the worker (see section 11 and `docs/security.md`).
 
 `scripts/dev-all.sh` exports the whole `.env` for convenience, then starts infra, applies migrations and runs `pnpm dev`. Because it starts the worker too, use it only with throwaway local values.
