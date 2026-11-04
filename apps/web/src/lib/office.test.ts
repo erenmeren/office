@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageView } from '@office/shared';
-import { creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, projector, roomOrigin, sprite, themeFor, waitingMail } from './office';
-import type { Agent, LiveSession, Overview } from './queries';
+import { creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, ownerRoom, projector, roomOrigin, sprite, themeFor, waitingMail } from './office';
+import type { Agent, ClaudeSession, LiveSession, Overview, TerminalView } from './queries';
 
 describe('floorLayout', () => {
   it('is the 1160×650 artboard floor, 1300 wide, for six rooms', () => {
@@ -61,4 +61,14 @@ it('mail: live messages fly for 3.2 s, waited questions stay, own project only',
 it('oneLine keeps the first line and cuts long text', () => {
   expect(oneLine('  Typecheck green\nwiring SSE')).toBe('Typecheck green');
   expect(oneLine('x'.repeat(80), 10)).toBe('xxxxxxxxx…');
+});
+
+it("ownerRoom counts the project's running manual and background sessions", () => {
+  const t = (id: string, projectId: string, status: TerminalView['status']): TerminalView => ({ id, projectId, dir: '/d', workerId: 'w', claudeSessionId: `${id}-session`, status, startedAt: `2026-11-04T00:0${id.length}:00.000Z` });
+  const bg = (sessionId: string, projectId: string, state: string): ClaudeSession => ({ sessionId, title: 'bg', cwd: '/d', lastModified: 1, projectId, workerId: 'w', workerName: 'w', live: { kind: 'background', state, id: sessionId, name: `job ${sessionId}` } });
+  expect(ownerRoom([], [], 'p')).toMatchObject({ agentId: 'owner', status: 'idle', subs: [], startedAt: null });
+  const room = ownerRoom([t('a', 'p', 'running'), t('bb', 'p', 'exited'), t('c', 'q', 'running')], [bg('x', 'p', 'running'), bg('y', 'p', 'done')], 'p');
+  expect(room).toMatchObject({ status: 'running', task: 'Your Claude sessions: 1 manual, 1 background', workerName: 'Office terminal' });
+  expect(room.subs.map((s) => s.name)).toEqual(['a-sessio', 'job x']);
+  expect(['owner'].map(themeFor)).toEqual(['couch']);
 });

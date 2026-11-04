@@ -2,13 +2,13 @@
 
 import { useEffect, useState } from 'react';
 import { OfficeFloor } from '@/components/office-floor';
-import { OfficeAgentPanel, OfficeApprovals } from '@/components/office-panel';
+import { OfficeAgentPanel, OfficeApprovals, OfficeOwnerPanel } from '@/components/office-panel';
 import { Card, CardContent } from '@/components/ui/card';
 import { DashboardStack } from '@/components/ui/kpi-card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
-import { mailFromMessage, officeRooms, oneLine, waitingMail, type Mail } from '@/lib/office';
+import { mailFromMessage, officeRooms, ownerRoom, OWNER_ROOM, oneLine, waitingMail, type Mail } from '@/lib/office';
 import { useProject } from '@/lib/project';
-import { useActivity, useAgents, useLiveSessions, useOverview, type Project } from '@/lib/queries';
+import { useActivity, useAgents, useClaudeSessions, useLiveSessions, useOverview, useTerminals, type Project } from '@/lib/queries';
 import { statusTone } from '@/lib/status';
 import { useMounted } from '@/lib/use-mounted';
 import { uiSocket } from '@/lib/ws';
@@ -73,9 +73,12 @@ function OfficeBody({ project }: { project: Project }) {
   const live = useFloorLive(project.id);
   const sessions = useLiveSessions(project.id).data ?? [];
   const agents = useAgents().data ?? [];
+  const terminals = useTerminals().data ?? [];
+  const claude = useClaudeSessions().data?.sessions ?? [];
   const now = useNow();
   const [picked, setPicked] = useState<string | null>(null);
-  const rooms = officeRooms(overview?.team ?? [], sessions, agents);
+  // the owner's own desk sits after the team: manual sessions in Office terminals and background sessions
+  const rooms = [...officeRooms(overview?.team ?? [], sessions, agents), ownerRoom(terminals, claude, project.id)];
   const selected = rooms.find((r) => r.agentId === picked) ?? rooms.find((r) => r.status !== 'idle') ?? rooms[0];
   const count = (f: (status: string) => boolean) => rooms.filter((r) => f(r.status)).length;
   // bubble: what arrived live, else the waited question, else the last stored agent.text
@@ -92,7 +95,7 @@ function OfficeBody({ project }: { project: Project }) {
           <PageDescription>
             Floor 1 · {rooms.length} rooms · <span className="text-mint">{count((s) => statusTone(s) === 'live')} running</span> ·{' '}
             <span className="text-amber">{count((s) => s === 'waiting_approval')} need approval</span> · {count((s) => s === 'waiting_reply')} waiting for reply ·{' '}
-            {rooms.reduce((n, r) => n + r.subs.length, 0)} subagents
+            {rooms.filter((r) => r.agentId !== OWNER_ROOM).reduce((n, r) => n + r.subs.length, 0)} subagents · {rooms.find((r) => r.agentId === OWNER_ROOM)?.subs.length ?? 0} yours
           </PageDescription>
         </div>
         <PageActions>
@@ -112,7 +115,7 @@ function OfficeBody({ project }: { project: Project }) {
               </span>
             ))}
           </div>
-          {rooms.length === 0 ? (
+          {rooms.length <= 1 && !overview?.team.length ? (
             <CardContent className="py-10 text-center text-[13px] text-ink-3">No agents on the team of this project yet.</CardContent>
           ) : (
             <OfficeFloor rooms={rooms} selected={selected?.agentId ?? null} onSelect={setPicked} now={now} mail={mail} bubbles={bubbles} />
@@ -120,7 +123,11 @@ function OfficeBody({ project }: { project: Project }) {
         </Card>
         <DashboardStack>
           <OfficeApprovals projectId={project.id} rooms={rooms} />
-          {selected && <OfficeAgentPanel key={selected.agentId} room={selected} projectId={project.id} now={now} />}
+          {selected && selected.agentId === OWNER_ROOM ? (
+            <OfficeOwnerPanel room={selected} terminals={terminals.filter((t) => t.projectId === project.id)} claude={claude.filter((s) => s.projectId === project.id)} now={now} />
+          ) : (
+            selected && <OfficeAgentPanel key={selected.agentId} room={selected} projectId={project.id} now={now} />
+          )}
         </DashboardStack>
       </div>
     </DashboardStack>

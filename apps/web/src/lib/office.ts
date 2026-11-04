@@ -1,5 +1,5 @@
 import type { MessageView } from '@office/shared';
-import type { Agent, LiveSession, Overview } from './queries';
+import { isSessionRunning, type Agent, type ClaudeSession, type LiveSession, type Overview, type TerminalView } from './queries';
 
 /** Floor geometry of the Pixel Office (design option 3a): 300×260 rooms on a 430×390 grid, three per row. */
 export const ROOM_W = 300;
@@ -72,6 +72,7 @@ export const CREATURES: Record<string, string[]> = {
   designer: ['.k.......k..', '.kak....kak.', '.kaak..kaak.', '.kaaakkaaak.', '.kaaaaaaaak.', '.kaeaaaaeak.', '.kaaaaaaaak.', '.kapakkapak.', '..kaaaaaak..', '..kaaaaaakkc', '..kbbkkbbk.c', '..kk....kk..'],
   developer: ['..kkk..kkk..', '.kaeak.kaeak', '.kaaakkkaaak', 'kaaaaaaaaaak', 'kaaaaaaaaaak', 'kaapaaaapaak', 'kaakkkkkkaak', '.kaaaaaaaak.', '.kbbbbbbbbk.', '.kbbbbbbbbk.', '..kbbk..kbbk', '..kk....kk..'],
   qa: ['..k......k..', '...k....k...', '..kkkkkkkk..', '.kaaaaaaaak.', 'kaaeaaaaeaak', 'kaaaaaaaaaak', 'kaakaaaakaak', 'kaaaakkaaaak', '.kaaaaaaaak.', '.kakaaaakak.', '..kkaaaakk..', '...kk..kk...'],
+  owner: ['....kkkk....', '...kaaaak...', '..kaaaaaak..', '.kkaeaaeakk.', '.kakaaaaakak', '.kkaaaaaakk.', '..kaapaaak..', '..kkaaaakk..', '...kbbbbk...', '..kbbbbbbk..', '..kbbk.kbbk.', '..kk....kk..'],
   summarizer: ['....kkkk....', '..kkaaaakk..', '.kaaaaaaaak.', '.kaaeaaaeak.', 'kaaaaaaaaaak', 'kaaaaaaaaaak', 'kaaaakkaaaak', 'kaaaaaaaaaak', 'kaaaaaaaaaak', 'kaakaaakaaak', 'kk.kk.kk.kk.', '............'],
 };
 
@@ -95,6 +96,7 @@ const THEMES: [string, Theme][] = [
   ['backend', 'couch'],
   ['qa', 'board'],
   ['summar', 'fire'],
+  ['owner', 'couch'],
 ];
 /** Each seeded role has its own corner; other agents get the plain cozy room. */
 export const themeFor = (slug: string): Theme => THEMES.find(([k]) => slug.toLowerCase().includes(k))?.[1] ?? 'plain';
@@ -152,6 +154,31 @@ export function oneLine(text: string, max = 64): string {
 }
 
 /** One room per team member: the overview row plus its live session, if any. */
+/** The owner's own room: manual sessions in Office terminals and background sessions of this project, each a creature at a desk. */
+export const OWNER_ROOM = 'owner';
+export function ownerRoom(terminals: TerminalView[], claude: ClaudeSession[], projectId: string): OfficeRoom {
+  const manual = terminals.filter((t) => t.projectId === projectId && t.status !== 'exited');
+  const background = claude.filter((s) => s.projectId === projectId && s.live?.kind === 'background' && isSessionRunning(s));
+  const parts = [manual.length && `${manual.length} manual`, background.length && `${background.length} background`].filter(Boolean);
+  const newest = [...manual].sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+  return {
+    agentId: OWNER_ROOM,
+    slug: OWNER_ROOM,
+    name: 'You',
+    status: parts.length ? 'running' : 'idle',
+    task: parts.length ? `Your Claude sessions: ${parts.join(', ')}` : 'No Claude session of your own here',
+    workerName: newest ? 'Office terminal' : null,
+    runId: null,
+    startedAt: newest?.startedAt ?? null,
+    costUsd: 0,
+    subs: [
+      ...manual.map((t) => ({ name: t.attachId ? `attached ${t.attachId}` : t.claudeSessionId.slice(0, 8), done: false })),
+      ...background.map((s) => ({ name: s.live?.name ?? s.title, done: false })),
+    ],
+    waitingFor: null,
+  };
+}
+
 export function officeRooms(team: Overview['team'], sessions: LiveSession[], agents: Agent[]): OfficeRoom[] {
   return team.map((m) => {
     const s = sessions.find((x) => x.agentId === m.agentId);

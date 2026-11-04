@@ -13,7 +13,7 @@ import { post } from '@/lib/api';
 import { agentGradient } from '@/lib/agent-identity';
 import { approvalTypeLabel } from '@/lib/missions';
 import type { OfficeRoom } from '@/lib/office';
-import { useActivity, useApprovals, useSession, type ApprovalView } from '@/lib/queries';
+import { isSessionRunning, useActivity, useApprovals, useSession, type ApprovalView, type ClaudeSession, type TerminalView } from '@/lib/queries';
 import { clockTime, elapsed } from '@/lib/sessions';
 
 /** Pending approvals of the project, decided in place; the agent is the room whose run asked. */
@@ -187,6 +187,49 @@ export function OfficeAgentPanel({ room, projectId, now }: { room: OfficeRoom; p
         </Link>
         <Link href="/conversations" className={buttonVariants({ className: 'flex-1' })}>
           Message
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+/** The owner's desk: the manual sessions running in Office terminals and the background sessions of this project, each a link. */
+export function OfficeOwnerPanel({ room, terminals, claude, now }: { room: OfficeRoom; terminals: TerminalView[]; claude: ClaudeSession[]; now: number }) {
+  const manual = terminals.filter((t) => t.status !== 'exited').sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  const background = claude.filter((s) => s.live?.kind === 'background');
+  const row = (href: string, title: string, meta: string, live: boolean) => (
+    <li key={href}>
+      <Link href={href} className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12.5px] hover:bg-white/7">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-ink">{title}</span>
+          <span className="block truncate font-mono text-[11px] text-ink-3">{meta}</span>
+        </span>
+        <StatusPill status={live ? 'running' : 'idle'} />
+      </Link>
+    </li>
+  );
+  return (
+    <Card size="sm" className="min-h-0 flex-1 gap-0 py-0">
+      <div className="h-[3px] bg-linear-to-r from-pink to-violet" />
+      <div className="flex items-center gap-3 px-4 pt-3.5 pb-3">
+        <AgentAvatar name={room.name} identity={room.slug} size="lg" />
+        <div className="min-w-0 flex-1">
+          <div className="font-heading text-[17px] font-semibold">{room.name}</div>
+          <div className="truncate font-mono text-[11px] text-ink-3">your own Claude Code, not an agent</div>
+        </div>
+        <StatusPill status={room.status} />
+      </div>
+      <div className="mx-4 rounded-xl border border-white/10 bg-white/6 px-3 py-2.5 text-[12.5px] leading-[1.35] text-ink-2">{room.task}</div>
+      <ul className="flex flex-col gap-0.5 px-2 py-3" aria-label="Your sessions">
+        {manual.map((t) =>
+          row(`/sessions?terminal=${t.id}`, t.attachId ? `Attached to ${t.attachId}` : `Manual session ${t.claudeSessionId.slice(0, 8)}`, `${t.status} · ${elapsed(now - Date.parse(t.startedAt))} · ${t.dir}`, true),
+        )}
+        {background.map((s) => row(`/sessions?session=${s.sessionId}`, s.live?.name ?? s.title, `background · ${s.live?.state ?? 'running'} · ${s.cwd}`, isSessionRunning(s)))}
+        {manual.length === 0 && background.length === 0 && <li className="px-2 text-[12.5px] text-ink-3">Nothing running. Start one from Live Sessions.</li>}
+      </ul>
+      <div className="px-4 pb-4">
+        <Link href="/sessions" className={buttonVariants({ variant: 'secondary', size: 'sm' })}>
+          Live Sessions
         </Link>
       </div>
     </Card>

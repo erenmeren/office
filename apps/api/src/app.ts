@@ -106,7 +106,10 @@ export async function buildApp(
   await app.register(observabilityRoutes);
   await app.register(claudeSessionRoutes);
   await app.register(terminalRoutes);
-  app.addHook('onReady', async () => scheduler.start());
+  app.addHook('onReady', async () => {
+    await gateway.terminals.load();
+    scheduler.start();
+  });
   app.addHook('onClose', async () => scheduler.stop());
 
   return app;
