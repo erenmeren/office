@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
 import { ApprovalCard } from '@/components/approval-card';
 import { ChiefComposer } from '@/components/chief-composer';
@@ -11,20 +12,32 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { statusLabel } from '@/lib/status';
 import { useProject } from '@/lib/project';
-import { useAgents, useApprovals, useMission, useMissions, useTasks } from '@/lib/queries';
+import { useAgents, useApprovals, useMission, useMissions, useOverview, useTasks } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
 
 export default function MissionControlPage() {
+  return (
+    <Suspense>
+      <MissionControl />
+    </Suspense>
+  );
+}
+
+/** `?mission=<id>&task=<id>` (from Decisions and the Dashboard) picks the mission and the task to show. */
+function MissionControl() {
+  const params = useSearchParams();
   const qc = useQueryClient();
   const agents = useAgents();
   const tasks = useTasks(5000);
   const project = useProject();
   const missions = useMissions(project?.id);
   const approvals = useApprovals(project?.id, 'pending');
-  const [pickedMission, setPickedMission] = useState<string>();
-  const [picked, setPicked] = useState<string>();
+  const [pickedMission, setPickedMission] = useState<string | undefined>(params.get('mission') ?? undefined);
+  const [picked, setPicked] = useState<string | undefined>(params.get('task') ?? undefined);
+  const overview = useOverview(project?.id);
 
-  const missionId = pickedMission ?? missions.data?.[0]?.id;
+  const missionId = pickedMission ?? (picked && tasks.data?.find((t) => t.id === picked)?.missionId) ?? missions.data?.[0]?.id;
+  const decisions = (overview.data?.attention ?? []).filter((a) => a.kind === 'task_decision' && a.missionId === missionId).length;
   const mission = useMission(missionId);
   const agentName = (agentId?: string) => agents.data?.find((a) => a.id === agentId)?.name;
   const loose = (tasks.data ?? []).filter((t) => !t.missionId && (!project || t.projectId === project.id));
@@ -92,7 +105,7 @@ export default function MissionControlPage() {
       )}
 
       {mission.data && (
-        <PlanCard key={`${mission.data.id}:${mission.data.planVersion}`} mission={mission.data} agents={agents.data ?? []} selectedId={picked} onSelect={setPicked} />
+        <PlanCard key={`${mission.data.id}:${mission.data.planVersion}`} mission={mission.data} agents={agents.data ?? []} selectedId={picked} onSelect={setPicked} decisions={decisions} />
       )}
 
       {loose.length > 0 && (

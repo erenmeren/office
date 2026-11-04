@@ -91,8 +91,13 @@ export async function projectOverview(db: Db, projectId: string) {
   // tasks the Chief's finished review left undecided (blocked on the owner, or not decided): the owner reopens or fails them
   const undecided = await db.task.findMany({
     where: { projectId, status: 'review', mission: { status: 'review', reviewRunId: { not: null } } },
-    select: { id: true, title: true, reviewNote: true, updatedAt: true, mission: { select: { reviewRunId: true } } },
+    select: { id: true, title: true, reviewNote: true, updatedAt: true, missionId: true, mission: { select: { reviewRunId: true } } },
     orderBy: { updatedAt: 'desc' },
+  });
+  const proposals = await db.memoryEntry.findMany({
+    where: { projectId, status: 'proposed' },
+    select: { id: true, title: true, content: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
   });
   const finishedReviews = new Set(
     (await db.taskRun.findMany({ where: { id: { in: undecided.map((t) => t.mission!.reviewRunId!) }, status: 'succeeded' }, select: { id: true } })).map((r) => r.id),
@@ -100,7 +105,8 @@ export async function projectOverview(db: Db, projectId: string) {
   const attention = [
     ...undecided
       .filter((t) => finishedReviews.has(t.mission!.reviewRunId!))
-      .map((t) => ({ kind: 'task_decision' as const, id: t.id, title: t.title, detail: t.reviewNote ?? 'The review left this task undecided.', createdAt: t.updatedAt })),
+      .map((t) => ({ kind: 'task_decision' as const, id: t.id, title: t.title, detail: t.reviewNote ?? 'The review left this task undecided.', createdAt: t.updatedAt, missionId: t.missionId })),
+    ...proposals.map((m) => ({ kind: 'memory_proposal' as const, id: m.id, title: m.title, detail: m.content.slice(0, 300), createdAt: m.createdAt })),
     ...approvals.map((a) => ({
       kind: 'approval' as const, id: a.id, title: a.toolName ? `${a.type}: ${a.toolName}` : a.type, detail: a.reason, createdAt: a.createdAt,
     })),

@@ -2,15 +2,19 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Bot, Building2, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
+import { useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Bot, Building2, ClipboardCheck, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { StatusDot } from '@/components/ui/status-pill';
 import { useProject } from '@/lib/project';
-import { useAgents, useApprovals, useConversations, useLiveSessions, useMemoryCounts, useSkills, useTasks, useWorkers } from '@/lib/queries';
+import { useAgents, useConversations, useLiveSessions, useMemoryCounts, useMissions, useOverview, useSkills, useTasks, useWorkers } from '@/lib/queries';
+import { uiSocket } from '@/lib/ws';
 
 export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/decisions', label: 'Decisions', icon: ClipboardCheck },
   { href: '/mission-control', label: 'Mission Control', icon: Target },
   { href: '/sessions', label: 'Live Sessions', icon: Radio },
   { href: '/office', label: 'Office', icon: Building2 },
@@ -49,17 +53,36 @@ function Count({ n, tone }: { n: number; tone: 'live' | 'decision' | 'message' }
   return <span className={cn('ml-auto grid h-5 min-w-5 place-items-center rounded-full px-1.5 font-mono text-xs font-semibold', color)}>{n}</span>;
 }
 
-/** Badges per nav item, from live data: approvals waiting, live sessions, skills to review, workers online. */
+/** Hub messages on `global` and the queries they make stale; the nav counts refresh without a page visit. */
+const STALE: Record<string, string[]> = {
+  'approval.changed': ['approvals', 'overview', 'missions'],
+  'mission.status.changed': ['missions', 'overview'],
+  'task.status.changed': ['tasks', 'overview', 'missions'],
+  'memory.changed': ['memory', 'overview'],
+  'message.created': ['conversations'],
+};
+
+/** Badges per nav item, from live data: decisions waiting (project items plus skill imports), live sessions, missions running, workers online. */
 export function useNavCounts() {
+  const qc = useQueryClient();
   const skills = useSkills();
   const workers = useWorkers();
   const projectId = useProject()?.id;
   const conversations = useConversations(projectId);
   const memory = useMemoryCounts(projectId);
-  const approvals = useApprovals(projectId, 'pending');
+  const overview = useOverview(projectId);
+  const missions = useMissions(projectId);
   const sessions = useLiveSessions(projectId);
+  useEffect(
+    () =>
+      uiSocket().subscribe('global', 0, (m) => {
+        for (const key of STALE[m.type] ?? []) void qc.invalidateQueries({ queryKey: [key] });
+      }),
+    [qc],
+  );
   return {
-    '/mission-control': { n: approvals.data?.length ?? 0, tone: 'decision' as const },
+    '/decisions': { n: overview.data?.attention.length ?? 0, tone: 'decision' as const },
+    '/mission-control': { n: missions.data?.filter((m) => ['planning', 'approved', 'running', 'review'].includes(m.status)).length ?? 0, tone: 'live' as const },
     '/sessions': { n: sessions.data?.length ?? 0, tone: 'live' as const },
     '/conversations': { n: conversations.data?.reduce((n, c) => n + c.unreadForOwner, 0) ?? 0, tone: 'message' as const },
     '/skills': { n: skills.data?.filter((s) => s.status === 'pending_review').length ?? 0, tone: 'decision' as const },

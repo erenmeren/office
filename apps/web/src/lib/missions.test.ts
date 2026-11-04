@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvalSentence, approvalTypeLabel, countdown, missionProgress, planGraphNodes } from './missions';
+import { approvalSentence, approvalTypeLabel, countdown, missionProgress, missionStatusLine, planGraphNodes, taskCounts } from './missions';
 
 describe('mission helpers', () => {
   it('counts done tasks', () => {
@@ -55,5 +55,25 @@ describe('mission helpers', () => {
       { id: 'bbbbbbbb-2222', code: 'deploy', title: 'Ship', assignee: undefined, status: 'waiting_approval', dependsOn: ['aaaaaaaa-1111'], gate: 'Approval gate: deploy' },
       { id: 'cccccccc-3333', code: 'cccccccc', title: 'Loose', assignee: undefined, status: 'planned', dependsOn: [], gate: undefined },
     ]);
+  });
+});
+
+describe('missionStatusLine', () => {
+  it('says who the mission waits for', () => {
+    expect(missionStatusLine({ status: 'awaiting_approval', taskCounts: {} })).toEqual({ text: 'Waiting for you: approve the plan to start the tasks.', yours: true });
+    expect(missionStatusLine({ status: 'running', taskCounts: { running: 1, ready: 2, done: 1 } })).toEqual({
+      text: 'Running: 1 task active, 2 waiting for a worker or a dependency, 1 of 4 done.',
+      yours: false,
+    });
+    expect(missionStatusLine({ status: 'running', taskCounts: { waiting_approval: 1, done: 2 } }).yours).toBe(true);
+    expect(missionStatusLine({ status: 'review', taskCounts: { review: 2 }, decisions: 2 })).toEqual({
+      text: 'Waiting for you: 2 tasks need your decision in Decisions.',
+      yours: true,
+    });
+    expect(missionStatusLine({ status: 'review', taskCounts: { review: 1 } }).text).toBe('Chief is reviewing the results. 0 of 1 done.');
+    expect(missionStatusLine({ status: 'failed', taskCounts: { failed: 1 }, summary: 'Blocked on network. More text.' }).text).toBe(
+      'Failed: Blocked on network. Retry a failed task in Mission Control or send a new request.',
+    );
+    expect(taskCounts([{ status: 'done' }, { status: 'done' }, { status: 'review' }])).toEqual({ done: 2, review: 1 });
   });
 });

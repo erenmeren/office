@@ -44,28 +44,30 @@ function ApprovalActions({ id }: { id: string }) {
   );
 }
 
+const TITLE: Record<Item['kind'], (title: string) => string> = {
+  approval: (t) => `Approve ${t}`,
+  task_decision: (t) => `Decide task: ${t}`,
+  skill_review: (t) => `Review skill import: ${t}`,
+  memory_proposal: (t) => `Verify memory: ${t}`,
+};
+const SOURCE: Record<Item['kind'], string> = { approval: 'Approval', task_decision: 'Mission review', skill_review: 'Skill Library', memory_proposal: 'Project Memory' };
+
 function AttentionRow({ item }: { item: Item }) {
   const approval = item.kind === 'approval';
   return (
     <li className="flex items-start gap-3 rounded-[14px] border border-amber/30 bg-amber/6 p-3">
       <div className="min-w-0 flex-1">
-        <div className="font-medium text-ink">
-          {approval ? `Approve ${item.title}` : item.kind === 'task_decision' ? `Decide task: ${item.title}` : `Review skill import: ${item.title}`}
-        </div>
+        <div className="font-medium text-ink">{TITLE[item.kind](item.title)}</div>
         <p className="mt-0.5 line-clamp-2 text-[12.5px] text-ink-2">{item.detail}</p>
         <p className="mt-1 text-xs text-ink-3">
-          {approval ? 'Approval' : item.kind === 'task_decision' ? 'Mission review' : 'Skill Library'} · {relativeTime(item.createdAt)}
+          {SOURCE[item.kind]} · {relativeTime(item.createdAt)}
         </p>
       </div>
       {approval ? (
         <ApprovalActions id={item.id} />
-      ) : item.kind === 'task_decision' ? (
-        <Link href={`/tasks/${item.id}`} className={buttonVariants({ size: 'sm', variant: 'secondary' })}>
-          Decide
-        </Link>
       ) : (
-        <Link href={`/skills/${item.id}`} className={buttonVariants({ size: 'sm', variant: 'secondary' })}>
-          Review import
+        <Link href={item.kind === 'task_decision' ? `/decisions#task-${item.id}` : '/decisions'} className={buttonVariants({ size: 'sm', variant: 'secondary' })}>
+          Decide
         </Link>
       )}
     </li>
@@ -79,7 +81,10 @@ export function DashboardAttention() {
     <Card>
       <CardHeader>
         <CardTitle>Needs your attention</CardTitle>
-        <CardAction>
+        <CardAction className="flex items-center gap-3">
+          <Link href="/decisions" className="text-[13px] text-cyan hover:underline">
+            All decisions
+          </Link>
           <span className="grid h-5 min-w-5 place-items-center rounded-full bg-amber/20 px-1.5 font-mono text-xs font-semibold text-amber">{items.length}</span>
         </CardAction>
       </CardHeader>
