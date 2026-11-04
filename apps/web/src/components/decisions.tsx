@@ -14,6 +14,7 @@ import { post } from '@/lib/api';
 import { approvalSentence } from '@/lib/missions';
 import { useProject } from '@/lib/project';
 import { useAgents, useApprovals, useMemory, useMissions, useOverview, useSkills, useTasks, type MemoryEntry } from '@/lib/queries';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 /** Every query a decision can change. */
 const KEYS = ['approvals', 'missions', 'overview', 'skills', 'memory', 'tasks', 'task', 'sessions'];
@@ -130,6 +131,7 @@ export function Decisions() {
   const skills = useSkills();
   const memory = useMemory(projectId, { status: 'proposed' });
   const all = useDecide();
+  const confirm = useConfirm();
 
   const agentName = (agentId?: string | null) => agents.data?.find((a) => a.id === agentId)?.name;
   const taskAgent = (taskId: string | null) => tasks.data?.find((t) => t.id === taskId)?.agentId;
@@ -142,13 +144,13 @@ export function Decisions() {
   const safe = tools.length + pendingSkills.length + proposals.length;
 
   const approveAll = (ids: string[]) => () => all.run(ids.map((id) => () => post(`/approvals/${id}/approve`, { scope: 'once' })));
-  const verifyAllSafe = () => {
+  const verifyAllSafe = async () => {
     const parts = [
       tools.length && `approve ${tools.length} tool request${tools.length === 1 ? '' : 's'} once`,
       pendingSkills.length && `approve ${pendingSkills.length} skill import${pendingSkills.length === 1 ? '' : 's'}`,
       proposals.length && `verify ${proposals.length} memory proposal${proposals.length === 1 ? '' : 's'}`,
     ].filter(Boolean);
-    if (!window.confirm(`This will ${parts.join(', ')}. Plans and task decisions are left to you. Continue?`)) return;
+    if (!(await confirm({ title: 'Verify all safe items?', body: `This will ${parts.join(', ')}. Plans and task decisions are left to you.`, confirmLabel: 'Verify all' }))) return;
     void all.run([
       ...tools.map((a) => () => post(`/approvals/${a.id}/approve`, { scope: 'once' })),
       ...pendingSkills.map((s) => () => post(`/skills/${s.id}/approve`)),

@@ -19,6 +19,7 @@ import { useSession, type Conversation, type SessionDetail as Detail, type Sessi
 import { clockTime, commandRows, elapsed, fileRows, isLive, splitPath, type CommandRow } from '@/lib/sessions';
 import { statusTone } from '@/lib/status';
 import { uiSocket } from '@/lib/ws';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 
 /** Commands, files and a way to talk to one session or one of its subagents. */
@@ -195,8 +196,9 @@ export function FileTable({ files, detail: d }: { files: SessionFile[]; detail: 
 
 export function StopButton({ runId, name, subagent, onCancelled, label = 'Stop' }: { runId: string; name: string; subagent: boolean; onCancelled: () => void; label?: string }) {
   const [error, setError] = useState('');
+  const confirm = useConfirm();
   const stop = async () => {
-    if (!window.confirm(subagent ? `Stop ${name}'s session? Its subagents end with it.` : `Stop ${name}'s session?`)) return;
+    if (!(await confirm({ title: `Stop ${name}'s session?`, body: subagent ? 'Its subagents end with it.' : undefined, confirmLabel: 'Stop', destructive: true }))) return;
     setError('');
     try {
       await post(`/runs/${runId}/cancel`);

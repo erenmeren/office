@@ -173,6 +173,8 @@ describe('phase 6 recovery end to end with the fake runtime', () => {
     cookie = `office_session=${setup.cookies[0]!.value}`;
     await seed(prisma, join(base, 'ws'));
     sandboxId = (await prisma.project.findUniqueOrThrow({ where: { slug: 'office-sandbox' } })).id;
+    // the destructive-approval flow below needs a policy that asks; a project's default is auto
+    expect((await req('PUT', `/projects/${sandboxId}/settings`, { approvalPolicy: { destructive_command: 'ask' } })).statusCode).toBe(200);
 
     adapter = new HoldAdapter();
     const { enrollToken } = (await req('POST', '/workers', { name: 'local' })).json();
@@ -319,7 +321,8 @@ describe('phase 6 recovery end to end with the fake runtime', () => {
     const project = await req('POST', '/projects', { name: 'App', slug: 'app', repoPath: repo, defaultBranch: 'main' });
     expect(project.statusCode).toBe(201);
     const projectId: string = project.json().id;
-    expect((await req('PUT', `/projects/${projectId}/settings`, { checkCommand: 'node --test' })).statusCode).toBe(200);
+    // approvals are part of these flows; a new project's policy is auto everywhere
+    expect((await req('PUT', `/projects/${projectId}/settings`, { checkCommand: 'node --test', approvalPolicy: { plan: 'ask' } })).statusCode).toBe(200);
 
     // no heartbeats: nothing renews the lease once the test expires it
     await conn!.stop();

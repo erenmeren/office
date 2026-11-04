@@ -24,7 +24,7 @@ export default function Dashboard() {
           <Button nativeButton={false} render={<Link href="/mission-control" />}>
             New request
           </Button>
-          <Button variant="secondary" nativeButton={false} render={<Link href="/agents" />}>
+          <Button variant="secondary" nativeButton={false} render={<Link href="/agents?new=1" />}>
             Create agent
           </Button>
         </PageActions>

@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { del, put } from '@/lib/api';
 import { selectProject } from '@/lib/project';
 import type { Project } from '@/lib/queries';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 /** The project's own fields (name, default branch) and its deletion; the repository path is fixed at creation. */
 export function ProjectCard({ project }: { project: Project }) {
@@ -27,8 +28,9 @@ export function ProjectCard({ project }: { project: Project }) {
       setError(String(err));
     }
   };
+  const confirm = useConfirm();
   const remove = async () => {
-    if (!window.confirm(`Delete project "${project.name}"? The repository on disk is kept.`)) return;
+    if (!(await confirm({ title: `Delete project "${project.name}"?`, body: 'The repository on disk is kept.', confirmLabel: 'Delete', destructive: true }))) return;
     try {
       await del(`/projects/${project.id}`);
       selectProject('');

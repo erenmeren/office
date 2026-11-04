@@ -16,6 +16,7 @@ import {
 import { del } from "@/lib/api";
 import { useWorkers, type Worker } from "@/lib/queries";
 import { relativeTime } from "@/lib/workers";
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 function Mode({ w }: { w: Worker }) {
   if (w.status === "pending") return <span className="text-ink-3">—</span>;
@@ -37,9 +38,9 @@ export function WorkersTable() {
   const workers = useWorkers();
   const [busyId, setBusyId] = useState<string>();
   const [error, setError] = useState("");
+  const confirm = useConfirm();
   const revoke = async (w: Worker) => {
-    if (!window.confirm(`Revoke "${w.name}"? It can no longer connect.`))
-      return;
+    if (!(await confirm({ title: `Revoke "${w.name}"?`, body: 'It can no longer connect.', confirmLabel: 'Revoke', destructive: true }))) return;
     setBusyId(w.id);
     try {
       await del(`/workers/${w.id}`);

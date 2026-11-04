@@ -30,6 +30,17 @@ export const ApprovalPolicySchema = z.object({
 });
 export type ApprovalPolicy = z.infer<typeof ApprovalPolicySchema>;
 
+/** A new project's policy (owner decision 2026-11-04): nothing asks; the owner tightens per project in Settings. */
+export const AUTO_APPROVAL_POLICY: ApprovalPolicy = ApprovalPolicySchema.parse({
+  plan: 'auto',
+  git_push: 'auto',
+  merge: 'auto',
+  deploy: 'auto',
+  destructive_command: 'auto',
+  sensitive_path: 'auto',
+  budget_exceeded: 'auto',
+});
+
 export type PolicyVerdict =
   | { verdict: 'allow' }
   | { verdict: 'ask' | 'block'; type: ApprovalType; reason: string };

@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { del, post } from '@/lib/api';
 import { useAgents, useSkills, type Skill } from '@/lib/queries';
 import { skillErrorText, skillSourceLabel } from '@/lib/skills';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const STATUS_TONE = { approved: 'done', pending_review: 'decision', rejected: 'failed', disabled: 'idle' } as const;
 
@@ -46,8 +47,9 @@ export function SkillsTable() {
       const r = await post<{ created: boolean; version: { version: number } }>(`/skills/${s.id}/update`);
       return r.created ? `${s.name}: v${r.version.version} imported from its source.` : `${s.name}: already up to date.`;
     });
-  const remove = (s: Skill) => {
-    if (!window.confirm(`Delete "${s.name}" and all its versions?`)) return;
+  const confirm = useConfirm();
+  const remove = async (s: Skill) => {
+    if (!(await confirm({ title: `Delete "${s.name}"?`, body: 'All its versions are deleted.', confirmLabel: 'Delete', destructive: true }))) return;
     void act(s, async () => {
       await del(`/skills/${s.id}`);
       return `${s.name} deleted.`;

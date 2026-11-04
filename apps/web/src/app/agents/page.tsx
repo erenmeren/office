@@ -1,34 +1,57 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
+import { Plus } from 'lucide-react';
 import { AgentForm, type AgentFormBody } from '@/components/agent-form';
 import { AgentsTable } from '@/components/agents-table';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { post } from '@/lib/api';
 
 export default function AgentsPage() {
+  return (
+    <Suspense>
+      <Agents />
+    </Suspense>
+  );
+}
+
+/** `?new=1` (the Dashboard's "Create agent") opens the form straight away. */
+function Agents() {
   const qc = useQueryClient();
-  const [formKey, setFormKey] = useState(0);
+  const [creating, setCreating] = useState(useSearchParams().get('new') === '1');
 
   const create = async (body: AgentFormBody) => {
     await post('/agents', body);
-    setFormKey((k) => k + 1); // remount resets the form
+    setCreating(false);
     await qc.invalidateQueries({ queryKey: ['agents'] });
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      <PageHeader>
+        <div>
+          <PageTitle>Agent Studio</PageTitle>
+          <PageDescription>Your team. Each agent is a Claude Code session with its own tools, skills and limits.</PageDescription>
+        </div>
+        <PageActions>
+          <Button onClick={() => setCreating(true)}>
+            <Plus data-icon="inline-start" aria-hidden />
+            New agent
+          </Button>
+        </PageActions>
+      </PageHeader>
       <AgentsTable />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Create agent</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <AgentForm key={formKey} submitLabel="Create agent" onSubmit={create} />
-        </CardContent>
-      </Card>
+      <Dialog open={creating} onOpenChange={setCreating}>
+        <DialogContent className="max-h-[88dvh] max-w-[760px] overflow-y-auto">
+          <DialogTitle>New agent</DialogTitle>
+          {creating && <AgentForm submitLabel="Create agent" onSubmit={create} />}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -31,7 +31,7 @@ export function changedKeys<T extends Record<string, unknown>>(original: T, draf
 }
 
 export const INT_FIELDS = ['maxConcurrentRuns', 'defaultMaxAttempts', 'approvalTimeoutMinutes', 'checkTimeoutSeconds'] as const;
-export const USD_FIELDS = ['dailyBudgetUsd', 'defaultTaskBudgetUsd'] as const;
+export const USD_FIELDS = ['dailyBudgetUsd', 'defaultTaskBudgetUsd', 'defaultMissionBudgetUsd'] as const;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
 /** Problems that would make the API reject the draft; `field` is a settings key or `envTemplate.<index>`. */

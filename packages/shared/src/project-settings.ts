@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ApprovalPolicySchema } from './policy.js';
+import { ApprovalPolicySchema, AUTO_APPROVAL_POLICY } from './policy.js';
 import { WorkerTagSchema } from './protocol.js';
 
 /** A host name, or `*.example.com` for a host and its subdomains (the SDK sandbox wildcard). */
@@ -16,11 +16,13 @@ export const ProjectSettingsSchema = z.object({
     .default([]),
   committerName: z.string().default('Office Agent'),
   committerEmail: z.string().email().default('office-agent@example.invalid'),
-  approvalPolicy: ApprovalPolicySchema.prefault({}),
+  approvalPolicy: ApprovalPolicySchema.prefault(AUTO_APPROVAL_POLICY),
   approvalTimeoutMinutes: z.number().int().positive().default(30),
   checkTimeoutSeconds: z.number().int().positive().default(900),
-  dailyBudgetUsd: z.number().positive().default(50),
+  dailyBudgetUsd: z.number().positive().default(1000),
   defaultTaskBudgetUsd: z.number().positive().default(5),
+  // hard cap of a mission created without its own budgetUsd
+  defaultMissionBudgetUsd: z.number().positive().default(5000),
   maxConcurrentRuns: z.number().int().positive().default(2),
   defaultMaxAttempts: z.number().int().positive().default(2),
   requiredWorkerTags: z.array(WorkerTagSchema).default([]),
