@@ -2,13 +2,13 @@
 
 import { useState } from 'react';
 import { cva } from 'class-variance-authority';
-import { FolderPlus, Terminal } from 'lucide-react';
+import { FolderPlus, Plus, Terminal } from 'lucide-react';
 import { NewProjectForm } from '@/components/new-project-form';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import type { ClaudeSession, Project } from '@/lib/queries';
+import type { ClaudeSession, Project, TerminalView } from '@/lib/queries';
 import { relativeTime } from '@/lib/workers';
 
 const rowVariants = cva('flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50', {
@@ -44,17 +44,25 @@ const slugOf = (folder: string) => folder.split('/').filter(Boolean).pop()?.toLo
 /** The machine's Claude Code sessions outside Office, grouped by project or unregistered folder. */
 export function ClaudeSessionList({
   sessions,
+  terminals,
   projects,
   selectedProjectId,
   selected,
   onSelect,
+  onSelectTerminal,
+  onNewTerminal,
   error,
 }: {
   sessions: ClaudeSession[];
+  /** Office-managed manual sessions, newest first */
+  terminals: TerminalView[];
   projects: Project[];
   selectedProjectId?: string;
   selected?: string;
   onSelect: (s: ClaudeSession) => void;
+  onSelectTerminal: (t: TerminalView) => void;
+  /** starts a manual session on the selected project; absent when no project is selected */
+  onNewTerminal?: () => void;
   /** why the list could not be read (no local worker, for one) */
   error?: string;
 }) {
@@ -67,13 +75,40 @@ export function ClaudeSessionList({
           <Terminal className="size-4 text-ink-3" aria-hidden />
           Claude CLI
         </CardTitle>
-        <CardDescription>Sessions started from a terminal on this machine. Read-only here; resume them in a terminal.</CardDescription>
+        <CardDescription>Your own Claude Code sessions on this machine: manual ones run inside Office, external ones read-only.</CardDescription>
+        {onNewTerminal && (
+          <CardAction>
+            <Button size="sm" variant="secondary" onClick={onNewTerminal} title="Start your own Claude Code in this project, inside Office">
+              <Plus aria-hidden /> New manual session
+            </Button>
+          </CardAction>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        {terminals.length > 0 && (
+          <section aria-label="Manual sessions" className="flex flex-col gap-1">
+            <span className="px-1 text-xs font-semibold tracking-[0.04em] uppercase text-ink-3">Manual sessions in Office</span>
+            <ul className="flex flex-col gap-1">
+              {terminals.map((t) => (
+                <li key={t.id}>
+                  <button type="button" aria-pressed={selected === t.id} className={rowVariants({ active: selected === t.id })} onClick={() => onSelectTerminal(t)}>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-ink">{projects.find((p) => p.id === t.projectId)?.name ?? t.dir}</span>
+                      <span className="block truncate font-mono text-xs text-ink-3">
+                        {t.claudeSessionId.slice(0, 8)}{t.resumedSessionId ? ' · resumed' : ''} · {relativeTime(t.startedAt)}
+                      </span>
+                    </span>
+                    <Badge variant={t.status === 'exited' ? 'outline' : 'secondary'}>{t.status}</Badge>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         {error ? (
           <p className="text-[13px] text-ink-3">{error}</p>
         ) : groups.length === 0 ? (
-          <p className="text-[13px] text-ink-3">No Claude Code sessions under the workspace roots.</p>
+          <p className="text-[13px] text-ink-3">No external Claude Code sessions under the workspace roots.</p>
         ) : (
           groups.map((g) => (
             <section key={g.key} aria-label={g.label} className="flex flex-col gap-1">

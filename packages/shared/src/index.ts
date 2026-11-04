@@ -16,3 +16,4 @@ export * from './approval.js';
 export * from './policy.js';
 export * from './project-settings.js';
 export * from './claude-sessions.js';
+export * from './terminals.js';

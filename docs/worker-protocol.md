@@ -24,6 +24,8 @@ While the socket is down the worker keeps `run.result` (outbox), unsent `approva
 
 - `sessions.response { requestId, result? | error? }` (2026-11-04, unified sessions Phase 1): the answer to `sessions.request`. `result` is `{ kind: 'list', sessions }` (each `sessionId`, `title`, `cwd`, `gitBranch?`, `createdAt?`, `lastModified`, `fileSize?`, `live?: { pid, kind, status, name? }`), `{ kind: 'messages', entries, nextOffset }` (entries reduced to `{ uuid, role, text, tools }`, text capped at 8000 characters, `nextOffset` null once exhausted) or `{ kind: 'open', terminal }`; `error.code` is `outside_roots`, `session_live`, `no_terminal` or `internal_error`. Responses may arrive out of order with run messages.
 
+- `terminal.opened { terminalId, pid, dir, claudeSessionId, resumedSessionId?, startedAt }`, `terminal.error { terminalId, code, message }`, `terminal.output { terminalId, data }` (base64), `terminal.exit { terminalId, exitCode, signal? }` (2026-11-04, unified sessions Phase 2): an Office-managed manual session, a `claude` process under a PTY on the worker. `terminal.opened` is sent again for every live terminal after each `welcome`, so the API re-adopts them after a restart. Output is not buffered on the worker; the API keeps the scrollback.
+
 ### API to worker (`ApiToWorkerSchema`)
 
 - `welcome { workerId, credential? }`: authentication succeeded; `credential` is present only after enrollment, and the worker saves it to `$OFFICE_WORKER_HOME/credentials.json` (mode 0600).
@@ -43,6 +45,7 @@ While the socket is down the worker keeps `run.result` (outbox), unsent `approva
 - `run.result.ack { runId }` (Phase 6): the `run.result` was applied, or is a resend of a result already applied (see rejection rule 1). The worker deletes the result from its outbox only now.
 - `integration.allowed { runId, ok, reason? }` (Phase 6): the answer to `integration.check`. `ok` is true only while this worker holds a live lease on the run (`findLeasedRun`); otherwise `ok: false, reason: 'lease lost'`. The worker's own reasons are `lease check timed out` (no answer within 30 s) and `run cancelled` (a cancel during the wait).
 - `sessions.request { requestId, query }` (2026-11-04): read the worker machine's Claude Code sessions outside Office. `query.kind` is `list` (`limit`; SDK `listSessions({ includeProgrammatic: false })`, kept only when `cwd` resolves under one of the worker's `OFFICE_WORKSPACE_ROOTS`, merged with `claude agents --json` for `live`), `messages` (`sessionId`, `dir`, `offset`, `limit`; `dir` must resolve under the roots) or `open` (`sessionId`, `dir`: spawn `$TERMINAL` or the first installed emulator with `claude --resume <sessionId>` in `dir`, argv only, refused with `session_live` while the CLI still lists the session). The API sends it only to a worker whose `machineId` equals its own and waits 10 s.
+- `terminal.open { terminalId, dir, claudeSessionId, resumeSessionId?, cols, rows }`, `terminal.input { terminalId, data }` (at most 64 KB), `terminal.resize { terminalId, cols, rows }`, `terminal.close { terminalId }` (2026-11-04): start `claude --session-id <claudeSessionId>` (or `--resume <resumeSessionId>`, refused `session_live` while the CLI still lists that session) in `dir` under the workspace roots, with the worker's environment minus `OFFICE_*`, `DATABASE_URL*`, `COOKIE_SECRET` and `REDIS_URL`; close is SIGHUP, then SIGKILL after 5 s.
 - `error { message }`: the previous message was invalid or rejected (for example a `run.result` without a live lease).
 
 ### Office tool calls (Phase 3)
@@ -110,6 +113,8 @@ Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. T
 - `subscribe { topic, afterSeq? }`: start receiving a topic; for `run:<runId>` the API first replays persisted events with `seq > afterSeq` (default 0), then switches to live delivery.
 - `unsubscribe { topic }`: stop receiving a topic.
 
+- `terminal.input { terminalId, data }` and `terminal.resize { terminalId, cols, rows }` (2026-11-04): keystrokes and size for an Office terminal; `subscribe` accepts `terminal:<id>` topics.
+
 ### API to UI (`UiServerMessageSchema`)
 
 - `event { topic, event }`: one `OfficeEvent` of a run, replayed or live (on `project:` topics live only).
@@ -123,3 +128,4 @@ Requires the owner's session cookie; an unauthenticated upgrade gets HTTP 401. T
 - `error { message }`: invalid message, unknown run (`run not found`) or a failed replay.
 
 Replay hands over to live delivery without gaps or duplicates: live events that arrive during replay are buffered and then passed through the same `seq` filter, so a client that reconnects with the last `seq` it saw receives every later event exactly once.
+- `terminal.output { topic, data }` (base64; the first after a `terminal:<id>` subscribe is the kept scrollback), `terminal.exit { topic, exitCode }`, and `terminal.changed { terminalId }` on `global` (2026-11-04).

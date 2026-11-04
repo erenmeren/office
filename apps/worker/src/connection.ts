@@ -8,6 +8,7 @@ import { loadCredential, saveCredential } from './credentials.js';
 import { Outbox } from './outbox.js';
 import { RunExecutor } from './executor.js';
 import { handleSessionsQuery, openTerminal, readLiveSessions, type SessionsDeps } from './sessions.js';
+import { TerminalManager, type TerminalDeps } from './terminals.js';
 import { sweepRunRoots } from './skills.js';
 
 const MIN_BACKOFF_MS = 1000;
@@ -31,10 +32,13 @@ export interface ConnectionOptions {
   logger?: Logger;
   /** Session discovery backends (tests inject fakes). */
   sessions?: SessionsDeps;
+  /** Manual-session terminal backends (tests run a shell instead of claude). */
+  terminals?: Partial<TerminalDeps>;
 }
 
 export class WorkerConnection {
   private sessions: SessionsDeps;
+  private terminals: TerminalManager;
   private executor: RunExecutor;
   private log: Logger;
   private heartbeatMs: number;
@@ -72,6 +76,7 @@ export class WorkerConnection {
     this.reconnectBaseMs = opts.reconnectBaseMs ?? MIN_BACKOFF_MS;
     this.backoffMs = this.reconnectBaseMs;
     this.sessions = opts.sessions ?? { store: claudeSessionStore, liveSessions: readLiveSessions, spawnTerminal: openTerminal };
+    this.terminals = new TerminalManager(config.workspaceRoots, (msg) => this.send(msg), { liveSessions: this.sessions.liveSessions, ...opts.terminals });
     this.executor = new RunExecutor(opts.adapter, (msg) => this.send(msg), config.workspaceRoots, this.runsDir, undefined, this.log, {
       apiUrl: config.apiUrl,
       canClone: config.canClone,
@@ -110,6 +115,7 @@ export class WorkerConnection {
     const closed = socket && socket.readyState !== WebSocket.CLOSED && new Promise((r) => socket.once('close', r));
     socket?.close();
     for (const runId of this.executor.activeRunIds()) this.executor.cancel(runId);
+    this.terminals.closeAll();
     if (closed) await closed;
   }
 
@@ -177,6 +183,7 @@ export class WorkerConnection {
         // events first: an applied result ends the lease and the API then drops late events
         this.flushEvents();
         for (const result of this.unsentResults.values()) this.send(result);
+        this.terminals.announce();
         const approvals = [...this.unsentApprovals.values()];
         this.unsentApprovals.clear();
         for (const request of approvals) {
@@ -230,6 +237,18 @@ export class WorkerConnection {
       case 'run.interrupt':
         this.log.info({ runId: msg.runId }, 'run interrupted by the owner');
         this.executor.interrupt(msg.runId);
+        return;
+      case 'terminal.open':
+        await this.terminals.open(msg);
+        return;
+      case 'terminal.input':
+        this.terminals.input(msg.terminalId, msg.data);
+        return;
+      case 'terminal.resize':
+        this.terminals.resize(msg.terminalId, msg.cols, msg.rows);
+        return;
+      case 'terminal.close':
+        this.terminals.close(msg.terminalId);
         return;
       case 'sessions.request': {
         // answered out of order on purpose: a slow transcript read must not hold up run messages

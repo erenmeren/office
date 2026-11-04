@@ -17,6 +17,7 @@ import { completeRun, findLeasedRun, markRunning, recordCancelledUsage, renewLea
 import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
 import { requestApproval, resendDecisions } from '../services/approval-service.js';
+import { TerminalRegistry } from '../services/terminal-service.js';
 
 interface Connection {
   socket: WebSocket;
@@ -66,13 +67,17 @@ const SERVER_ONLY_EVENTS = new Set([
 export class WorkerGateway {
   private conns = new Map<string, Connection>();
   private pendingSessions = new Map<string, PendingSessions>();
+  /** Office-managed manual sessions (terminals) on local workers. */
+  readonly terminals: TerminalRegistry;
 
   constructor(
     private prisma: PrismaClient,
     private hub: EventHub,
     private config: Config,
     private log: FastifyBaseLogger,
-  ) {}
+  ) {
+    this.terminals = new TerminalRegistry(prisma, hub, this, log);
+  }
 
   register(app: FastifyInstance) {
     app.get('/ws/worker', { websocket: true }, (socket) => this.accept(socket));
@@ -112,9 +117,14 @@ export class WorkerGateway {
    * Asks a worker on this machine about its Claude Code sessions (list, transcript page, open in a terminal).
    * 503 `no_local_worker` when none is connected; the worker's own refusals map to 400/409.
    */
-  requestSessions(query: SessionsQuery): Promise<SessionsResult> {
+  /** A connected worker on the API's machine, if any (the one that can read sessions and run terminals). */
+  localWorkerId(): string | undefined {
     const isLocal = (c: Connection) => (c.machineId === undefined ? this.config.trustUnidentifiedWorkers : c.machineId === this.config.machineId);
-    const worker = [...this.conns].find(([, c]) => isLocal(c) && c.socket.readyState === c.socket.OPEN)?.[0];
+    return [...this.conns].find(([, c]) => isLocal(c) && c.socket.readyState === c.socket.OPEN)?.[0];
+  }
+
+  requestSessions(query: SessionsQuery): Promise<SessionsResult> {
+    const worker = this.localWorkerId();
     if (!worker) return Promise.reject(new HttpError(503, 'no_local_worker', 'no worker is connected from this machine'));
     const requestId = randomUUID();
     return new Promise<SessionsResult>((resolve, reject) => {
@@ -184,6 +194,7 @@ export class WorkerGateway {
         if (!workerId || this.conns.get(workerId)?.socket !== socket) return;
         this.conns.delete(workerId);
         this.failPendingSessions(workerId, new HttpError(503, 'worker_disconnected', 'the worker disconnected'));
+        this.terminals.onWorkerGone(workerId);
         // runs stay leased; expireLeases reclaims them if the worker does not come back
         await this.prisma.worker
           .updateMany({ where: { id: workerId, status: 'online' }, data: { status: 'offline' } })
@@ -359,6 +370,11 @@ export class WorkerGateway {
         this.send(workerId, { type: 'integration.allowed', runId: msg.runId, ...(run ? { ok: true } : { ok: false, reason: 'lease lost' }) });
         return;
       }
+      case 'terminal.opened':
+      case 'terminal.error':
+      case 'terminal.output':
+      case 'terminal.exit':
+        return this.terminals.onWorkerMessage(workerId, msg);
       case 'sessions.response': {
         const p = this.pendingSessions.get(msg.requestId);
         if (!p || p.workerId !== workerId) return;

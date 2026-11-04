@@ -2,18 +2,19 @@
 
 import { useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Copy, ExternalLink } from 'lucide-react';
+import { Copy, ExternalLink, Play } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Kv, KvLabel, KvValue } from '@/components/ui/kv';
 import { ApiError, post } from '@/lib/api';
-import { fetchTranscript, type ClaudeSession } from '@/lib/queries';
+import { fetchTranscript, type ClaudeSession, type TerminalView } from '@/lib/queries';
 
 const when = (ms?: number) => (ms ? new Date(ms).toLocaleString() : '—');
 
 /** Read-only transcript of an external Claude Code session, with a way to resume it in a terminal. */
-export function ClaudeSessionDetail({ session: s }: { session: ClaudeSession }) {
+/** `onResumed` receives the Office terminal that now runs this session. */
+export function ClaudeSessionDetail({ session: s, onResumed }: { session: ClaudeSession; onResumed: (t: TerminalView) => void }) {
   const [note, setNote] = useState('');
   const command = `cd ${s.cwd} && claude --resume ${s.sessionId}`;
   const q = useInfiniteQuery({
@@ -38,6 +39,15 @@ export function ClaudeSessionDetail({ session: s }: { session: ClaudeSession }) 
     }
   };
   const copy = () => navigator.clipboard.writeText(command).then(() => setNote('Command copied.'), () => setNote(command));
+  const resumeHere = async () => {
+    setNote('');
+    try {
+      onResumed(await post<TerminalView>('/terminals', { dir: s.cwd, resumeSessionId: s.sessionId }));
+    } catch (err) {
+      const body = err instanceof ApiError ? (err.body as { error?: string; message?: string }) : undefined;
+      setNote(body?.error === 'session_live' ? 'This session is still running in another terminal.' : `Could not start it here${body?.message ? `: ${body.message}` : ''}.`);
+    }
+  };
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
@@ -50,6 +60,9 @@ export function ClaudeSessionDetail({ session: s }: { session: ClaudeSession }) 
           </CardTitle>
           <CardDescription className="font-mono text-xs">{s.sessionId}</CardDescription>
           <CardAction className="flex gap-2">
+            <Button size="sm" variant="default" onClick={resumeHere} disabled={!!s.live} title={s.live ? 'Still running in another terminal; resuming it twice is not safe.' : 'Continue this conversation in a terminal inside Office'}>
+              <Play aria-hidden /> Resume here
+            </Button>
             <Button size="sm" variant="secondary" onClick={open} disabled={!!s.live} title={s.live ? 'Still running in another terminal; resuming it twice is not safe.' : 'Open a terminal with claude --resume'}>
               <ExternalLink aria-hidden /> Open in terminal
             </Button>

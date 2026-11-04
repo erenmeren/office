@@ -29,6 +29,7 @@ import { observabilityRoutes } from './routes/observability.js';
 import { EventHub } from './services/event-hub.js';
 import { Scheduler } from './services/scheduler.js';
 import { claudeSessionRoutes } from './routes/claude-sessions.js';
+import { terminalRoutes } from './routes/terminals.js';
 import { WorkerGateway } from './ws/worker-gateway.js';
 import { UiGateway } from './ws/ui-gateway.js';
 
@@ -91,7 +92,7 @@ export async function buildApp(
   app.decorate('gateway', gateway);
   app.decorate('scheduler', scheduler);
   gateway.register(app);
-  new UiGateway(app.prisma, hub, app.log).register(app, config.webOrigin);
+  new UiGateway(app.prisma, hub, app.log, undefined, gateway.terminals).register(app, config.webOrigin);
   await app.register(taskRoutes);
   await app.register(missionRoutes);
   await app.register(approvalRoutes);
@@ -104,6 +105,7 @@ export async function buildApp(
   await app.register(gitRoutes, { config });
   await app.register(observabilityRoutes);
   await app.register(claudeSessionRoutes);
+  await app.register(terminalRoutes);
   app.addHook('onReady', async () => scheduler.start());
   app.addHook('onClose', async () => scheduler.stop());
 

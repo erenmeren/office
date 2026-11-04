@@ -437,3 +437,20 @@ authed('claude cli sessions: grouped by project and folder, read-only transcript
   await expect(page.getByRole('dialog').getByLabel('Slug')).toHaveValue('elsewhere');
   expectQuiet(noise);
 });
+
+authed('manual sessions: an exited Office terminal is listed and shown, with its session resumable', async ({ page, request: api, noise }) => {
+  const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string; name: string; repoPath: string }[];
+  const term = { id: 'term-fixture', projectId: project.id, dir: project.repoPath, workerId: 'w', claudeSessionId: 'cli-cccc-3333', status: 'exited', exitCode: 0, startedAt: new Date(Date.now() - 600_000).toISOString(), exitedAt: new Date().toISOString() };
+  await page.route(`${API}/terminals`, (route) => route.fulfill({ json: [term] }));
+  await page.route(`${API}/claude-sessions`, (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.goto('/sessions');
+  await page.waitForLoadState('networkidle');
+  await expect(page.getByRole('button', { name: 'New manual session' })).toBeVisible();
+  const manual = page.getByRole('region', { name: 'Manual sessions' });
+  await manual.getByRole('button', { name: new RegExp(project.name) }).click();
+  await expect(page.getByText('Manual session', { exact: true })).toBeVisible();
+  await expect(page.getByText('exited · exit 0')).toBeVisible();
+  await expect(page.getByRole('application', { name: 'Terminal' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Dismiss' })).toBeVisible();
+  expectQuiet(noise);
+});

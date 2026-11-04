@@ -493,6 +493,22 @@ export const useClaudeSessions = () =>
   });
 export const fetchTranscript = (sessionId: string, dir: string, offset: number) =>
   api<TranscriptPage>(`/claude-sessions/${sessionId}/messages?dir=${encodeURIComponent(dir)}&offset=${offset}&limit=200`);
+/** An Office-managed manual Claude session: a `claude` process under a PTY on the local worker. */
+export interface TerminalView {
+  id: string;
+  projectId: string | null;
+  dir: string;
+  workerId: string;
+  claudeSessionId: string;
+  resumedSessionId?: string;
+  pid?: number;
+  status: 'starting' | 'running' | 'exited';
+  exitCode?: number | null;
+  startedAt: string;
+  exitedAt?: string;
+}
+export const useTerminals = () =>
+  useQuery({ queryKey: ['terminals'], queryFn: () => api<TerminalView[]>('/terminals'), refetchInterval: 10_000 });
 export const useAgentRuns = (agentId: string | undefined) =>
   useQuery({ queryKey: ['agent-runs', agentId], queryFn: () => api<AgentRunRow[]>(`/agents/${agentId}/runs?limit=20`), enabled: !!agentId });
 
