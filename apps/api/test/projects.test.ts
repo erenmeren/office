@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { rm, stat, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -71,6 +71,8 @@ describe('project settings, agents, audit, artifacts', () => {
     expect(made.statusCode).toBe(201);
     expect(made.json().defaultBranch).toBe('main');
     expect(execFileSync('git', ['log', '--oneline'], { cwd: fresh }).toString()).toContain('Initial commit');
+    expect(execFileSync('git', ['ls-files'], { cwd: fresh }).toString().trim().split('\n').sort()).toEqual(['.gitignore', 'CLAUDE.md']);
+    expect(readFileSync(join(fresh, 'CLAUDE.md'), 'utf8')).toContain('# E');
     const missing = join(fresh, 'deeper', 'new');
     expect((await post({ name: 'N', slug: 'm-new', repoPath: missing, defaultBranch: 'trunk' })).statusCode).toBe(201);
     expect(execFileSync('git', ['branch', '--show-current'], { cwd: missing }).toString().trim()).toBe('trunk');
