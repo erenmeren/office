@@ -25,3 +25,17 @@ describe('phase 5 schemas', () => {
     expect(ProjectSettingsSchema.parse({}).requiredWorkerTags).toEqual([]);
   });
 });
+
+describe('unified sessions schemas', () => {
+  it('both socket schemas parse every session and terminal message (no duplicate discriminators)', async () => {
+    const { ApiToWorkerSchema, UiClientMessageSchema, UiServerMessageSchema } = await import('./protocol.js');
+    expect(ApiToWorkerSchema.parse({ type: 'sessions.request', requestId: 'r', query: { kind: 'background', action: 'start', dir: '/p', prompt: 'go' } }).type).toBe('sessions.request');
+    expect(ApiToWorkerSchema.parse({ type: 'sessions.request', requestId: 'r', query: { kind: 'background', action: 'stop', id: 'ab12' } }).type).toBe('sessions.request');
+    expect(ApiToWorkerSchema.parse({ type: 'terminal.open', terminalId: 't', dir: '/p', claudeSessionId: 's', cols: 80, rows: 24 })).toMatchObject({ fork: false });
+    expect(WorkerToApiSchema.parse({ type: 'sessions.response', requestId: 'r', result: { kind: 'background', id: 'ab12', output: 'ok' } }).type).toBe('sessions.response');
+    expect(WorkerToApiSchema.parse({ type: 'terminal.output', terminalId: 't', data: 'aGk=' }).type).toBe('terminal.output');
+    expect(UiClientMessageSchema.parse({ type: 'subscribe', topic: 'terminal:abc' }).type).toBe('subscribe');
+    expect(UiClientMessageSchema.safeParse({ type: 'terminal.input', terminalId: 't', data: 'x'.repeat(64 * 1024 + 1) }).success).toBe(false);
+    expect(UiServerMessageSchema.parse({ type: 'terminal.control', topic: 'terminal:abc', yours: true }).type).toBe('terminal.control');
+  });
+});

@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { handleSessionsQuery, reduceMessage, type SessionsDeps } from '../src/sessions.js';
+import { handleSessionsQuery, openTerminal, reduceMessage, type SessionsDeps } from '../src/sessions.js';
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'office-sessions-')));
 const root = join(tmp, 'root');
@@ -77,5 +77,29 @@ describe('sessions.request handling', () => {
     expect(d.spawnTerminal).toHaveBeenCalledWith(join(root, 'app'), 'd');
     const none = await handleSessionsQuery({ kind: 'open', sessionId: 'd', dir: join(root, 'app') }, [root], deps({ spawnTerminal: async () => { throw new Error('no display'); } }));
     expect(none.error).toEqual({ code: 'no_terminal', message: 'no display' });
+  });
+
+  it('opens $TERMINAL with claude --resume as argv in the session folder, and refuses without a display', async () => {
+    const fake = join(tmp, 'fake-terminal.sh');
+    const log = join(tmp, 'argv.log');
+    writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$PWD" "$@" > ${log}\n`);
+    chmodSync(fake, 0o755);
+    expect(await openTerminal(join(root, 'app'), 'sess-1', { TERMINAL: fake, DISPLAY: ':0', PATH: process.env.PATH })).toBe(fake);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([join(root, 'app'), '-e', 'claude', '--resume', 'sess-1']);
+    await expect(openTerminal(join(root, 'app'), 'sess-1', { TERMINAL: fake, PATH: process.env.PATH })).rejects.toThrow('no display');
+  });
+
+  it('starts, stops and removes background sessions through the claude CLI', async () => {
+    const calls: [string[], string | undefined][] = [];
+    const d = deps({ claude: async (args, cwd) => { calls.push([args, cwd]); return args[0] === '--bg' ? 'Started.\n  claude attach ab12cd34    open in this terminal\n' : `${args[0]}ped ${args[1]}`; } });
+    const start = await handleSessionsQuery({ kind: 'background', action: 'start', dir: join(root, 'app'), prompt: 'do it' }, [root], d);
+    expect(start.result).toEqual({ kind: 'background', id: 'ab12cd34', output: 'Started.\n  claude attach ab12cd34    open in this terminal\n' });
+    expect(calls[0]).toEqual([['--bg', 'do it'], join(root, 'app')]);
+    expect((await handleSessionsQuery({ kind: 'background', action: 'start', dir: outside, prompt: 'x' }, [root], d)).error?.code).toBe('outside_roots');
+    expect((await handleSessionsQuery({ kind: 'background', action: 'stop', id: 'ab12cd34' }, [root], d)).result).toMatchObject({ kind: 'background', output: 'stopped ab12cd34' });
+    expect((await handleSessionsQuery({ kind: 'background', action: 'rm', id: 'ab12cd34' }, [root], d)).result).toMatchObject({ output: 'rmped ab12cd34' });
+    const failing = deps({ claude: async () => { throw new Error('Workspace not trusted'); } });
+    expect((await handleSessionsQuery({ kind: 'background', action: 'start', dir: join(root, 'app'), prompt: 'x' }, [root], failing)).error).toEqual({ code: 'claude_failed', message: 'Workspace not trusted' });
   });
 });

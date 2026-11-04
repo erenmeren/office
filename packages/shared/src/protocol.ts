@@ -91,6 +91,10 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
     dir: z.string().min(1),
     claudeSessionId: z.string().min(1),
     resumeSessionId: z.string().optional(),
+    /** with `resumeSessionId`: `--fork-session`, the copy gets `claudeSessionId`; the source may keep running */
+    fork: z.boolean().default(false),
+    /** background session (`claude agents`) to `claude attach`; no new session is created */
+    attachId: z.string().optional(),
     ...TerminalSizeSchema.shape,
   }),
   z.object({ type: z.literal('terminal.input'), terminalId: z.string(), data: z.string().max(TERMINAL_INPUT_MAX) }),
@@ -110,6 +114,8 @@ export const UiClientMessageSchema = z.discriminatedUnion('type', [
   /** keystrokes for an Office terminal the owner is attached to (Phase 2) */
   z.object({ type: z.literal('terminal.input'), terminalId: z.string(), data: z.string().max(TERMINAL_INPUT_MAX) }),
   z.object({ type: z.literal('terminal.resize'), terminalId: z.string(), ...TerminalSizeSchema.shape }),
+  /** take the keyboard from the tab that has it (subscribing takes it too) */
+  z.object({ type: z.literal('terminal.control'), terminalId: z.string() }),
 ]);
 export type UiClientMessage = z.infer<typeof UiClientMessageSchema>;
 
@@ -157,6 +163,8 @@ export const UiServerMessageSchema = z.discriminatedUnion('type', [
   /** base64 PTY output on `terminal:<id>`; the first message after a subscribe carries the scrollback */
   z.object({ type: z.literal('terminal.output'), topic: z.string(), data: z.string() }),
   z.object({ type: z.literal('terminal.exit'), topic: z.string(), exitCode: z.number().int().nullable() }),
+  /** whether this socket holds the keyboard of the terminal; one tab types at a time */
+  z.object({ type: z.literal('terminal.control'), topic: z.string(), yours: z.boolean() }),
   /** on `global`: a terminal started or ended, so lists refetch */
   z.object({ type: z.literal('terminal.changed'), topic: z.literal('global'), terminalId: z.string() }),
   z.object({ type: z.literal('error'), message: z.string() }),

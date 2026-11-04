@@ -9,11 +9,16 @@ const AGENTS_TIMEOUT_MS = 5000;
 
 export interface LiveAgent {
   sessionId: string;
-  pid: number;
+  pid?: number;
   kind: string;
-  status: string;
+  status?: string;
+  state?: string;
+  id?: string;
   name?: string;
 }
+
+/** A session a process holds right now: interactive ones, and background ones still running. */
+export const isRunning = (l: LiveAgent) => l.kind !== 'background' || l.state === 'running' || l.state === undefined;
 
 export interface SessionsDeps {
   store: Pick<ClaudeSessionStore, 'listSessions' | 'getSessionMessages'>;
@@ -21,6 +26,8 @@ export interface SessionsDeps {
   liveSessions: () => Promise<LiveAgent[]>;
   /** Starts a terminal running `claude --resume <sessionId>` in `dir`; resolves with the terminal's name. */
   spawnTerminal: (dir: string, sessionId: string) => Promise<string>;
+  /** Runs `claude <args>` to completion (background session start/stop/rm); resolves with its output, rejects on failure. */
+  claude?: (args: string[], cwd?: string) => Promise<string>;
 }
 
 export type SessionsOutcome = { result: SessionsResult; error?: undefined } | { error: { code: SessionsErrorCode; message: string }; result?: undefined };
@@ -79,7 +86,7 @@ export async function handleSessionsQuery(query: SessionsQuery, roots: string[],
             createdAt: s.createdAt,
             lastModified: s.lastModified,
             fileSize: s.fileSize,
-            ...(l ? { live: { pid: l.pid, kind: l.kind, status: l.status, name: l.name } } : {}),
+            ...(l ? { live: { pid: l.pid, kind: l.kind, status: l.status, state: l.state, id: l.id, name: l.name } } : {}),
           });
         }
         return { result: { kind: 'list', sessions } };
@@ -90,11 +97,30 @@ export async function handleSessionsQuery(query: SessionsQuery, roots: string[],
         const entries = raw.map(reduceMessage).filter((e): e is TranscriptEntry => !!e);
         return { result: { kind: 'messages', entries, nextOffset: raw.length < query.limit ? null : query.offset + raw.length } };
       }
+      case 'background': {
+        const claude = deps.claude ?? runClaude;
+        if (query.action !== 'start') {
+          if (!query.id) return fail('internal_error', 'id required');
+          const output = await claude([query.action, query.id]).catch((err: Error) => {
+            throw Object.assign(err, { code: 'claude_failed' });
+          });
+          return { result: { kind: 'background', output } };
+        }
+        if (!query.dir || !query.prompt) return fail('internal_error', 'dir and prompt required');
+        const dir = realOrResolved(query.dir);
+        if (!underRoots(dir)) return fail('outside_roots', `${query.dir} is outside the workspace roots`);
+        const output = await claude(['--bg', query.prompt], dir).catch((err: Error) => {
+          throw Object.assign(err, { code: 'claude_failed' });
+        });
+        // the CLI prints "claude attach <id>" lines for the new session
+        const id = /claude attach (\S+)/.exec(output)?.[1];
+        return { result: { kind: 'background', id, output } };
+      }
       case 'open': {
         const dir = realOrResolved(query.dir);
         if (!underRoots(dir)) return fail('outside_roots', `${query.dir} is outside the workspace roots`);
-        const running = (await deps.liveSessions()).find((l) => l.sessionId === query.sessionId);
-        if (running) return fail('session_live', `session is running in another process (pid ${running.pid})`);
+        const running = (await deps.liveSessions()).find((l) => l.sessionId === query.sessionId && isRunning(l));
+        if (running) return fail('session_live', `session is running in another process (pid ${running.pid ?? running.id})`);
         const terminal = await deps.spawnTerminal(dir, query.sessionId).catch((err: Error) => {
           throw Object.assign(err, { code: 'no_terminal' });
         });
@@ -103,22 +129,45 @@ export async function handleSessionsQuery(query: SessionsQuery, roots: string[],
     }
   } catch (err) {
     const code = (err as { code?: unknown }).code;
-    return fail(code === 'no_terminal' ? 'no_terminal' : 'internal_error', (err as Error).message);
+    return fail(code === 'no_terminal' || code === 'claude_failed' ? code : 'internal_error', (err as Error).message);
   }
 }
 
-/** `claude agents --json`: the interactive and background sessions alive on this machine; `[]` on any failure. */
-export function readLiveSessions(): Promise<LiveAgent[]> {
+const CLAUDE_TIMEOUT_MS = 60_000;
+
+/** `claude <args>` with the worker's environment minus Office's; stdout on success, the first stderr line on failure. */
+export function runClaude(args: string[], cwd?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const env: NodeJS.ProcessEnv = {};
+    for (const [k, v] of Object.entries(process.env)) if (!/^(DATABASE_URL|OFFICE_)|^(COOKIE_SECRET|REDIS_URL)$/.test(k)) env[k] = v;
+    execFile('claude', args, { cwd, env, timeout: CLAUDE_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error((stderr || stdout || err.message).trim().split('\n')[0]?.slice(0, 300) || 'claude failed'));
+      resolve(stdout);
+    });
+  });
+}
+
+let warnedAgents = false;
+
+/**
+ * `claude agents --json --all`: the interactive sessions alive on this machine and the background ones, finished included;
+ * `[]` on any failure (an older CLI without it: warned once, nothing is guessed from file times).
+ */
+export function readLiveSessions(warn: (msg: string) => void = (m) => console.warn(m)): Promise<LiveAgent[]> {
   return new Promise((resolve) => {
-    execFile('claude', ['agents', '--json'], { timeout: AGENTS_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-      if (err) return resolve([]);
+    execFile('claude', ['agents', '--json', '--all'], { timeout: AGENTS_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      if (err) {
+        if (!warnedAgents) warn(`claude agents --json failed (${err.message.split('\n')[0]}): sessions show no live status and a running session is not refused a second resume`);
+        warnedAgents = true;
+        return resolve([]);
+      }
       try {
         const rows = JSON.parse(stdout) as unknown;
         resolve(
           Array.isArray(rows)
             ? rows
-                .filter((r): r is LiveAgent => typeof r?.sessionId === 'string' && typeof r.pid === 'number')
-                .map((r) => ({ sessionId: r.sessionId, pid: r.pid, kind: String(r.kind), status: String(r.status), name: r.name }))
+                .filter((r): r is LiveAgent => typeof r?.sessionId === 'string')
+                .map((r) => ({ sessionId: r.sessionId, pid: r.pid, kind: String(r.kind), status: r.status, state: r.state, id: r.id, name: r.name }))
             : [],
         );
       } catch {

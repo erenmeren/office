@@ -41,9 +41,10 @@ function realOrResolved(path: string) {
 }
 
 const FINAL_RUN = new Set(['succeeded', 'failed', 'cancelled']);
-const SESSIONS_TIMEOUT_MS = 10_000;
+// a background start runs the CLI, which can take a while on a cold machine
+const SESSIONS_TIMEOUT_MS = 70_000;
 // worker-side session errors as HTTP statuses
-const SESSIONS_ERROR_STATUS: Record<SessionsErrorCode, number> = { outside_roots: 400, session_live: 409, no_terminal: 409, internal_error: 502 };
+const SESSIONS_ERROR_STATUS: Record<SessionsErrorCode, number> = { outside_roots: 400, session_live: 409, no_terminal: 409, claude_failed: 409, internal_error: 502 };
 
 interface PendingSessions {
   workerId: string;
@@ -119,12 +120,30 @@ export class WorkerGateway {
    */
   /** A connected worker on the API's machine, if any (the one that can read sessions and run terminals). */
   localWorkerId(): string | undefined {
-    const isLocal = (c: Connection) => (c.machineId === undefined ? this.config.trustUnidentifiedWorkers : c.machineId === this.config.machineId);
-    return [...this.conns].find(([, c]) => isLocal(c) && c.socket.readyState === c.socket.OPEN)?.[0];
+    return [...this.conns].find(([, c]) => this.isLocalConn(c) && c.socket.readyState === c.socket.OPEN)?.[0];
   }
 
-  requestSessions(query: SessionsQuery): Promise<SessionsResult> {
-    const worker = this.localWorkerId();
+  isConnected(workerId: string): boolean {
+    const c = this.conns.get(workerId);
+    return !!c && c.socket.readyState === c.socket.OPEN;
+  }
+
+  private isLocalConn(c: Connection) {
+    return c.machineId === undefined ? this.config.trustUnidentifiedWorkers : c.machineId === this.config.machineId;
+  }
+
+  /** Connected workers that can hold Claude Code sessions (workspace roots), the local one first. */
+  sessionWorkers(): { workerId: string; local: boolean }[] {
+    return [...this.conns]
+      .filter(([, c]) => c.allowedRoots.length > 0 && c.socket.readyState === c.socket.OPEN)
+      .map(([workerId, c]) => ({ workerId, local: this.isLocalConn(c) }))
+      .sort((a, b) => Number(b.local) - Number(a.local));
+  }
+
+  /** `workerId` picks a connected worker; without it the local one. */
+  requestSessions(query: SessionsQuery, workerId?: string): Promise<SessionsResult> {
+    const worker = workerId ? (this.isConnected(workerId) ? workerId : undefined) : this.localWorkerId();
+    if (!worker && workerId) return Promise.reject(new HttpError(503, 'worker_offline', 'that worker is not connected'));
     if (!worker) return Promise.reject(new HttpError(503, 'no_local_worker', 'no worker is connected from this machine'));
     const requestId = randomUUID();
     return new Promise<SessionsResult>((resolve, reject) => {

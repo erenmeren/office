@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ApiToWorker } from '@office/shared';
 import { makeApp } from './helpers.js';
-import { connectFakeWorker, type FakeWorker } from './fake-worker.js';
+import { connectFakeWorker, until, type FakeWorker } from './fake-worker.js';
 
 describe('claude sessions (external CLI sessions through the local worker)', () => {
   let t: Awaited<ReturnType<typeof makeApp>>;
@@ -14,9 +14,9 @@ describe('claude sessions (external CLI sessions through the local worker)', () 
   afterEach(() => t.close());
 
   const req = (method: 'GET' | 'POST', url: string, payload?: object) => t.app.inject({ method, url, headers: { cookie }, payload });
-  const worker = async (machineId?: string | null) => {
-    const { enrollToken } = (await req('POST', '/workers', { name: 'w1' })).json();
-    return connectFakeWorker(t.app, { enrollToken, allowedRoots: ['/tmp/office-ws'], machineId });
+  const worker = async (machineId?: string | null, name = 'w1') => {
+    const { enrollToken } = (await req('POST', '/workers', { name })).json();
+    return connectFakeWorker(t.app, { enrollToken, name, allowedRoots: ['/tmp/office-ws'], machineId });
   };
   // answers the next sessions.request with `reply`, returning the query it carried
   const answer = async (w: FakeWorker, reply: Omit<Extract<ApiToWorker, { type: 'sessions.request' }>, 'type' | 'requestId' | 'query'> & object) => {
@@ -37,14 +37,38 @@ describe('claude sessions (external CLI sessions through the local worker)', () 
     expect(query).toEqual({ kind: 'list', limit: 200 });
     const res = await pending;
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ sessions: [{ ...sessions[0], projectId: p }, { ...sessions[1], projectId: null }] });
+    const wid = w.workerId!;
+    expect(res.json()).toEqual({ sessions: [{ ...sessions[0], projectId: p, workerId: wid, workerName: 'w1' }, { ...sessions[1], projectId: null, workerId: wid, workerName: 'w1' }] });
     await w.close();
+  });
+
+  it('asks every worker with roots and joins a remote clone with its project', async () => {
+    const p = (await req('POST', '/projects', { name: 'P', slug: 'p', repoPath: '/tmp/office-ws/p' })).json().id;
+    const local = await worker();
+    const remote = await worker('other-machine', 'far');
+    const pending = req('GET', '/claude-sessions');
+    await answer(local, { result: { kind: 'list', sessions: [{ sessionId: 'l1', title: 'here', cwd: '/tmp/office-ws/p', lastModified: 1 }] } });
+    await answer(remote, { result: { kind: 'list', sessions: [{ sessionId: 'r1', title: 'there', cwd: `/srv/worker/repos/${p}/x`, lastModified: 2 }] } });
+    expect((await pending).json()).toEqual({
+      sessions: [
+        { sessionId: 'l1', title: 'here', cwd: '/tmp/office-ws/p', lastModified: 1, workerId: local.workerId, workerName: 'w1', projectId: p },
+        { sessionId: 'r1', title: 'there', cwd: `/srv/worker/repos/${p}/x`, lastModified: 2, workerId: remote.workerId, workerName: 'far', projectId: p },
+      ],
+    });
+    // a transcript on the remote worker goes to that worker
+    const page = req('GET', `/claude-sessions/r1/messages?dir=/srv/worker/repos/${p}/x&workerId=${remote.workerId}`);
+    expect(await answer(remote, { result: { kind: 'messages', entries: [], nextOffset: null } })).toMatchObject({ kind: 'messages', sessionId: 'r1' });
+    expect((await page).statusCode).toBe(200);
+    await remote.close();
+    await until(() => !t.app.gateway.isConnected(remote.workerId!), 'remote gone');
+    expect((await req('GET', `/claude-sessions/r1/messages?dir=/x&workerId=${remote.workerId}`)).json()).toMatchObject({ error: 'worker_offline' });
+    await local.close();
   });
 
   it('maps worker refusals and a missing local worker to HTTP errors', async () => {
     expect((await req('GET', '/claude-sessions')).json()).toEqual({ sessions: [], unavailable: 'no_local_worker' });
     const remote = await worker('other-machine');
-    expect((await req('GET', '/claude-sessions')).json()).toEqual({ sessions: [], unavailable: 'no_local_worker' });
+    // without a workerId a transcript needs the local worker
     expect((await req('GET', '/claude-sessions/s1/messages?dir=/tmp/office-ws/p')).statusCode).toBe(503);
     await remote.close();
     const w = await worker();
@@ -59,6 +83,25 @@ describe('claude sessions (external CLI sessions through the local worker)', () 
     const dropped = req('GET', '/claude-sessions');
     await w.waitFor('sessions.request');
     await w.close();
-    expect((await dropped).json()).toEqual({ sessions: [], unavailable: 'worker_disconnected' });
+    expect((await dropped).json()).toEqual({ sessions: [], unavailable: 'worker_failed:w1' });
+  });
+
+  it('starts, stops and removes background sessions through the worker', async () => {
+    const w = await worker();
+    const p = (await req('POST', '/projects', { name: 'P', slug: 'p', repoPath: '/tmp/office-ws/p' })).json().id;
+    const starting = req('POST', '/claude-sessions/background', { projectId: p, prompt: 'write the changelog' });
+    expect(await answer(w, { result: { kind: 'background', id: 'ab12cd34', output: 'claude attach ab12cd34' } })).toEqual({ kind: 'background', action: 'start', dir: '/tmp/office-ws/p', prompt: 'write the changelog' });
+    const started = await starting;
+    expect(started.statusCode).toBe(201);
+    expect(started.json()).toMatchObject({ id: 'ab12cd34' });
+    const stopping = req('POST', '/claude-sessions/background/ab12cd34/stop');
+    expect(await answer(w, { result: { kind: 'background', output: 'stopped ab12cd34' } })).toEqual({ kind: 'background', action: 'stop', id: 'ab12cd34' });
+    expect((await stopping).json()).toMatchObject({ output: 'stopped ab12cd34' });
+    const failing = req('POST', '/claude-sessions/background', { dir: '/tmp/office-ws/q', prompt: 'x' });
+    await answer(w, { error: { code: 'claude_failed', message: 'Workspace not trusted' } });
+    expect((await failing).statusCode).toBe(409);
+    const audits = await t.prisma.auditLog.findMany({ where: { targetType: 'claude_session' }, orderBy: { createdAt: 'asc' } });
+    expect(audits.map((a) => a.action)).toEqual(['background.started', 'background.stopped']);
+    await w.close();
   });
 });

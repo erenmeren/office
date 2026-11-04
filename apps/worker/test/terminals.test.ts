@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import type { WorkerToApi } from '@office/shared';
-import { TerminalManager } from '../src/terminals.js';
+import { claudeArgs, TerminalManager } from '../src/terminals.js';
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'office-term-')));
 const root = join(tmp, 'root');
@@ -20,7 +20,7 @@ const until = async (cond: () => boolean, what: string) => {
 };
 const output = (id: string) =>
   sent.flatMap((m) => (m.type === 'terminal.output' && m.terminalId === id ? [Buffer.from(m.data, 'base64').toString()] : [])).join('');
-const open = { type: 'terminal.open' as const, dir: root, claudeSessionId: 'sid-1', cols: 80, rows: 24 };
+const open = { type: 'terminal.open' as const, dir: root, claudeSessionId: 'sid-1', fork: false, cols: 80, rows: 24 };
 let mgr: TerminalManager;
 afterEach(() => mgr?.closeAll());
 
@@ -44,7 +44,10 @@ describe('terminal manager', () => {
     mgr = new TerminalManager([root], (m) => sent.push(m), { liveSessions: async () => [{ sessionId: 'live-1', pid: 9, kind: 'interactive', status: 'busy' }], command: { exe: '/bin/sh', args: [] } });
     await mgr.open({ ...open, terminalId: 't2', dir: tmp });
     await mgr.open({ ...open, terminalId: 't3', resumeSessionId: 'live-1' });
-    expect(sent).toEqual([
+    // a fork of a running session is fine: it writes a new session
+    await mgr.open({ ...open, terminalId: 't3f', resumeSessionId: 'live-1', fork: true });
+    expect(sent.find((m) => m.type === 'terminal.opened')).toMatchObject({ terminalId: 't3f' });
+    expect(sent.filter((m) => m.type === 'terminal.error')).toEqual([
       { type: 'terminal.error', terminalId: 't2', code: 'outside_roots', message: `${tmp} is outside the workspace roots` },
       { type: 'terminal.error', terminalId: 't3', code: 'session_live', message: 'session is running in another process (pid 9)' },
     ]);
@@ -59,5 +62,26 @@ describe('terminal manager', () => {
     mgr.close('t4');
     await until(() => sent.some((m) => m.type === 'terminal.exit'), 'exit after close');
     expect(mgr.size).toBe(0);
+  });
+
+  it('keeps output while disconnected and flushes it after the re-announce', async () => {
+    sent.length = 0;
+    let connected = false;
+    mgr = new TerminalManager([root], (m) => sent.push(m), { liveSessions: async () => [], command: { exe: '/bin/sh', args: [] }, connected: () => connected });
+    await mgr.open({ ...open, terminalId: 't5' });
+    mgr.input('t5', 'echo buffered-line\n');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(output('t5')).toBe('');
+    connected = true;
+    mgr.announce();
+    expect(sent.map((m) => m.type)).toEqual(['terminal.opened', 'terminal.opened', 'terminal.output']);
+    expect(output('t5')).toContain('buffered-line');
+  });
+
+  it('builds the claude argv for new, resumed, forked and attached sessions', () => {
+    expect(claudeArgs({ claudeSessionId: 'n', fork: false })).toEqual(['--session-id', 'n']);
+    expect(claudeArgs({ claudeSessionId: 'o', resumeSessionId: 'o', fork: false })).toEqual(['--resume', 'o']);
+    expect(claudeArgs({ claudeSessionId: 'n', resumeSessionId: 'o', fork: true })).toEqual(['--resume', 'o', '--fork-session', '--session-id', 'n']);
+    expect(claudeArgs({ claudeSessionId: 'x', fork: false, attachId: 'ab12' })).toEqual(['attach', 'ab12']);
   });
 });
