@@ -5,6 +5,7 @@ import { DashboardActivity } from '@/components/dashboard-activity';
 import { DashboardAttention } from '@/components/dashboard-attention';
 import { DashboardCosts } from '@/components/dashboard-costs';
 import { DashboardKpis } from '@/components/dashboard-kpis';
+import { DashboardMissions } from '@/components/dashboard-missions';
 import { DashboardTeam } from '@/components/dashboard-team';
 import { DashboardWorkers } from '@/components/dashboard-workers';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,7 @@ export default function Dashboard() {
       <DashboardKpis />
       <DashboardColumns>
         <DashboardStack>
+          <DashboardMissions />
           <DashboardTeam />
           <DashboardActivity />
         </DashboardStack>

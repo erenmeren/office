@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/mission-control', '/sessions', '/office', '/conversations', '/agents', '/skills', '/memory', '/workers', '/audit', '/settings', '/tasks/new'];
+const STATIC = ['/', '/decisions', '/mission-control', '/sessions', '/office', '/conversations', '/agents', '/skills', '/memory', '/workers', '/audit', '/settings', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {
@@ -133,7 +133,7 @@ authed.describe('every page renders without console noise', () => {
     await expect(fe.getByText('Needs approval')).toBeVisible();
     await expect(fe.getByText('$3.31')).toBeVisible();
     const attention = page.getByRole('list', { name: 'Needs your attention' }).getByRole('listitem');
-    await expect(attention.filter({ hasText: 'e2e-testing' }).getByRole('link', { name: 'Review import' })).toBeVisible();
+    await expect(attention.filter({ hasText: 'e2e-testing' }).getByRole('link', { name: 'Decide' })).toHaveAttribute('href', '/decisions');
     const chart = page.getByRole('img', { name: /Cost per day, last 7 days/ });
     await expect(chart.locator('[data-slot="bar"]')).toHaveCount(7);
     await expect(chart.locator('[data-slot="bar"][data-partial]')).toHaveCount(1);

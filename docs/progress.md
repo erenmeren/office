@@ -816,6 +816,16 @@ Trigger: the first mission on the desktop app (redesign of maratus.co) failed in
 - Same day, owner: "this should be the default in every project". The SDK sandbox has no allow-every-host option and refuses `*` ("Overly broad patterns like \"*.com\" or \"*\" are not allowed"), so a new setting `networkAccess` was added: `open` (default) runs worktree Bash without the sandbox (file-tool gate, read-only heuristic and approval policy still apply); `allowlist` keeps the sandbox with `networkAllowedDomains`. Trade-off recorded in `docs/security.md`.
 - `review_task` decision `blocked` (Chief only, note required): the task stays `review` with the note, no attempt is used, audit `task.reviewed` with `decision: blocked`; the mission stays `review` with its review run. The overview `attention` list gains `task_decision` rows for tasks still in review after a finished review run (blocked or left undecided), linking to the task page where the owner reopens or fails them. The review prompt tells the Chief to decide `blocked` instead of reopening a task that would fail the same way. Orchestration test: blocked -> attention -> owner reopen -> mission running.
 
+## Decisions page and mission status lines (2026-11-04)
+
+Owner: the pending decisions were hard to find, nav counts appeared only after visiting a page, "Needs your attention" rows opened an unclear page, and a mission's state (stalled? cancelled?) was unreadable.
+
+- `/decisions` (nav item after Dashboard, amber badge = overview `attention` count): plans to approve (Review plan / Approve / Deny), tool requests (`ApprovalCard`, "Approve all once"), tasks waiting for a decision (Chief's note, Reopen / Mark done / Failed, link into Mission Control), skill imports ("Approve all"), memory proposals (Verify / Reject, "Verify all"). "Verify all" at the top runs the three safe groups after a confirm; plans and task decisions stay individual.
+- Overview `attention` gains `memory_proposal` rows and `missionId` on `task_decision` rows. Dashboard rows link to `/decisions` (approvals keep inline Approve/Deny); new Dashboard "Missions" card with one status sentence per open mission.
+- `missionStatusLine` turns status + task counts into "Waiting for you: …" / "Running: 1 task active, 2 waiting…" / "Chief is reviewing…" / "Failed: …"; shown on PlanCard (amber when the owner's turn) and the Dashboard.
+- Nav badges subscribe to the `global` hub topic and invalidate the affected queries; Mission Control's badge now counts open missions (live tone), Decisions carries the amber count.
+- Mission Control accepts `?mission=<id>&task=<id>`; Playwright 16/16 against the dev stack (the dashboard assertion now expects the "Decide" link).
+
 ## Pixel Office (2026-11-02)
 
 Owner request: implement option 3a of the "Pixel Office" design ("Temalı cozy kat"). Built on `main`:

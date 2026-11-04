@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Activity, FileText } from 'lucide-react';
@@ -14,7 +15,7 @@ import { Progress } from '@/components/ui/progress';
 import { StatusDot, StatusPill } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
 import { post, put } from '@/lib/api';
-import { missionProgress, planGraphNodes } from '@/lib/missions';
+import { missionProgress, missionStatusLine, planGraphNodes, taskCounts } from '@/lib/missions';
 import type { Agent, Mission } from '@/lib/queries';
 import type { Tone } from '@/lib/status';
 
@@ -98,13 +99,27 @@ function MissionVerdict({ m }: { m: Mission }) {
 }
 
 /** The selected mission's plan: state, owner decisions, and its dependency graph. */
-export function PlanCard({ mission: m, agents, selectedId, onSelect }: { mission: Mission; agents: Agent[]; selectedId?: string; onSelect: (id: string) => void }) {
+export function PlanCard({
+  mission: m,
+  agents,
+  selectedId,
+  onSelect,
+  decisions = 0,
+}: {
+  mission: Mission;
+  agents: Agent[];
+  selectedId?: string;
+  onSelect: (id: string) => void;
+  /** tasks of this mission waiting for the owner's review decision */
+  decisions?: number;
+}) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState(() => (m.plan ? JSON.stringify(m.plan, null, 2) : ''));
   const progress = missionProgress(m.tasks);
   const pendingPlan = m.approvals.find((a) => a.type === 'plan' && a.status === 'pending');
+  const line = missionStatusLine({ status: m.status, taskCounts: taskCounts(m.tasks), summary: m.summary, planError: m.planRun?.error, decisions });
 
   const act = (fn: () => Promise<unknown>) => async () => {
     setBusy(true);
@@ -138,6 +153,17 @@ export function PlanCard({ mission: m, agents, selectedId, onSelect }: { mission
           <StatusPill status={m.status} />
         </div>
         <CardDescription>{subtitle(m)}</CardDescription>
+        <p className={line.yours ? 'text-sm font-medium text-amber' : 'text-sm text-ink-2'} aria-live="polite">
+          {line.text}
+          {line.yours && m.status === 'review' && (
+            <>
+              {' '}
+              <Link href="/decisions" className="underline">
+                Open Decisions
+              </Link>
+            </>
+          )}
+        </p>
         <CardAction className="flex min-w-[200px] items-center gap-3 self-center">
           <span className="font-mono text-[12.5px] whitespace-nowrap text-ink-2">
             {progress.done} of {progress.total} done

@@ -350,7 +350,7 @@ export interface Overview {
   costTodayUsd: number;
   dailyBudgetUsd: number;
   team: { agentId: string; name: string; role: string; status: TeamStatus; currentWork: string | null; workerName: string | null; costTodayUsd: number }[];
-  attention: { kind: 'approval' | 'skill_review' | 'task_decision'; id: string; title: string; detail: string; createdAt: string }[];
+  attention: { kind: 'approval' | 'skill_review' | 'task_decision' | 'memory_proposal'; id: string; title: string; detail: string; createdAt: string; missionId?: string | null }[];
 }
 export interface CostBucket {
   key: string;
