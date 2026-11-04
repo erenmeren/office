@@ -416,7 +416,7 @@ authed('audit: rows render, action filter narrows, load older appends', async ({
 authed('claude cli sessions: grouped by project and folder, read-only transcript, open in terminal', async ({ page, request: api, noise }) => {
   const [project] = (await (await api.get(`${API}/projects`)).json()) as { id: string; name: string; repoPath: string }[];
   const now = Date.now();
-  const w = { workerId: 'w-fixture', workerName: 'dev-laptop' };
+  const w = { workerId: 'w-fixture', workerName: 'dev-laptop', local: true };
   const mine = { ...w, sessionId: 'cli-aaaa-1111', title: 'Fix the login form', cwd: project.repoPath, gitBranch: 'main', createdAt: now - 7200_000, lastModified: now - 60_000, projectId: project.id };
   const other = { ...w, sessionId: 'cli-bbbb-2222', title: 'Scratch notes', cwd: '/tmp/office-e2e/elsewhere', lastModified: now - 300_000, live: { pid: 4242, kind: 'interactive', status: 'busy' }, projectId: null };
   const bg = { ...w, sessionId: 'cli-dddd-4444', title: 'Nightly refactor', cwd: project.repoPath, lastModified: now - 120_000, live: { pid: 4343, kind: 'background', state: 'running', id: 'cli-dddd', name: 'nightly' }, projectId: project.id };
@@ -427,6 +427,13 @@ authed('claude cli sessions: grouped by project and folder, read-only transcript
   await page.route(`${API}/claude-sessions/cli-bbbb-2222/messages?**`, (route) => route.fulfill({ json: { kind: 'messages', entries: [], nextOffset: null } }));
   await page.route(`${API}/claude-sessions/cli-dddd-4444/messages?**`, (route) => route.fulfill({ json: { kind: 'messages', entries: [], nextOffset: null } }));
   await page.route(`${API}/claude-sessions/background/cli-dddd/stop`, (route) => route.fulfill({ json: { kind: 'background', output: 'stopped cli-dddd\n' } }));
+  await page.route(`${API}/claude-sessions/background/cli-dddd/logs`, (route) => route.fulfill({ json: { kind: 'background', output: 'Claude Code v2\n❯ refactor the nightly job' } }));
+  let renamed = '';
+  await page.route(`${API}/claude-sessions/cli-aaaa-1111/rename`, async (route) => {
+    renamed = (route.request().postDataJSON() as { title: string }).title;
+    await route.fulfill({ json: { kind: 'rename' } });
+  });
+  await page.route(`${API}/claude-sessions/cli-bbbb-2222?**`, (route) => route.fulfill({ json: { kind: 'delete' } }));
   await page.route(`${API}/claude-sessions/cli-aaaa-1111/open`, (route) => route.fulfill({ json: { kind: 'open', terminal: 'kitty' } }));
   await page.goto('/sessions');
   await page.waitForLoadState('networkidle');
@@ -457,6 +464,8 @@ authed('claude cli sessions: grouped by project and folder, read-only transcript
   await expect(card.getByRole('button', { name: /Fix the login form/ })).toHaveCount(0);
   await card.getByRole('button', { name: /Nightly refactor/ }).click();
   await expect(page.getByRole('button', { name: 'Attach here' })).toBeVisible();
+  await page.getByRole('button', { name: 'Logs' }).click();
+  await expect(page.getByText('refactor the nightly job')).toBeVisible();
   await page.getByRole('button', { name: 'Stop', exact: true }).click();
   await expect(page.getByRole('status')).toHaveText('stopped cli-dddd');
   await cliFilter.getByRole('radio', { name: 'All' }).click();

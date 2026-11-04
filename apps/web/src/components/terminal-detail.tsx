@@ -85,7 +85,7 @@ export function TerminalDetail({ terminal: t, onGone, mission }: { terminal: Ter
       <Card className={full ? 'fixed inset-2 z-50 flex flex-col' : undefined}>
         <CardHeader>
           <CardTitle>Terminal</CardTitle>
-          <CardDescription>Your own Claude Code, with your CLAUDE.md, plugins and skills. Office adds nothing and approves nothing here.</CardDescription>
+          <CardDescription>Your own Claude Code, with your CLAUDE.md, plugins and skills. Office adds nothing and approves nothing here. Ctrl+Shift+C copies, Ctrl+Shift+V pastes, Ctrl+Shift+F searches.</CardDescription>
           <CardAction>
             <Button size="sm" variant="ghost" onClick={() => setFull((f) => !f)} aria-pressed={full} title={full ? 'Back to the page' : 'Fill the window'}>
               {full ? <Minimize2 aria-hidden /> : <Maximize2 aria-hidden />} {full ? 'Exit full screen' : 'Full screen'}

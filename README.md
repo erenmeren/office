@@ -177,7 +177,7 @@ The Workers page shows each worker's mode (local, remote or none), tags, active 
 
 ### Remote worker container
 
-`pnpm worker:remote` builds `infra/docker/worker.Dockerfile` and starts the `worker-remote` service (Compose profile `remote`). The container mounts nothing from the host: it clones project repositories from the API git endpoint (`OFFICE_WORKER_CAN_CLONE=true`, no workspace roots), keeps its credential and clones in the named volume `office-worker-remote` (`/office-worker`), and registers with the tag `remote`.
+`pnpm worker:remote` builds `infra/docker/worker.Dockerfile` and starts the `worker-remote` service (Compose profile `remote`). The image runs agents only: it has no `claude` binary, so manual and background sessions on it fail (`spawn claude ENOENT`); install and log in the Claude CLI on a remote machine that should run them. The container mounts nothing from the host: it clones project repositories from the API git endpoint (`OFFICE_WORKER_CAN_CLONE=true`, no workspace roots), keeps its credential and clones in the named volume `office-worker-remote` (`/office-worker`), and registers with the tag `remote`.
 
 1. Start the API with `API_HOST=0.0.0.0` (the default `127.0.0.1` is not reachable from the container, which connects to `ws://host.docker.internal:4000`). This also exposes the API, including the first-run `/auth/setup`, on every interface.
 2. A host firewall with default deny (for example ufw) drops the Docker bridge's traffic to port 4000. Choose one:

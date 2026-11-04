@@ -105,7 +105,7 @@ function SessionsPageInner() {
         {terminal ? (
           <TerminalDetail key={terminal.id} terminal={terminal} onGone={() => setPicked(undefined)} mission={wantTerminal === terminal.id ? handoffMission : undefined} />
         ) : claude ? (
-          <ClaudeSessionDetail key={claude.sessionId} session={claude} onResumed={showTerminal} />
+          <ClaudeSessionDetail key={claude.sessionId} session={claude} onResumed={showTerminal} onDeleted={() => setPicked(undefined)} />
         ) : selected && project ? (
           <SessionDetail
             key={selected.runId}

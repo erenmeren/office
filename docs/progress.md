@@ -825,6 +825,17 @@ Owner request: see the Claude Code sessions started from a terminal (any folder 
 - Tests: `apps/worker/test/sessions.test.ts` (roots and symlinks, transcript reduction and paging, live refusal, terminal errors), `apps/api/test/claude-sessions.test.ts` (project join, error mapping, no local worker, worker drop). Verified on the owner's machine with the real SDK and CLI: 66 sessions listed under `/home/meren/projects`, the running session flagged live and refused for `open`, `/etc` refused.
 - Not built (later phases): Office-managed manual sessions with a PTY, background-agent attach, handoffs to and from missions, remote workers, transcript search.
 
+## Unified sessions: last sweep (2026-11-04)
+
+- `docs/security.md` and `docs/architecture.md` describe discovery, terminals, background sessions and handoffs.
+- Session rows carry `local`; "Open in terminal" is shown only for the local worker's sessions and `POST /claude-sessions/:id/open` answers `400 not_local` otherwise.
+- `claude logs <id>`: `sessions.request { kind: 'background', action: 'logs' }`, escape codes stripped on the worker (`stripAnsi`, last 20 000 characters), `POST /claude-sessions/background/:id/logs` (not audited), a "Logs" button and panel on a background session.
+- Rename and delete: SDK `renameSession` / `deleteSession` through `sessions.request { kind: 'rename' | 'delete' }` (`dir` under the roots, delete refused `session_live` while a process holds the session), `POST /claude-sessions/:id/rename { dir, title }`, `DELETE /claude-sessions/:id?dir=` (audited `claude_session.renamed|deleted`), a rename dialog and a confirmed Delete on the session detail.
+- Terminal: `@xterm/addon-search` with Ctrl+Shift+F (Enter next, Shift+Enter previous, Esc closes), Ctrl+Shift+C copies the selection, Ctrl+Shift+V pastes; plain Ctrl+C still reaches Claude.
+- `packages/db/scripts/migrate-test.mjs` now runs the package's own `prisma` binary, so `node scripts/migrate-test.mjs` works outside `pnpm` too (it failed silently with ENOENT before).
+- Verified: worker 7 session tests, API session tests (not_local, rename on a remote worker, logs, delete audit), Playwright 19/19 with rename, delete-disabled-while-running and logs steps; rename and delete for real on a throwaway session (custom-title entry appended, file removed, both audited).
+- Real remote worker (`worker-remote` container, host network, `OFFICE_WORKSPACE_ROOTS=/office-worker` for the test): the image did not build since the desktop app arrived, pnpm 12 stopping on the unreviewed `electron-winstaller` build script, and `node-pty` needs `python3 make g++` in the build stage: both fixed (`pnpm-workspace.yaml` `allowBuilds`, `infra/docker/worker.Dockerfile`). With it connected, `GET /claude-sessions` asked both workers (the container answered an empty list, no `unavailable`), a transcript request went to it and `/etc` was refused `outside_roots`, `open` was refused `not_local`, a terminal started on it and exited 1 at once (the image has no `claude` binary; the SDK's bundled CLI is not on `PATH`), and a background start answered `claude_failed: spawn claude ENOENT`. A remote worker that should run manual or background sessions needs the Claude CLI installed and logged in; the image does not ship it.
+
 ## Unified sessions: manual session rows and the owner's room (2026-11-04)
 
 The two leftovers after Phase 4:

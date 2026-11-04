@@ -65,7 +65,7 @@ it('oneLine keeps the first line and cuts long text', () => {
 
 it("ownerRoom counts the project's running manual and background sessions", () => {
   const t = (id: string, projectId: string, status: TerminalView['status']): TerminalView => ({ id, projectId, dir: '/d', workerId: 'w', claudeSessionId: `${id}-session`, status, startedAt: `2026-11-04T00:0${id.length}:00.000Z` });
-  const bg = (sessionId: string, projectId: string, state: string): ClaudeSession => ({ sessionId, title: 'bg', cwd: '/d', lastModified: 1, projectId, workerId: 'w', workerName: 'w', live: { kind: 'background', state, id: sessionId, name: `job ${sessionId}` } });
+  const bg = (sessionId: string, projectId: string, state: string): ClaudeSession => ({ sessionId, title: 'bg', cwd: '/d', lastModified: 1, projectId, workerId: 'w', workerName: 'w', local: true, live: { kind: 'background', state, id: sessionId, name: `job ${sessionId}` } });
   expect(ownerRoom([], [], 'p')).toMatchObject({ agentId: 'owner', status: 'idle', subs: [], startedAt: null });
   const room = ownerRoom([t('a', 'p', 'running'), t('bb', 'p', 'exited'), t('c', 'q', 'running')], [bg('x', 'p', 'running'), bg('y', 'p', 'done')], 'p');
   expect(room).toMatchObject({ status: 'running', task: 'Your Claude sessions: 1 manual, 1 background', workerName: 'Office terminal' });

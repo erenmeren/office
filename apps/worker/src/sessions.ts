@@ -21,7 +21,7 @@ export interface LiveAgent {
 export const isRunning = (l: LiveAgent) => l.kind !== 'background' || l.state === 'running' || l.state === undefined;
 
 export interface SessionsDeps {
-  store: Pick<ClaudeSessionStore, 'listSessions' | 'getSessionMessages'>;
+  store: Pick<ClaudeSessionStore, 'listSessions' | 'getSessionMessages' | 'renameSession' | 'deleteSession'>;
   /** Sessions the CLI reports as running right now (`claude agents --json`); empty when unsupported. */
   liveSessions: () => Promise<LiveAgent[]>;
   /** Starts a terminal running `claude --resume <sessionId>` in `dir`; resolves with the terminal's name. */
@@ -97,13 +97,27 @@ export async function handleSessionsQuery(query: SessionsQuery, roots: string[],
         const entries = raw.map(reduceMessage).filter((e): e is TranscriptEntry => !!e);
         return { result: { kind: 'messages', entries, nextOffset: raw.length < query.limit ? null : query.offset + raw.length } };
       }
+      case 'rename': {
+        if (!underRoots(realOrResolved(query.dir))) return fail('outside_roots', `${query.dir} is outside the workspace roots`);
+        await deps.store.renameSession(query.sessionId, query.title, { dir: query.dir });
+        return { result: { kind: 'rename' } };
+      }
+      case 'delete': {
+        if (!underRoots(realOrResolved(query.dir))) return fail('outside_roots', `${query.dir} is outside the workspace roots`);
+        const running = (await deps.liveSessions()).find((l) => l.sessionId === query.sessionId && isRunning(l));
+        if (running) return fail('session_live', `session is running in another process (pid ${running.pid ?? running.id})`);
+        await deps.store.deleteSession(query.sessionId, { dir: query.dir });
+        return { result: { kind: 'delete' } };
+      }
       case 'background': {
         const claude = deps.claude ?? runClaude;
         if (query.action !== 'start') {
           if (!query.id) return fail('internal_error', 'id required');
-          const output = await claude([query.action, query.id]).catch((err: Error) => {
+          const raw = await claude([query.action, query.id]).catch((err: Error) => {
             throw Object.assign(err, { code: 'claude_failed' });
           });
+          // `claude logs` prints the session's screen with its escape codes; keep readable text only
+          const output = query.action === 'logs' ? stripAnsi(raw).slice(-20_000) : raw;
           return { result: { kind: 'background', output } };
         }
         if (!query.dir || !query.prompt) return fail('internal_error', 'dir and prompt required');
@@ -134,6 +148,20 @@ export async function handleSessionsQuery(query: SessionsQuery, roots: string[],
 }
 
 const CLAUDE_TIMEOUT_MS = 60_000;
+
+// CSI, OSC and single-char escapes, then cursor-movement leftovers; lines of only box-drawing or spaces dropped
+export function stripAnsi(text: string): string {
+  return text
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/[\u2500-\u257f]+/g, '').trimEnd())
+    .filter((l, i, a) => l.trim() !== '' || (i > 0 && a[i - 1]!.trim() !== ''))
+    .join('\n')
+    .trim();
+}
 
 /** `claude <args>` with the worker's environment minus Office's; stdout on success, the first stderr line on failure. */
 export function runClaude(args: string[], cwd?: string): Promise<string> {

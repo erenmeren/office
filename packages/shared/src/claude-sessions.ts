@@ -41,10 +41,14 @@ export const SessionsQuerySchema = z.discriminatedUnion('kind', [
     limit: z.number().int().min(1).max(500).default(200),
   }),
   z.object({ kind: z.literal('open'), sessionId: z.string().min(1), dir: z.string().min(1) }),
+  /** SDK `renameSession`; `dir` under the roots */
+  z.object({ kind: z.literal('rename'), sessionId: z.string().min(1), dir: z.string().min(1), title: z.string().min(1).max(200) }),
+  /** SDK `deleteSession`: the transcript file goes; refused `session_live` while a process holds it */
+  z.object({ kind: z.literal('delete'), sessionId: z.string().min(1), dir: z.string().min(1) }),
   /** background sessions (`claude --bg`): `start` needs `dir` and `prompt`, `stop` and `rm` need `id` */
   z.object({
     kind: z.literal('background'),
-    action: z.enum(['start', 'stop', 'rm']),
+    action: z.enum(['start', 'stop', 'rm', 'logs']),
     dir: z.string().min(1).optional(),
     prompt: z.string().min(1).max(20_000).optional(),
     id: z.string().min(1).max(64).optional(),
@@ -57,6 +61,8 @@ export const SessionsResultSchema = z.discriminatedUnion('kind', [
   /** `nextOffset` is null once the transcript is exhausted. */
   z.object({ kind: z.literal('messages'), entries: z.array(TranscriptEntrySchema), nextOffset: z.number().int().nullable() }),
   z.object({ kind: z.literal('open'), terminal: z.string() }),
+  z.object({ kind: z.literal('rename') }),
+  z.object({ kind: z.literal('delete') }),
   /** `id` is the short id `claude attach|stop|rm` take (start only) */
   z.object({ kind: z.literal('background'), id: z.string().optional(), output: z.string() }),
 ]);

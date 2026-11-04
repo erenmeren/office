@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
-import { handleSessionsQuery, openTerminal, reduceMessage, type SessionsDeps } from '../src/sessions.js';
+import { handleSessionsQuery, openTerminal, reduceMessage, stripAnsi, type SessionsDeps } from '../src/sessions.js';
 
 const tmp = realpathSync(mkdtempSync(join(tmpdir(), 'office-sessions-')));
 const root = join(tmp, 'root');
@@ -17,6 +17,8 @@ const deps = (over: Partial<SessionsDeps> = {}): SessionsDeps => ({
   store: {
     listSessions: vi.fn(async () => [session('a', join(root, 'app')), session('b', outside), session('c', join(root, 'link')), session('d', join(root, 'gone'))]),
     getSessionMessages: vi.fn(async () => []),
+    renameSession: vi.fn(async () => undefined),
+    deleteSession: vi.fn(async () => undefined),
   } as unknown as SessionsDeps['store'],
   liveSessions: async () => [{ sessionId: 'a', pid: 7, kind: 'interactive', status: 'busy', name: 'app-1' }],
   spawnTerminal: vi.fn(async () => 'kitty'),
@@ -101,5 +103,17 @@ describe('sessions.request handling', () => {
     expect((await handleSessionsQuery({ kind: 'background', action: 'rm', id: 'ab12cd34' }, [root], d)).result).toMatchObject({ output: 'rmped ab12cd34' });
     const failing = deps({ claude: async () => { throw new Error('Workspace not trusted'); } });
     expect((await handleSessionsQuery({ kind: 'background', action: 'start', dir: join(root, 'app'), prompt: 'x' }, [root], failing)).error).toEqual({ code: 'claude_failed', message: 'Workspace not trusted' });
+  });
+
+  it('renames and deletes sessions under the roots, never a running one, and cleans background logs', async () => {
+    const d = deps({ claude: async () => '\x1b[2J\x1b[H\x1b[38;2;1;2;3mClaude Code\x1b[39m v2\r\n─────\r\n❯ hello\r\n\r\n\r\nok\n' });
+    expect((await handleSessionsQuery({ kind: 'rename', sessionId: 'd', dir: join(root, 'app'), title: 'New name' }, [root], d)).result).toEqual({ kind: 'rename' });
+    expect(d.store.renameSession).toHaveBeenCalledWith('d', 'New name', { dir: join(root, 'app') });
+    expect((await handleSessionsQuery({ kind: 'rename', sessionId: 'b', dir: outside, title: 'x' }, [root], d)).error?.code).toBe('outside_roots');
+    expect((await handleSessionsQuery({ kind: 'delete', sessionId: 'a', dir: join(root, 'app') }, [root], d)).error?.code).toBe('session_live');
+    expect((await handleSessionsQuery({ kind: 'delete', sessionId: 'd', dir: join(root, 'app') }, [root], d)).result).toEqual({ kind: 'delete' });
+    expect(d.store.deleteSession).toHaveBeenCalledWith('d', { dir: join(root, 'app') });
+    expect((await handleSessionsQuery({ kind: 'background', action: 'logs', id: 'ab12' }, [root], d)).result).toEqual({ kind: 'background', output: 'Claude Code v2\n\n❯ hello\n\nok' });
+    expect(stripAnsi('plain')).toBe('plain');
   });
 });
