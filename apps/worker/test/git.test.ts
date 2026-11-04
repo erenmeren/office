@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   collectResult,
+  commitLeftovers,
   createWorktree,
   ensureMissionBranch,
   fastForward,
   installTrailerHook,
+  rebaseOnto,
   removeWorktree,
   sweepWorktrees,
 } from '../src/git.js';
@@ -81,6 +83,47 @@ describe('git worktrees', () => {
     const before = git(repo, 'rev-parse', 'office/m');
     expect(await fastForward(repo, 'office/m', git(wt.path, 'rev-parse', 'HEAD'))).toBe('needs_integration');
     expect(git(repo, 'rev-parse', 'office/m')).toBe(before);
+  });
+
+  it('commits leftovers without build output, and rebases a run onto a moved mission head so it fast-forwards', async () => {
+    const who = { name: 'Office Agent', email: 'office@example.invalid' };
+    await ensureMissionBranch(repo, 'office/m', 'main');
+    const wt = await createWorktree(repo, wtDir, 'run-a', 'office/m', 'office/m-runs/a');
+    const other = await createWorktree(repo, wtDir, 'run-b', 'office/m', 'office/m-runs/b');
+    commitFile(other.path, 'b.txt', 'theirs', 'b change');
+    expect(await fastForward(repo, 'office/m', git(other.path, 'rev-parse', 'HEAD'))).toBe('fast_forwarded');
+
+    expect(await commitLeftovers(wt.path, who, 'nothing')).toBe(false);
+    writeFileSync(join(wt.path, 'a.txt'), 'ours');
+    mkdirSync(join(wt.path, 'dist'));
+    writeFileSync(join(wt.path, 'dist', 'index.html'), 'built');
+    expect(await commitLeftovers(wt.path, who, 'Office auto-commit')).toBe(true);
+    expect(git(wt.path, 'log', '-1', '--format=%s %an')).toBe('Office auto-commit Office Agent');
+    expect(git(wt.path, 'ls-files')).not.toContain('dist/');
+    expect(git(wt.path, 'status', '--porcelain')).toContain('?? dist/');
+
+    const rebased = await rebaseOnto(wt.path, 'refs/heads/office/m', who);
+    expect(rebased).toEqual({ ok: true, base: git(repo, 'rev-parse', 'office/m') });
+    const r = await collectResult(wt.path, (rebased as { base: string }).base);
+    expect(r.commits.map((c) => c.subject)).toEqual(['Office auto-commit']);
+    expect(await fastForward(repo, 'office/m', r.headCommit)).toBe('fast_forwarded');
+    expect(git(repo, 'ls-tree', '--name-only', 'office/m')).toContain('b.txt');
+  });
+
+  it('a conflicting rebase is aborted and reported', async () => {
+    const who = { name: 't', email: 't@example.invalid' };
+    await ensureMissionBranch(repo, 'office/m', 'main');
+    const wt = await createWorktree(repo, wtDir, 'run-a', 'office/m', 'office/m-runs/a');
+    const other = await createWorktree(repo, wtDir, 'run-b', 'office/m', 'office/m-runs/b');
+    commitFile(other.path, 'a.txt', 'theirs', 'b change');
+    expect(await fastForward(repo, 'office/m', git(other.path, 'rev-parse', 'HEAD'))).toBe('fast_forwarded');
+    commitFile(wt.path, 'a.txt', 'ours', 'a change');
+    const head = git(wt.path, 'rev-parse', 'HEAD');
+    const r = await rebaseOnto(wt.path, 'refs/heads/office/m', who);
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain('conflicts');
+    expect(git(wt.path, 'rev-parse', 'HEAD')).toBe(head);
+    expect(existsSync(join(wt.path, '.git', 'rebase-merge'))).toBe(false);
   });
 
   it('removing a worktree deletes its run branch when fast-forwarded or empty, keeps it when it needs integration', async () => {

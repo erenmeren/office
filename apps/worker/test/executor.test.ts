@@ -505,7 +505,7 @@ describe('RunExecutor', () => {
       expect(git(cloneDir, 'branch', '--list', r.git!.branch)).toBe('');
     });
 
-    it('emits agent.integration.failed with the push rejection when the mission branch moved meanwhile', async () => {
+    it('rebases onto a mission head that moved meanwhile and pushes the fast-forward', async () => {
       const inner = new FakeAdapter();
       const rec: RuntimeAdapter = {
         name: 'fake',
@@ -522,11 +522,10 @@ describe('RunExecutor', () => {
       ex.accept(remoteSpec());
       await until(done, 'result');
       const r = result();
-      expect(r.git).toMatchObject({ integration: 'needs_integration' });
-      expect(r.git!.integrationReason).toMatch(/rejected|stale info|failed to push/);
-      const failed = sent.flatMap((m) => (m.type === 'run.event' && m.event.type === 'agent.integration.failed' ? [m.event] : []));
-      expect(failed).toHaveLength(1);
-      expect(failed[0]!.payload.reason).toBe(r.git!.integrationReason);
+      const moved = git(server, 'rev-parse', 'refs/heads/office/t^');
+      expect(r.git).toMatchObject({ integration: 'fast_forwarded', baseCommit: moved });
+      expect(git(server, 'rev-parse', 'refs/heads/office/t')).toBe(r.git!.headCommit);
+      expect(sent.some((m) => m.type === 'run.event' && m.event.type === 'agent.integration.failed')).toBe(false);
     });
 
     it('rejects a remote spec when the worker cannot clone', async () => {

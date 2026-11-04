@@ -3,17 +3,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import { lstat, writeFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
 import { runCheck } from './checks.js';
-import {
-  collectResult,
-  createWorktree,
-  ensureMissionBranch,
-  excludeFromGit,
-  fastForward,
-  git,
-  installTrailerHook,
-  removeWorktree,
-  sweepWorktrees,
-} from './git.js';
+import { collectResult, commitLeftovers, createWorktree, ensureMissionBranch, excludeFromGit, fastForward, git, gitAuth, installTrailerHook, rebaseOnto, removeWorktree, sweepWorktrees } from './git.js';
 import { ensureClone } from './repos.js';
 import { removeRunRoot, materializeSkills } from './skills.js';
 import { buildChildEnv, redactSecrets, type RuntimeAdapter, type ToolBridge } from '@office/runtime';
@@ -371,20 +361,44 @@ export class RunExecutor {
     }
   }
 
-  /** Collects the run's commits; a succeeded code run is checked, then fast-forwarded onto the mission branch. */
+  /**
+   * Collects the run's commits; a succeeded code run first gets its leftover changes committed and its branch rebased
+   * onto the mission head (parallel tasks), then is checked and fast-forwarded onto the mission branch.
+   */
   private async finishWorktree(spec: RunSpec, g: MissionGit, wt: Worktree, result: RunResult, emit: (body: EventBody) => void): Promise<RunResult> {
-    const collected = await collectResult(wt.path, wt.baseCommit);
     let check: RunResult['check'];
     let integration: IntegrationStatus = 'none';
     let integrationReason: string | undefined;
-    if (spec.taskKind === 'code' && !spec.readOnlyCheckout && result.status === 'succeeded') {
+    const code = spec.taskKind === 'code' && !spec.readOnlyCheckout && result.status === 'succeeded';
+    const who = { name: g.committerName, email: g.committerEmail };
+    if (code && (await commitLeftovers(wt.path, who, `Office auto-commit: changes ${g.agentName} left uncommitted`).catch(() => false))) {
+      this.log.warn({ runId: spec.runId }, 'committed changes the agent left uncommitted');
+    }
+    let collected = await collectResult(wt.path, wt.baseCommit);
+    if (code && collected.commits.length > 0) {
+      // the mission head may have moved while this run worked; a clean rebase keeps the fast-forward possible
+      const target = g.remote
+        ? await gitAuth(wt.path, this.credential(), 'fetch', '-q', 'office', `refs/heads/${g.missionBranch}`).then(() => 'FETCH_HEAD')
+        : `refs/heads/${g.missionBranch}`;
+      const rebased = await rebaseOnto(wt.path, target, who);
+      if (!rebased.ok) {
+        integrationReason = rebased.reason;
+        emit({ type: 'agent.integration.failed', payload: { reason: rebased.reason } });
+      } else if (rebased.base !== wt.baseCommit) {
+        wt = { ...wt, baseCommit: rebased.base };
+        collected = await collectResult(wt.path, wt.baseCommit);
+      }
+    }
+    if (code) {
       check = spec.checkCommand
         ? {
             command: spec.checkCommand,
             ...(await runCheck(wt.path, spec.checkCommand, spec.checkTimeoutSeconds, buildChildEnv(process.env, spec))),
           }
         : { command: '', status: 'skipped', exitCode: null, durationMs: 0, output: '' };
-      if (collected.commits.length > 0 && check.status !== 'failed' && check.status !== 'timeout') {
+      if (integrationReason) {
+        integration = 'needs_integration';
+      } else if (collected.commits.length > 0 && check.status !== 'failed' && check.status !== 'timeout') {
         const failed = (reason: string) => {
           integrationReason = reason;
           emit({ type: 'agent.integration.failed', payload: { reason } });
