@@ -52,6 +52,11 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
         throw err;
       });
     }
+    else if (!data.defaultBranch) {
+      // an existing repository: its checked-out branch is the default, not the form's "main" (the repo may use master)
+      const head = await run('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repoPath }).then((r) => r.stdout.trim()).catch(() => '');
+      if (head) data.defaultBranch = head;
+    }
     return reply.code(201).send(await app.prisma.project.create({ data: { ...data, repoPath } }));
   });
 

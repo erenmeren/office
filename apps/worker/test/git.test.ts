@@ -44,6 +44,8 @@ describe('git worktrees', () => {
     commitFile(repo, 'b.txt', 'b', 'second on main');
     // already exists: not moved to the new main head
     expect(await ensureMissionBranch(repo, 'office/m-abc123', 'main')).toBe(base);
+    await expect(ensureMissionBranch(repo, 'office/other-abc123', 'master')).rejects.toThrow('default branch "master" does not exist in');
+    await expect(ensureMissionBranch(repo, 'office/other-abc123', 'master')).rejects.toThrow('(branches: main, office/m-abc123)');
   });
 
   it('runs on a run branch whose commits carry the Office-Agent trailer, then fast-forwards the mission branch', async () => {

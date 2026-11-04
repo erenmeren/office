@@ -48,7 +48,12 @@ export async function ensureMissionBranch(repoPath: string, branch: string, defa
   // a concurrent run may create it between the check and the create; rev-parse then still answers
   if (!(await succeeds(repoPath, 'rev-parse', '--verify', '-q', ref))) {
     if (credential === undefined) {
-      await git(repoPath, 'branch', branch, defaultBranch).catch(() => {});
+      // a project created with the form's default while the repository uses master, say: name the fix, not "Needed a single revision"
+      if (!(await succeeds(repoPath, 'rev-parse', '--verify', '-q', `refs/heads/${defaultBranch}`))) {
+        const branches = (await git(repoPath, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/').catch(() => '')).trim().split('\n').filter(Boolean);
+        throw new Error(`default branch "${defaultBranch}" does not exist in ${repoPath} (branches: ${branches.join(', ') || 'none'}); set the project's default branch in Settings`);
+      }
+      await git(repoPath, 'branch', branch, defaultBranch);
     } else {
       await git(repoPath, 'branch', branch, `refs/remotes/office/${defaultBranch}`);
       await gitAuth(repoPath, credential, 'push', '-q', 'office', `${ref}:${ref}`)

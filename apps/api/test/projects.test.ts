@@ -1,6 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { rm, stat, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { agentAllowed } from '../src/services/project-service.js';
 import { storeArtifact, readArtifact } from '../src/services/artifact-store.js';
@@ -48,6 +50,18 @@ describe('project settings, agents, audit, artifacts', () => {
     expect(s.checkCommand).toBe('x');
     const rows = (await call('GET', `/audit?targetType=project&targetId=${p}&limit=1`)).json();
     expect(rows[0].detail.keys).toEqual(['checkCommand']);
+  });
+
+  it('an existing repository gives the project its checked-out branch as the default branch', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'office-master-'));
+    execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: dir });
+    const post = (payload: object) => t.app.inject({ method: 'POST', url: '/projects', headers: { cookie }, payload });
+    const res = await post({ name: 'M', slug: 'm-master', repoPath: dir });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().defaultBranch).toBe('master');
+    const explicit = await post({ name: 'M2', slug: 'm-explicit', repoPath: dir, defaultBranch: 'main' });
+    expect(explicit.json().defaultBranch).toBe('main');
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('project without repoPath gets a fresh repository under <dataDir>/repos/<slug>', async () => {
