@@ -24,7 +24,8 @@ export const ProjectSettingsSchema = z.object({
   maxConcurrentRuns: z.number().int().positive().default(2),
   defaultMaxAttempts: z.number().int().positive().default(2),
   requiredWorkerTags: z.array(WorkerTagSchema).default([]),
-  // hosts sandboxed Bash may reach on worktree runs; empty means no outbound network
+  // open: Bash on worktree runs is not sandboxed (the SDK sandbox cannot allow every host); allowlist: sandboxed, reaching only networkAllowedDomains
+  networkAccess: z.enum(['open', 'allowlist']).default('open'),
   networkAllowedDomains: z.array(NetworkDomainSchema).default([]),
 });
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;

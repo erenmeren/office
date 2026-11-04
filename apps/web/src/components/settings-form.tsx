@@ -218,9 +218,19 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
               />
             </Field>
             <Field
+              label="Network access"
+              htmlFor="networkAccess"
+              hint="Open: mission-run commands reach any host and are not sandboxed. Allowlist: commands run in the sandbox and reach only the domains below."
+            >
+              <NativeSelect id="networkAccess" value={draft.networkAccess} onChange={(e) => set('networkAccess', e.target.value as ProjectSettings['networkAccess'])}>
+                <option value="open">Open (default)</option>
+                <option value="allowlist">Allowlist</option>
+              </NativeSelect>
+            </Field>
+            <Field
               label="Network allowed domains"
               htmlFor="networkAllowedDomains"
-              hint="Comma-separated hosts sandboxed commands may reach on mission runs, e.g. example.com, *.example.com. Empty: no outbound network."
+              hint="Allowlist mode only. Comma-separated, e.g. example.com, *.example.com. Empty: no outbound network."
               error={problem('networkAllowedDomains')}
             >
               <Input
