@@ -133,6 +133,7 @@ async function specBase(
       // the project's approval policy gates every run kind, not only mission tasks
       approvalPolicy: settings.approvalPolicy,
       approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
+      networkAllowedDomains: settings.networkAllowedDomains,
     },
   };
 }

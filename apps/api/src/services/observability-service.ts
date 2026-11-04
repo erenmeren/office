@@ -88,7 +88,19 @@ export async function projectOverview(db: Db, projectId: string) {
       costTodayUsd: spent.find((s) => s.agentId === a.id)?._sum.costUsd ?? 0,
     };
   });
+  // tasks the Chief's finished review left undecided (blocked on the owner, or not decided): the owner reopens or fails them
+  const undecided = await db.task.findMany({
+    where: { projectId, status: 'review', mission: { status: 'review', reviewRunId: { not: null } } },
+    select: { id: true, title: true, reviewNote: true, updatedAt: true, mission: { select: { reviewRunId: true } } },
+    orderBy: { updatedAt: 'desc' },
+  });
+  const finishedReviews = new Set(
+    (await db.taskRun.findMany({ where: { id: { in: undecided.map((t) => t.mission!.reviewRunId!) }, status: 'succeeded' }, select: { id: true } })).map((r) => r.id),
+  );
   const attention = [
+    ...undecided
+      .filter((t) => finishedReviews.has(t.mission!.reviewRunId!))
+      .map((t) => ({ kind: 'task_decision' as const, id: t.id, title: t.title, detail: t.reviewNote ?? 'The review left this task undecided.', createdAt: t.updatedAt })),
     ...approvals.map((a) => ({
       kind: 'approval' as const, id: a.id, title: a.toolName ? `${a.type}: ${a.toolName}` : a.type, detail: a.reason, createdAt: a.createdAt,
     })),

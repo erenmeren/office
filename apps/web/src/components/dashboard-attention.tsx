@@ -49,14 +49,20 @@ function AttentionRow({ item }: { item: Item }) {
   return (
     <li className="flex items-start gap-3 rounded-[14px] border border-amber/30 bg-amber/6 p-3">
       <div className="min-w-0 flex-1">
-        <div className="font-medium text-ink">{approval ? `Approve ${item.title}` : `Review skill import: ${item.title}`}</div>
+        <div className="font-medium text-ink">
+          {approval ? `Approve ${item.title}` : item.kind === 'task_decision' ? `Decide task: ${item.title}` : `Review skill import: ${item.title}`}
+        </div>
         <p className="mt-0.5 line-clamp-2 text-[12.5px] text-ink-2">{item.detail}</p>
         <p className="mt-1 text-xs text-ink-3">
-          {approval ? 'Approval' : 'Skill Library'} · {relativeTime(item.createdAt)}
+          {approval ? 'Approval' : item.kind === 'task_decision' ? 'Mission review' : 'Skill Library'} · {relativeTime(item.createdAt)}
         </p>
       </div>
       {approval ? (
         <ApprovalActions id={item.id} />
+      ) : item.kind === 'task_decision' ? (
+        <Link href={`/tasks/${item.id}`} className={buttonVariants({ size: 'sm', variant: 'secondary' })}>
+          Decide
+        </Link>
       ) : (
         <Link href={`/skills/${item.id}`} className={buttonVariants({ size: 'sm', variant: 'secondary' })}>
           Review import
@@ -66,7 +72,7 @@ function AttentionRow({ item }: { item: Item }) {
   );
 }
 
-/** Pending approvals and skill imports waiting for the owner. */
+/** Pending approvals, skill imports and review-blocked tasks waiting for the owner. */
 export function DashboardAttention() {
   const items = useOverview(useProject()?.id).data?.attention ?? [];
   return (

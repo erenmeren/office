@@ -1,4 +1,4 @@
-import { WorkerTagSchema, type ProjectSettings } from '@office/shared';
+import { NetworkDomainSchema, WorkerTagSchema, type ProjectSettings } from '@office/shared';
 
 export type PolicyKey = keyof Omit<ProjectSettings['approvalPolicy'], 'destructivePatterns' | 'sensitivePaths'>;
 
@@ -43,5 +43,6 @@ export function validateSettingsDraft(draft: ProjectSettings): { field: string; 
     if (!ENV_NAME.test(r.name)) out.push({ field: `envTemplate.${i}`, message: `Env row ${i + 1}: name must be upper case letters, digits and underscores, and not start with a digit.` });
   });
   if (draft.requiredWorkerTags.some((t) => !WorkerTagSchema.safeParse(t).success)) out.push({ field: 'requiredWorkerTags', message: 'tags are lowercase letters, digits and dashes' });
+  if (draft.networkAllowedDomains.some((d) => !NetworkDomainSchema.safeParse(d).success)) out.push({ field: 'networkAllowedDomains', message: 'domains look like example.com or *.example.com' });
   return out;
 }

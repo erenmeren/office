@@ -370,6 +370,37 @@ describe('orchestration', () => {
     expect(await s.t.prisma.artifact.count({ where: { runId: review.runId, kind: 'review' } })).toBe(1);
   });
 
+  it('Chief blocked: the task waits in review for the owner with the note, no attempt used, listed in attention; owner reopen resumes', async () => {
+    s = await setup();
+    const { w, m, k } = await s.approved();
+    await s.toReview(w, k, 'failed');
+    const before = (await s.task(k.a)).attempts;
+    const review = await s.assign(w);
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'blocked' })).toMatchObject({ ok: false, code: 'note_required' });
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'blocked', note: 'allow maratus.co:443' })).toMatchObject({
+      ok: true, result: { status: 'review' },
+    });
+    expect(await s.task(k.a)).toMatchObject({ status: 'review', reviewNote: 'allow maratus.co:443', attempts: before });
+    const audit = await s.t.prisma.auditLog.findFirstOrThrow({ where: { action: 'task.reviewed', targetId: k.a } });
+    expect(audit.detail).toMatchObject({ decision: 'blocked', by: 'chief' });
+    // the owner cannot mark blocked: the override endpoints are done, reopen and failed
+    expect((await s.req('POST', `/tasks/${k.a}/blocked`, {})).statusCode).toBe(404);
+
+    await s.finish(w, review, {
+      status: 'succeeded',
+      structuredOutput: { summary: 'blocked on network access', tasks: [{ taskId: k.a, decision: 'blocked', note: 'allow maratus.co:443' }] },
+    });
+    // undecided tasks keep the mission in review with this run; the owner sees them in the overview
+    expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: review.runId, summary: 'blocked on network access' });
+    const overview = (await s.req('GET', `/projects/${s.projectId}/overview`)).json();
+    expect(overview.attention.filter((a: { kind: string }) => a.kind === 'task_decision').map((a: { id: string }) => a.id).sort()).toEqual([k.a, k.c].sort());
+    expect(overview.attention.find((a: { id: string }) => a.id === k.a)).toMatchObject({ detail: 'allow maratus.co:443' });
+
+    expect((await s.req('POST', `/tasks/${k.a}/reopen`, { note: 'network allowed' })).statusCode).toBe(200);
+    expect(await s.task(k.a)).toMatchObject({ status: 'ready', attempts: before });
+    expect(await s.mission(m.id)).toMatchObject({ status: 'running', reviewRunId: null });
+  });
+
   it('a structured done that fails the evidence rule becomes reopen; all done -> mission done', async () => {
     s = await setup();
     const plan = testPlan();

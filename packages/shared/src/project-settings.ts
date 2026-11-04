@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { ApprovalPolicySchema } from './policy.js';
 import { WorkerTagSchema } from './protocol.js';
 
+/** A host name, or `*.example.com` for a host and its subdomains (the SDK sandbox wildcard). */
+export const NetworkDomainSchema = z.string().regex(/^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$/i, 'domain like example.com or *.example.com');
+
 export const ProjectSettingsSchema = z.object({
   packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).optional(),
   setupCommand: z.string().max(500).optional(),
@@ -21,5 +24,7 @@ export const ProjectSettingsSchema = z.object({
   maxConcurrentRuns: z.number().int().positive().default(2),
   defaultMaxAttempts: z.number().int().positive().default(2),
   requiredWorkerTags: z.array(WorkerTagSchema).default([]),
+  // hosts sandboxed Bash may reach on worktree runs; empty means no outbound network
+  networkAllowedDomains: z.array(NetworkDomainSchema).default([]),
 });
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;

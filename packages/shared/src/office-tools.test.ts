@@ -17,6 +17,7 @@ describe('office tools', () => {
   it('parses review tools', () => {
     expect(parseToolArgs('review_task', { taskId: 't', decision: 'done' }).note).toBe('');
     expect(() => parseToolArgs('review_task', { taskId: 't', decision: 'maybe' })).toThrow();
+    expect(parseToolArgs('review_task', { taskId: 't', decision: 'blocked', note: 'allow x' }).decision).toBe('blocked');
     expect(parseToolArgs('get_task_evidence', { taskId: 't' })).toEqual({ taskId: 't' });
   });
   it('accepts an error result', () => {

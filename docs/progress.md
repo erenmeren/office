@@ -808,6 +808,13 @@ Owner request: "finish everything that is missing". Done, each on `main`:
 
 Still not built (reasons): interactive PTY shell (new native dependency and a remote shell on the worker host; ask for it explicitly), `ProjectMember` (contradicts the single-owner decision), session Pause (the SDK has interrupt, not pause; "Interrupt and send" covers the use), messages to a subagent (reached through the parent), semantic memory search (needs an embedding provider and key), Claude Code plugins (request not clarified), the check grandchild that leaves its process group, the 7-day worktree sweep versus a run suspended longer than `replyTimeoutMinutes` (cannot happen with the default 60 minutes).
 
+## Network allowlist and blocked review decision (2026-11-04)
+
+Trigger: the first mission on the desktop app (redesign of maratus.co) failed in its first task. The sandbox denied `curl https://maratus.co/` (`deny network-outbound maratus.co:443 (user denied)`), the worker stopped without inventing content, the Chief reopened once, the retry failed the same way, and at `attempts 2/2` the Chief marked the task failed and the mission with it. Owner: the Chief should have reported the blocker and waited.
+
+- Project setting `networkAllowedDomains` (Settings, "Network allowed domains"; `example.com` or `*.example.com`) is passed on `RunSpec` and becomes `sandbox.network.allowedDomains` for worktree runs; empty keeps the sandbox offline. The adapter test covers both.
+- `review_task` decision `blocked` (Chief only, note required): the task stays `review` with the note, no attempt is used, audit `task.reviewed` with `decision: blocked`; the mission stays `review` with its review run. The overview `attention` list gains `task_decision` rows for tasks still in review after a finished review run (blocked or left undecided), linking to the task page where the owner reopens or fails them. The review prompt tells the Chief to decide `blocked` instead of reopening a task that would fail the same way. Orchestration test: blocked -> attention -> owner reopen -> mission running.
+
 ## Pixel Office (2026-11-02)
 
 Owner request: implement option 3a of the "Pixel Office" design ("Temalı cozy kat"). Built on `main`:

@@ -39,6 +39,7 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
   const rawOf = (s: ProjectSettings) => Object.fromEntries(numKeys.map((k) => [k, String(s[k])])) as Record<NumKey, string>;
   const [raw, setRaw] = useState(() => rawOf(settings));
   const [tagsText, setTagsText] = useState(settings.requiredWorkerTags.join(', '));
+  const [domainsText, setDomainsText] = useState(settings.networkAllowedDomains.join(', '));
   const problem = (field: string) => problems.find((p) => p.field === field)?.message;
 
   const keys = changedKeys(original, draft);
@@ -71,6 +72,7 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
     setResetKey((k) => k + 1);
     setRaw(rawOf(original));
     setTagsText(original.requiredWorkerTags.join(', '));
+    setDomainsText(original.networkAllowedDomains.join(', '));
     setProblems([]);
     setError(undefined);
     setSaved(false);
@@ -212,6 +214,22 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
                 onChange={(e) => {
                   setTagsText(e.target.value);
                   set('requiredWorkerTags', commaToList(e.target.value));
+                }}
+              />
+            </Field>
+            <Field
+              label="Network allowed domains"
+              htmlFor="networkAllowedDomains"
+              hint="Comma-separated hosts sandboxed commands may reach on mission runs, e.g. example.com, *.example.com. Empty: no outbound network."
+              error={problem('networkAllowedDomains')}
+            >
+              <Input
+                id="networkAllowedDomains"
+                value={domainsText}
+                aria-invalid={!!problem('networkAllowedDomains') || undefined}
+                onChange={(e) => {
+                  setDomainsText(e.target.value);
+                  set('networkAllowedDomains', commaToList(e.target.value));
                 }}
               />
             </Field>
