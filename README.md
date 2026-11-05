@@ -66,7 +66,7 @@ The worker needs only the `OFFICE_*` variables: `OFFICE_API_URL`, `OFFICE_WORKER
 pnpm seed
 ```
 
-The seed creates the project `office-sandbox` with its repository at `<first OFFICE_WORKSPACE_ROOTS entry>/office-sandbox` (the directory is created and `git init` is run if it is missing), and the agent `developer` (model `sonnet`, tools Read, Glob, Grep, Bash, Edit, Write, 30 turns, budget 1 USD). It also loads the shipped templates: the 12 skills in `templates/skills` (`accessibility`, `clean-architecture`, `code-review`, `debugging`, `design-systems`, `frontend-design`, `lazy-expert-developer`, `planning`, `responsive-design`, `test-driven-development`, `ui-ux-design`, `visual-quality-review`), created `approved`, and the default team from `templates/agents`, with subagents from `templates/subagents`:
+The seed creates the project `office-sandbox` with its repository at `<first OFFICE_WORKSPACE_ROOTS entry>/office-sandbox` (the directory is created and `git init` is run if it is missing), and the agent `developer` (model `sonnet`, tools Read, Glob, Grep, Bash, Edit, Write, 30 turns, budget 1 USD). Office ships no skills of its own; the agent templates name skills of your Claude setup, and only those already in the library are pinned (the API imports them at start, so run it once before `pnpm seed`). It also loads and the default team from `templates/agents`, with subagents from `templates/subagents`:
 
 | Agent | Model | Eager skills | On-demand skills | Subagents |
 |---|---|---|---|---|
