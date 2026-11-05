@@ -22,23 +22,111 @@
         "mode": "eager"
       },
       {
-        "skill": "ui-ux-design",
+        "skill": "apple-design",
         "mode": "on_demand"
       },
       {
-        "skill": "design-systems",
+        "skill": "emil-design-eng",
         "mode": "on_demand"
       },
       {
-        "skill": "accessibility",
+        "skill": "pick-ui-library",
         "mode": "on_demand"
       },
       {
-        "skill": "responsive-design",
+        "skill": "prototype",
         "mode": "on_demand"
       },
       {
-        "skill": "visual-quality-review",
+        "skill": "brandkit",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "design-is",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "animate",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "animation-vocabulary",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "find-animation-opportunities",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "improve-animations",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "review-animations",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "verification-before-completion",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "brainstorming",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "design",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "design-system",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "brand",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "banner-design",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "design-taste-frontend-v1",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "gpt-taste",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "high-end-visual-design",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "minimalist-ui",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "industrial-brutalist-ui",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "redesign-existing-projects",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "image-to-code",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "stitch-design-taste",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "imagegen-frontend-web",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "imagegen-frontend-mobile",
         "mode": "on_demand"
       }
     ],

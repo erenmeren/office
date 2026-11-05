@@ -52,8 +52,6 @@ export interface Config {
   trustUnidentifiedWorkers: boolean;
 }
 
-const defaultSkillRoot = resolve(fileURLToPath(new URL('../../../templates/skills', import.meta.url)));
-
 // the package root (the directory holding package.json), from src/ under tsx and from dist/ under node
 function packageDir(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
@@ -106,6 +104,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     trustUnidentifiedWorkers: e.OFFICE_TRUST_UNIDENTIFIED_WORKERS === 'true',
     cookieSecure: env.NODE_ENV === 'production',
     // the owner's own Claude skills (~/.claude/skills, plugin caches) are importable by default
-    skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [defaultSkillRoot, join(homedir(), '.claude')]).map(realOrGiven),
+    skillImportRoots: (e.OFFICE_SKILL_IMPORT_ROOTS ? e.OFFICE_SKILL_IMPORT_ROOTS.split(':').filter(Boolean) : [join(homedir(), '.claude')]).map(realOrGiven),
   };
 }

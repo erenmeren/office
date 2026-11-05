@@ -46,6 +46,7 @@ declare module 'fastify' {
 }
 
 export { loadConfig } from './config.js';
+export { syncMachineSkills } from './services/skill-service.js';
 export type { Config } from './config.js';
 
 export async function buildApp(

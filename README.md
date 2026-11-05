@@ -103,7 +103,7 @@ The **Skills** page lists every skill with its status (`approved`, `pending_revi
 
 - **Create.** The "Create skill" form takes a name and the `SKILL.md` text. Skills written here are `approved` at once.
 - **Your own Claude skills.** The skills under `~/.claude/skills` and those of your installed plugins appear in the Skill Library on their own (approved, since they are yours) and get a new version whenever you change them; the API scans at start and every 10 minutes.
-- **Import a skill directory.** In "Import skill", choose `local` and enter the directory's path. The path must be under one of `OFFICE_SKILL_IMPORT_ROOTS` (colon-separated; default `<repo>/templates/skills` and `~/.claude`), so to import your own skill, put it under an import root or add its parent directory to `OFFICE_SKILL_IMPORT_ROOTS` before starting the API. The skill's name is the directory name. Or choose `git` and enter an `https://` URL, an optional ref and an optional path inside the repository. Over the API: `POST /skills/import` with `{"source":"local","path":"..."}` or `{"source":"git","url":"https://...","ref":"main","path":"skills/my-skill"}` (or `"name":"my-skill"` instead of `path` to find the skill by its frontmatter name). "Marketplace" searches skills.sh and installs with `{"source":"market","id":"owner/repo/skill"}`. "Update" on a git or local skill (`POST /skills/:id/update`) re-reads its source and adds a version when it changed; "Delete" (`DELETE /skills/:id`) is refused while an agent version pins the skill.
+- **Import a skill directory.** In "Import skill", choose `local` and enter the directory's path. The path must be under one of `OFFICE_SKILL_IMPORT_ROOTS` (colon-separated; default `~/.claude`), so to import your own skill, put it under an import root or add its parent directory to `OFFICE_SKILL_IMPORT_ROOTS` before starting the API. The skill's name is the directory name. Or choose `git` and enter an `https://` URL, an optional ref and an optional path inside the repository. Over the API: `POST /skills/import` with `{"source":"local","path":"..."}` or `{"source":"git","url":"https://...","ref":"main","path":"skills/my-skill"}` (or `"name":"my-skill"` instead of `path` to find the skill by its frontmatter name). "Marketplace" searches skills.sh and installs with `{"source":"market","id":"owner/repo/skill"}`. "Update" on a git or local skill (`POST /skills/:id/update`) re-reads its source and adds a version when it changed; "Delete" (`DELETE /skills/:id`) is refused while an agent version pins the skill.
 - **Review.** Imported skills start as `pending_review`. Read the files on the skill's page, then approve or reject. Only approved skills can be pinned to an agent.
 - **Versions.** A skill's page shows its files and versions. "Save new version" stores edited content as a new immutable version; saving identical content creates nothing.
 
@@ -226,7 +226,7 @@ The worker inherits the machine's Claude Code login (`claude login`) or `ANTHROP
 
 - `pnpm infra:up` / `pnpm infra:down`: start or stop Postgres and Redis.
 - `pnpm db:migrate`: apply Prisma migrations.
-- `pnpm seed`: seed the sandbox project, the shipped skills, the default team and the hidden `office-summarizer` agent.
+- `pnpm seed`: seed the sandbox project, the default team and the hidden `office-summarizer` agent.
 - `pnpm dev`: run all packages in watch mode (export `.env` first, or use `scripts/dev-all.sh`).
 - `pnpm typecheck`, `pnpm test`, `pnpm build`.
 

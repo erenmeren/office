@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import pg from 'pg';
+import { syncMachineSkills } from '@office/api';
 import { createPrisma, seed } from '@office/db';
 
 const env = (k) => {
@@ -70,6 +71,8 @@ await ensureDatabase();
 out.migrated = await migrate(env('OFFICE_MIGRATIONS_DIR'));
 const prisma = createPrisma(url.href);
 try {
+  // the owner's Claude skills first: the seed pins the ones its agent templates name
+  await syncMachineSkills(prisma, { info() {}, warn() {} });
   for (const line of await seed(prisma, env('OFFICE_WORKSPACE_ROOT'), env('OFFICE_TEMPLATES_DIR'))) console.log(line);
   if (!existsSync(join(env('OFFICE_WORKER_HOME'), 'credentials.json'))) {
     // the bundled worker has no credential yet: hand it a fresh enroll token (the owner would use POST /workers)

@@ -825,6 +825,16 @@ Owner request: see the Claude Code sessions started from a terminal (any folder 
 - Tests: `apps/worker/test/sessions.test.ts` (roots and symlinks, transcript reduction and paging, live refusal, terminal errors), `apps/api/test/claude-sessions.test.ts` (project join, error mapping, no local worker, worker drop). Verified on the owner's machine with the real SDK and CLI: 66 sessions listed under `/home/meren/projects`, the running session flagged live and refused for `open`, `/etc` refused.
 - Not built (later phases): Office-managed manual sessions with a PTY, background-agent attach, handoffs to and from missions, remote workers, transcript search.
 
+## Only Claude-installed skills, and a security engineer (2026-11-05)
+
+Owner: remove the skills Office made and use only those installed with Claude; caveman, ponytail, graphify and karpathy-guidelines for developers, superpowers spread by role, UI skills on the designer, plus a security agent that checks downloaded files and the code written.
+
+- `templates/skills` (12) deleted; `seed()` no longer creates skills and pins only template skills in the library (the rest logged). `boot.mjs` runs `syncMachineSkills` before the seed. `~/.claude` is the only default `OFFICE_SKILL_IMPORT_ROOTS` entry.
+- Sync fixes: `plugin.json` `skills` path (inside the plugin only), frontmatter name instead of the folder name; this brought in the taste-skill and ui-ux-pro-max skills.
+- Not imported because of the skill limits (65 KB a file, 50 files): `design-taste-frontend`, `ui-styling`, `ui-ux-pro-max`.
+- Not pinned on purpose: `using-git-worktrees`, `finishing-a-development-branch`, `subagent-driven-development`, `executing-plans`, because the platform owns worktrees, integration and task dispatch.
+- The owner's desktop database was migrated by a one-off script (JSON backup under `<data>/backups`): shipped skills and their pins deleted (old agent versions lose those pins, their config stays), new agent versions carrying the old config, `security-engineer` created. Audit rows `skill.deleted`, `agent.updated`, `agent.created`.
+
 ## New project with no project left (2026-11-05)
 
 Owner: after deleting every project there was no way to create one. The header's project switcher (whose last item opens the new-project form) was not rendered without a selected project. It now shows a "New project…" button in that case; Playwright covers it with an empty `GET /projects`.

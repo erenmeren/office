@@ -1,25 +1,16 @@
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateSkillFiles } from '@office/shared';
 import { afterAll, expect, it } from 'vitest';
 import { createPrisma } from './index.js';
-import { readSkillDir, seed } from './seed.js';
+import { seed } from './seed.js';
 
 const prisma = createPrisma(process.env.DATABASE_URL_TEST!);
 afterAll(() => prisma.$disconnect());
 
 const templatesDir = fileURLToPath(new URL('../../../templates', import.meta.url));
-const skillNames = readdirSync(join(templatesDir, 'skills'));
-const slugs = ['chief', 'architect', 'developer', 'designer', 'qa-engineer'];
-
-it('every shipped skill template is valid and named after its directory', () => {
-  expect(skillNames).toHaveLength(12);
-  for (const name of skillNames) {
-    expect(validateSkillFiles(readSkillDir(join(templatesDir, 'skills', name))).name).toBe(name);
-  }
-});
+const slugs = ['chief', 'architect', 'developer', 'designer', 'qa-engineer', 'security-engineer'];
 
 it('seed is idempotent: second run reports exists and adds no rows', async () => {
   const root = mkdtempSync(join(tmpdir(), 'office-seed-'));
@@ -29,8 +20,6 @@ it('seed is idempotent: second run reports exists and adds no rows', async () =>
   const agentVersion = { agentVersion: { agent: { slug: { in: slugs } } } };
   const count = async () => [
     await prisma.project.count({ where: { slug: 'office-sandbox' } }),
-    await prisma.skill.count({ where: { name: { in: skillNames } } }),
-    await prisma.skillVersion.count({ where: { skill: { name: { in: skillNames } } } }),
     await prisma.agent.count({ where: { slug: { in: slugs } } }),
     await prisma.agentVersion.count({ where: { agent: { slug: { in: slugs } } } }),
     await prisma.agentSkill.count({ where: agentVersion }),
@@ -39,25 +28,43 @@ it('seed is idempotent: second run reports exists and adds no rows', async () =>
   const before = await count();
   const second = await seed(prisma, root);
   expect(second.every((l) => l.includes(' exists '))).toBe(true);
-  expect(second).toHaveLength(1 + 12 + 6 + 1 + 5);
+  expect(second).toHaveLength(1 + 7 + 1 + 6);
   expect(await count()).toEqual(before);
 });
 
-it('seeds approved skills and the default team with pins and subagents', async () => {
+it('seeds the default team with subagents', async () => {
   await seed(prisma, mkdtempSync(join(tmpdir(), 'office-seed-')));
-  expect(await prisma.skill.count({ where: { status: 'approved' } })).toBeGreaterThanOrEqual(12);
   for (const slug of slugs) {
     const agent = await prisma.agent.findUniqueOrThrow({ where: { slug } });
     expect(agent.currentVersionId).not.toBeNull();
   }
   const designer = await prisma.agent.findUniqueOrThrow({ where: { slug: 'designer' } });
-  const pins = await prisma.agentSkill.findMany({
-    where: { agentVersionId: designer.currentVersionId! },
-    include: { skill: true },
-  });
-  expect(pins).toHaveLength(6);
-  expect(pins.find((p) => p.skill.name === 'frontend-design')?.mode).toBe('eager');
   expect(await prisma.agentSubagent.count({ where: { agentVersionId: designer.currentVersionId! } })).toBe(3);
+});
+
+it('pins the template skills that are in the library and skips the rest, for subagents too', async () => {
+  const id = Date.now().toString(36);
+  const [have, missing, slug] = [`seed-have-${id}`, `seed-missing-${id}`, `seed-agent-${id}`];
+  const skill = await prisma.skill.create({ data: { name: have, description: 'd', source: 'local', status: 'approved' } });
+  const v = await prisma.skillVersion.create({ data: { skillId: skill.id, version: 1, files: { 'SKILL.md': 'x' }, checksum: 'c' } });
+  await prisma.skill.update({ where: { id: skill.id }, data: { currentVersionId: v.id } });
+  const dir = mkdtempSync(join(tmpdir(), 'office-templates-'));
+  mkdirSync(join(dir, 'agents'));
+  cpSync(join(templatesDir, 'agents', 'office-summarizer.json'), join(dir, 'agents', 'office-summarizer.json'));
+  const config = {
+    systemPrompt: 'p', model: 'sonnet', allowedTools: ['Read'],
+    skills: [{ skill: have, mode: 'eager' }, { skill: missing }],
+    subagents: [{ name: 'helper', description: 'd', prompt: 'p', tools: ['Read'], skills: [have, missing] }],
+  };
+  writeFileSync(join(dir, 'agents', 'a.json'), JSON.stringify({ name: slug, slug, role: 'developer', description: 'd', config }));
+
+  const log = await seed(prisma, mkdtempSync(join(tmpdir(), 'office-seed-')), dir);
+  expect(log).toContain(`agent ${slug}: skill ${missing} is not in the library, not pinned`);
+  const agent = await prisma.agent.findUniqueOrThrow({ where: { slug } });
+  const pins = await prisma.agentSkill.findMany({ where: { agentVersionId: agent.currentVersionId! }, include: { skill: true } });
+  expect(pins.map((p) => [p.skill.name, p.mode])).toEqual([[have, 'eager']]);
+  const sub = await prisma.agentSubagent.findFirstOrThrow({ where: { agentVersionId: agent.currentVersionId! } });
+  expect((sub.definition as { skills: string[] }).skills).toEqual([have]);
 });
 
 it('seeds the system summarizer agent; team agents are not system', async () => {

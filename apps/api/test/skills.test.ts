@@ -229,4 +229,30 @@ describe('skills on this machine', () => {
     await t.close();
     rmSync(home, { recursive: true, force: true });
   });
+
+  it('follows a plugin manifest skills path inside the plugin and takes the name from the frontmatter', async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { syncMachineSkills } = await import('../src/services/skill-service.js');
+    const home = mkdtempSync(join(tmpdir(), 'office-home-'));
+    const plugin = (name: string, skills?: string) => {
+      const root = join(home, '.claude', 'plugins', 'cache', 'market', name, '1.0.0');
+      mkdirSync(join(root, '.claude-plugin'), { recursive: true });
+      if (skills) writeFileSync(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ skills }));
+      return root;
+    };
+    const mk = (dir: string, name: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n`);
+    };
+    mk(join(plugin('custom', './.claude/skills/'), '.claude', 'skills', 'folder-name'), 'real-name');
+    mk(join(plugin('escape', '../../../../../../outside'), 'skills', 'inside'), 'inside');
+    mk(join(home, 'outside', 'evil'), 'evil');
+    const t = await makeApp();
+    expect(await syncMachineSkills(t.prisma, { info: () => {}, warn: () => {} }, home)).toEqual({ imported: 2, updated: 0, skipped: 0 });
+    expect((await t.prisma.skill.findMany({ orderBy: { name: 'asc' } })).map((s) => s.name)).toEqual(['inside', 'real-name']);
+    await t.close();
+    rmSync(home, { recursive: true, force: true });
+  });
 });

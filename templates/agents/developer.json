@@ -18,7 +18,15 @@
     "maxBudgetUsd": 1,
     "skills": [
       {
-        "skill": "lazy-expert-developer",
+        "skill": "caveman",
+        "mode": "eager"
+      },
+      {
+        "skill": "ponytail",
+        "mode": "eager"
+      },
+      {
+        "skill": "karpathy-guidelines",
         "mode": "eager"
       },
       {
@@ -26,15 +34,23 @@
         "mode": "eager"
       },
       {
-        "skill": "debugging",
+        "skill": "graphify",
         "mode": "on_demand"
       },
       {
-        "skill": "code-review",
+        "skill": "systematic-debugging",
         "mode": "on_demand"
       },
       {
-        "skill": "clean-architecture",
+        "skill": "verification-before-completion",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "receiving-code-review",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "requesting-code-review",
         "mode": "on_demand"
       }
     ],

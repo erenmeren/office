@@ -2,7 +2,7 @@
 # Build the desktop app's resources into apps/desktop/build:
 #   build/server  API, worker, db client, Postgres binaries and boot.mjs (pnpm deploy of @office/desktop-server)
 #   build/web     the Next.js standalone server, built for the desktop ports
-#   build/templates  the shipped skills, agents and subagents (seed and skill imports)
+#   build/templates  the agent and subagent templates (seed)
 # Then `pnpm --filter @office/desktop start` runs it unpackaged, `pnpm --filter @office/desktop dist` makes the AppImage.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."

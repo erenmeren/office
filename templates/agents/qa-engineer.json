@@ -22,11 +22,19 @@
         "mode": "eager"
       },
       {
-        "skill": "code-review",
+        "skill": "systematic-debugging",
         "mode": "on_demand"
       },
       {
-        "skill": "debugging",
+        "skill": "verification-before-completion",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "graphify",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "ponytail-review",
         "mode": "on_demand"
       }
     ],

@@ -16,11 +16,23 @@
     "maxBudgetUsd": 1,
     "skills": [
       {
-        "skill": "clean-architecture",
+        "skill": "karpathy-guidelines",
         "mode": "eager"
       },
       {
-        "skill": "code-review",
+        "skill": "graphify",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "verification-before-completion",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "brainstorming",
+        "mode": "on_demand"
+      },
+      {
+        "skill": "ponytail-review",
         "mode": "on_demand"
       }
     ],

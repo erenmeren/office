@@ -8,7 +8,7 @@
 - `packages/shared`: Zod schemas and types shared by all apps.
 - `packages/db`: Prisma schema and migrations (`prisma/`), client factory (`src/index.ts`), seed (`src/seed.ts`).
 - `packages/runtime`: `RuntimeAdapter`, `ToolBridge`, `ClaudeAdapter` (serves the office tools as the in-process MCP server `office`), `FakeAdapter` (markers `SEND:`, `ASK:`, `MEMO:`, `INBOX` drive the office tools in tests), `redactSecrets`, and `scripts/smoke-claude.ts`, `scripts/smoke-skills.ts`.
-- `templates`: shipped skills (`templates/skills/<name>/SKILL.md`, 12), agent templates (`templates/agents/*.json`, 5) and subagent templates (`templates/subagents/*.json`, 6), read by the seed.
+- `templates`: agent templates (`templates/agents/*.json`, 7, naming skills of the owner's Claude setup) and subagent templates (`templates/subagents/*.json`, 6), read by the seed.
 
 All packages are ESM TypeScript. Scripts run with `tsx`; packages build with `tsc` (the web app with `next build`).
 

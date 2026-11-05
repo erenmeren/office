@@ -2,33 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {
-  AgentConfigInputSchema,
-  AgentConfigSchema,
-  SubagentDefinitionSchema,
-  skillChecksum,
-  validateSkillFiles,
-  type SkillFiles,
-} from '@office/shared';
+import { AgentConfigInputSchema, AgentConfigSchema, SubagentDefinitionSchema } from '@office/shared';
 import { config } from 'dotenv';
 import { createPrisma, type PrismaClient } from './index.js';
-
-/** Regular files only, relative POSIX paths; skips dot-directories and symlinks (same contract as the API's readSkillDir). */
-export function readSkillDir(dir: string): SkillFiles {
-  const files: SkillFiles = {};
-  const walk = (rel: string) => {
-    for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        if (!e.name.startsWith('.')) walk(r);
-      } else if (e.isFile()) {
-        files[r] = readFileSync(join(dir, r), 'utf8');
-      }
-    }
-  };
-  walk('');
-  return files;
-}
 
 type AgentTemplate = {
   name: string;
@@ -44,7 +20,10 @@ type AgentTemplate = {
 
 const readJson = (path: string): unknown => JSON.parse(readFileSync(path, 'utf8'));
 
-/** Idempotent by project slug, skill name and agent slug. Returns the lines it would print. */
+/**
+ * Idempotent by project slug and agent slug. Returns the lines it would print. Office ships no skills of its own: an agent
+ * template names skills of the owner's Claude setup, and only those already in the library (approved) are pinned.
+ */
 export async function seed(
   prisma: PrismaClient,
   workspaceRoot: string,
@@ -68,29 +47,6 @@ export async function seed(
     log.push(`project office-sandbox created ${created.id}`);
   }
 
-  const skillsDir = join(templatesDir, 'skills');
-  const skillDirs = readdirSync(skillsDir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
-  for (const dirName of skillDirs.sort()) {
-    const dir = join(skillsDir, dirName);
-    const files = readSkillDir(dir);
-    const { name, description } = validateSkillFiles(files, dirName);
-    const existing = await prisma.skill.findUnique({ where: { name } });
-    if (existing) {
-      log.push(`skill ${name} exists ${existing.id}`);
-      continue;
-    }
-    const created = await prisma.$transaction(async (tx) => {
-      const skill = await tx.skill.create({
-        data: { name, description, source: 'local', sourceRef: dir, status: 'approved' },
-      });
-      const v = await tx.skillVersion.create({
-        data: { skillId: skill.id, version: 1, files, checksum: skillChecksum(files) },
-      });
-      return tx.skill.update({ where: { id: skill.id }, data: { currentVersionId: v.id } });
-    });
-    log.push(`skill ${name} created ${created.id}`);
-  }
-
   const agentsDir = join(templatesDir, 'agents');
   const teamSlugs: string[] = [];
   for (const file of readdirSync(agentsDir).filter((f) => f.endsWith('.json')).sort()) {
@@ -105,19 +61,17 @@ export async function seed(
     for (const { skill: skillName, mode } of t.config.skills ?? []) {
       const skill = await prisma.skill.findUnique({ where: { name: skillName } });
       if (!skill?.currentVersionId || skill.status !== 'approved') {
-        throw new Error(`agent ${t.slug}: skill ${skillName} missing or not approved`);
+        log.push(`agent ${t.slug}: skill ${skillName} is not in the library, not pinned`);
+        continue;
       }
       pins.push({ skillId: skill.id, skillVersionId: skill.currentVersionId, mode, name: skill.name });
     }
-    const subagents = (t.config.subagents ?? []).map((s) =>
-      'template' in s ? readJson(join(templatesDir, 'subagents', `${s.template as string}.json`)) : s,
-    );
-    const input = AgentConfigInputSchema.parse({ ...t.config, skills: pins, subagents });
     const names = new Set(pins.map((p) => p.name));
-    for (const s of input.subagents) {
-      const unknown = s.skills.find((n) => !names.has(n));
-      if (unknown) throw new Error(`agent ${t.slug}: subagent ${s.name} uses unpinned skill ${unknown}`);
-    }
+    // a subagent keeps only the skills its agent got pinned
+    const subagents = (t.config.subagents ?? [])
+      .map((s) => ('template' in s ? readJson(join(templatesDir, 'subagents', `${s.template as string}.json`)) : s) as { skills?: string[] })
+      .map((s) => ({ ...s, skills: (s.skills ?? []).filter((n) => names.has(n)) }));
+    const input = AgentConfigInputSchema.parse({ ...t.config, skills: pins, subagents });
     const created = await prisma.$transaction(async (tx) => {
       const a = await tx.agent.create({
         data: { name: t.name, slug: t.slug, role: t.role, description: t.description, isSystem: t.isSystem ?? false },

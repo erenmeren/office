@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { parseSkillFrontmatter, skillChecksum, validateSkillFiles, type SkillFiles, type SkillStatus } from '@office/shared';
 import type { PrismaClient } from '@office/db';
@@ -210,6 +210,19 @@ export interface MachineSkill {
 
 const PLUGIN_DEPTH = 3; // cache/<marketplace>/<plugin>/<version>/skills/<name>
 
+/** A plugin's skills folder: `skills` in its `.claude-plugin/plugin.json` when that stays inside the plugin, else `skills/`. */
+async function pluginSkillsDir(plugin: string): Promise<string> {
+  const manifest = await readFile(join(plugin, '.claude-plugin', 'plugin.json'), 'utf8').catch(() => '{}');
+  let declared: unknown;
+  try {
+    declared = (JSON.parse(manifest) as { skills?: unknown }).skills;
+  } catch {
+    declared = undefined;
+  }
+  const dir = typeof declared === 'string' ? resolve(plugin, declared) : '';
+  return dir.startsWith(plugin + sep) ? dir : join(plugin, 'skills');
+}
+
 /** The owner's own Claude Code skills on this machine: `~/.claude/skills/*` and every installed plugin's `skills/*`. */
 export async function machineSkills(prisma: PrismaClient, home = homedir()): Promise<MachineSkill[]> {
   const found: Omit<MachineSkill, 'skillId'>[] = [];
@@ -228,7 +241,7 @@ export async function machineSkills(prisma: PrismaClient, home = homedir()): Pro
     for (const e of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
       if (!e.isDirectory()) continue;
       const sub = join(dir, e.name);
-      if (depth === 0) await skillDirs(join(sub, 'skills'), `plugin:${basename(dirname(sub))}`);
+      if (depth === 0) await skillDirs(await pluginSkillsDir(sub), `plugin:${basename(dirname(sub))}`);
       else await walkPlugins(sub, depth - 1);
     }
   };
@@ -255,7 +268,8 @@ export async function syncMachineSkills(prisma: PrismaClient, log: { info: (o: o
         continue;
       }
       const files = await readSkillDir(found.path);
-      const { name } = validateSkillFiles(files, basename(found.path));
+      // a plugin's folder name may differ from the skill's own name (Claude Code goes by the frontmatter too)
+      const { name } = validateSkillFiles(files);
       if (await prisma.skill.findUnique({ where: { name } })) {
         counts.skipped++;
         log.warn({ name, path: found.path }, 'machine skill not imported: a skill of that name exists');
