@@ -35,9 +35,24 @@ export async function workerRoutes(app: FastifyInstance) {
     return reply.code(201).send({ id: worker.id, enrollToken });
   });
 
-  app.delete('/workers/:id', async (req) => {
+  app.delete('/workers/:id', async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!(await app.prisma.worker.findUnique({ where: { id } }))) throw new HttpError(404, 'not_found');
+    const { purge } = z.object({ purge: z.enum(['true', 'false']).optional() }).parse(req.query);
+    const found = await app.prisma.worker.findUnique({ where: { id } });
+    if (!found) throw new HttpError(404, 'not_found');
+    if (purge === 'true') {
+      // ?purge=true removes the row; its finished runs stay with workerId null (FK SET NULL)
+      const live = await app.prisma.taskRun.count({
+        where: { workerId: id, status: { in: ['queued', 'running', 'waiting_reply', 'waiting_approval'] } },
+      });
+      if (live) throw new HttpError(409, 'worker_in_use', 'a run is still live on this worker; cancel it first');
+      await app.prisma.worker.delete({ where: { id } });
+      await audit(app.prisma, {
+        userId: req.user!.id, action: 'worker.deleted', targetType: 'worker', targetId: id, detail: { name: found.name },
+      });
+      app.gateway.disconnect(id);
+      return reply.code(204).send();
+    }
     const worker = await app.prisma.worker.update({ where: { id }, data: { status: 'revoked' }, select: PUBLIC });
     await audit(app.prisma, { userId: req.user!.id, action: 'worker.revoked', targetType: 'worker', targetId: id });
     app.gateway.disconnect(id);

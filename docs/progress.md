@@ -825,6 +825,15 @@ Owner request: see the Claude Code sessions started from a terminal (any folder 
 - Tests: `apps/worker/test/sessions.test.ts` (roots and symlinks, transcript reduction and paging, live refusal, terminal errors), `apps/api/test/claude-sessions.test.ts` (project join, error mapping, no local worker, worker drop). Verified on the owner's machine with the real SDK and CLI: 66 sessions listed under `/home/meren/projects`, the running session flagged live and refused for `open`, `/etc` refused.
 - Not built (later phases): Office-managed manual sessions with a PTY, background-agent attach, handoffs to and from missions, remote workers, transcript search.
 
+## Deleting a worker (2026-11-05)
+
+Owner: the Workers page could only revoke a worker; the row stayed forever.
+
+- `DELETE /workers/:id?purge=true` removes the worker row (204), closes its socket and audits `worker.deleted` (`detail.name`). Its finished runs stay with `workerId` null (the foreign key is `SET NULL`). 409 `worker_in_use` while a run of that worker is `queued`, `running`, `waiting_reply` or `waiting_approval`. Without `purge` the route still revokes.
+- Workers page: every row has "Delete" (confirm dialog); "Revoke" stays on rows that are not revoked yet.
+- A deleted worker's process cannot reconnect with its old credential; to use that machine again, create a new worker and remove the old `credentials.json` from its `OFFICE_WORKER_HOME`. The desktop app enrolls a new `desktop` worker on its own at the next start once that file is gone.
+- Verified: API test `purge deletes the worker row, closes its socket and keeps its finished runs`; the Playwright workers test clicks Delete and expects the row gone.
+
 ## Your own skills, a folder picker, and folder access on project creation (2026-11-04)
 
 Owner: "where do these skills come from? I cannot see the skills I added to Claude; a folder picker on the project form would be good; and the permission to change that folder should be given right away."

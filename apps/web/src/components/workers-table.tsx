@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { del } from "@/lib/api";
+import { ApiError, del } from "@/lib/api";
 import { useWorkers, type Worker } from "@/lib/queries";
 import { relativeTime } from "@/lib/workers";
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -39,16 +39,20 @@ export function WorkersTable() {
   const [busyId, setBusyId] = useState<string>();
   const [error, setError] = useState("");
   const confirm = useConfirm();
-  const revoke = async (w: Worker) => {
-    if (!(await confirm({ title: `Revoke "${w.name}"?`, body: 'It can no longer connect.', confirmLabel: 'Revoke', destructive: true }))) return;
+  const remove = async (w: Worker, purge: boolean) => {
+    const verb = purge ? 'Delete' : 'Revoke';
+    const body = purge ? 'The worker is removed for good. Its finished runs stay.' : 'It can no longer connect.';
+    if (!(await confirm({ title: `${verb} "${w.name}"?`, body, confirmLabel: verb, destructive: true }))) return;
     setBusyId(w.id);
     try {
-      await del(`/workers/${w.id}`);
+      await del(`/workers/${w.id}${purge ? '?purge=true' : ''}`);
       setError("");
       await qc.invalidateQueries({ queryKey: ["workers"] });
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Could not revoke the worker",
+        err instanceof ApiError && err.status === 409
+          ? `"${w.name}" still has a live run. Cancel it first.`
+          : err instanceof Error ? err.message : `Could not ${verb.toLowerCase()} the worker`,
       );
     } finally {
       setBusyId(undefined);
@@ -107,17 +111,28 @@ export function WorkersTable() {
                 {w.lastHeartbeatAt ? relativeTime(w.lastHeartbeatAt) : "—"}
               </TableCell>
               <TableCell>
-                {w.status !== "revoked" && (
+                <div className="flex justify-end gap-2">
+                  {w.status !== "revoked" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busyId === w.id}
+                      aria-label={`Revoke ${w.name}`}
+                      onClick={() => void remove(w, false)}
+                    >
+                      Revoke
+                    </Button>
+                  )}
                   <Button
                     variant="destructive"
                     size="sm"
                     disabled={busyId === w.id}
-                    aria-label={`Revoke ${w.name}`}
-                    onClick={() => void revoke(w)}
+                    aria-label={`Delete ${w.name}`}
+                    onClick={() => void remove(w, true)}
                   >
-                    Revoke
+                    Delete
                   </Button>
-                )}
+                </div>
               </TableCell>
             </TableRow>
           ))}

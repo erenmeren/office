@@ -190,7 +190,7 @@ Built in Phase 5:
 Built in Phase 6:
 
 - Read models: `services/observability-service.ts`, `routes/observability.ts`; the `project:` topic in `services/event-store.ts` and `ws/ui-gateway.ts`.
-- `AuditLog` additions: `run.cancelled` (`services/run-service.ts` `cancelRun`, `routes/runs.ts`), `worker.enrolled` (`ws/worker-gateway.ts`), `worker.revoked` (`routes/workers.ts`); filters in `routes/audit.ts`.
+- `AuditLog` additions: `run.cancelled` (`services/run-service.ts` `cancelRun`, `routes/runs.ts`), `worker.enrolled` (`ws/worker-gateway.ts`), `worker.revoked` and `worker.deleted` (`routes/workers.ts`); filters in `routes/audit.ts`.
 - `TaskRun.maxBudgetUsd` (migration `phase6_run_budget`) and the `SessionEvent (ts, id)` index.
 - `run.result.ack`, `integration.check` and `integration.allowed`: `packages/shared/src/protocol.ts`, `ws/worker-gateway.ts`, `apps/worker/src/connection.ts`, `apps/worker/src/executor.ts`, `apps/worker/src/outbox.ts`.
 - Dashboard, Live Sessions, Agent Inspector and Audit pages: `apps/web/src/app/page.tsx`, `apps/web/src/app/sessions`, `apps/web/src/app/audit`.

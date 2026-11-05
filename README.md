@@ -134,7 +134,7 @@ The worker exchanges the token for a long-lived credential, saves it to `$OFFICE
 pnpm --filter @office/worker dev
 ```
 
-The token is shown only once and only its hash is stored. Revoking a worker (`DELETE /workers/:id`; there is no button for it in Phase 1) closes its connection and invalidates its credential.
+The token is shown only once and only its hash is stored. Revoking a worker (`DELETE /workers/:id`, "Revoke" on the Workers page) closes its connection and invalidates its credential; the row stays. Deleting it (`DELETE /workers/:id?purge=true`, "Delete") also removes the row; it is refused with 409 `worker_in_use` while one of its runs is live.
 
 ## 12. Conversations and Project Memory (UI)
 
@@ -197,7 +197,7 @@ These screens read stored records only (session events, subagent runs, usage rec
 - **Dashboard** (`/`): KPIs (active projects, agents available, running sessions, pending tasks, cost today against the daily budget), the team with each agent's status, current work and cost today, what needs your attention (pending approvals, skills to review), workers, recent activity (the stored feed plus live events of the project) and the 7-day cost chart. The same numbers come from `GET /projects/:id/overview`, `/costs?days=&groupBy=day|agent|mission|task` and `/activity`.
 - **Live Sessions** (`/sessions`): every live run (running, waiting for a reply or an approval) with its agent, worker, task, cost and command and file counts; filters All, Running and Needs you; the selected session's detail panel has Stop, which cancels the run. `GET /sessions?projectId=&status=live|all`.
 - **Agent Inspector** (`/sessions/<runId>`): one session's header (status, model, worker, running time, cost, Stop session), the activity feed that follows the run live (Pause following / Resume following), its commands, changed files, subagents and history, and the skills it ran with. Messages you send an agent are delivered at the next run boundary; there is no interrupt. `GET /sessions/:runId`, `GET /agents/:id/runs`.
-- **Audit** (`/audit`): owner and system decisions, newest first, filtered by action, target type and date: plan and approval decisions, overrides, settings changes, `run.cancelled`, `worker.enrolled` and `worker.revoked`. `GET /audit?action=&targetType=&targetId=&since=&before=&limit=`.
+- **Audit** (`/audit`): owner and system decisions, newest first, filtered by action, target type and date: plan and approval decisions, overrides, settings changes, `run.cancelled`, `worker.enrolled`, `worker.revoked` and `worker.deleted`. `GET /audit?action=&targetType=&targetId=&since=&before=&limit=`.
 
 Stopping a run (`POST /runs/:id/cancel`) marks it `cancelled` and writes an audit row; a mission task run returns its task to `ready` without using an attempt (add `?task=true` to cancel the task too).
 

@@ -300,6 +300,10 @@ authed.describe('every page renders without console noise', () => {
     await expect(remote.getByText('remote', { exact: true })).toBeVisible();
     await expect(remote.getByText('gpu', { exact: true })).toBeVisible();
     await expect(remote.getByText('1/2')).toBeVisible();
+    // Delete removes the row for good (and this test's worker with it)
+    await pending.getByRole('button', { name: `Delete ${name}` }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();
+    await expect(pending).toHaveCount(0);
     expectQuiet(noise);
   });
 

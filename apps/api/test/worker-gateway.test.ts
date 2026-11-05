@@ -67,6 +67,32 @@ describe('worker gateway', () => {
     await w.close();
   });
 
+  it('purge deletes the worker row, closes its socket and keeps its finished runs', async () => {
+    const { id, enrollToken } = await enroll();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1' });
+    const project = await t.prisma.project.create({ data: { name: 'P', slug: 'p', repoPath: '/tmp/p' } });
+    const agent = await t.prisma.agent.create({ data: { name: 'dev', slug: 'dev', role: 'dev' } });
+    const version = await t.prisma.agentVersion.create({ data: { agentId: agent.id, version: 1, config: {} } });
+    const run = await t.prisma.taskRun.create({
+      data: { agentId: agent.id, projectId: project.id, agentVersionId: version.id, status: 'running', kind: 'chat', workerId: id },
+    });
+
+    // a live run still points at the worker
+    expect((await req('DELETE', `/workers/${id}?purge=true`)).json()).toMatchObject({ error: 'worker_in_use' });
+    expect(await t.prisma.worker.count({ where: { id } })).toBe(1);
+
+    await t.prisma.taskRun.update({ where: { id: run.id }, data: { status: 'succeeded' } });
+    expect((await req('DELETE', `/workers/${id}?purge=true`)).statusCode).toBe(204);
+    expect(await w.closed).toBe(4403);
+    expect(await t.prisma.worker.count({ where: { id } })).toBe(0);
+    expect((await t.prisma.taskRun.findUniqueOrThrow({ where: { id: run.id } })).workerId).toBeNull();
+    expect(await t.prisma.auditLog.findFirst({ where: { action: 'worker.deleted', targetId: id } })).toMatchObject({ detail: { name: 'w1' } });
+
+    const re = await connectFakeWorker(t.app, { credential: w.credential, name: 'w1' });
+    expect(re.received[0]!.type).toBe('error');
+    expect((await req('DELETE', `/workers/${id}?purge=true`)).statusCode).toBe(404);
+  });
+
   it('stores tags and canClone from hello and shows them on GET /workers with online and activeRuns', async () => {
     const { id, enrollToken } = await enroll();
     const pending = await enroll();
