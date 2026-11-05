@@ -373,6 +373,13 @@ test('login page is quiet when logged out', async ({ page, noise }) => {
   expectQuiet(noise);
 });
 
+authed('with no project left, the header still opens the new-project form', async ({ page }) => {
+  await page.route(`${API}/projects`, (route) => (route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue()));
+  await page.goto('/workers');
+  await page.getByRole('button', { name: 'New project…' }).click();
+  await expect(page.getByRole('dialog').getByText('New project', { exact: true })).toBeVisible();
+});
+
 authed('owner changes the check command and sees it saved', async ({ page, noise }) => {
   await page.goto('/settings');
   const input = page.getByLabel('Check command');

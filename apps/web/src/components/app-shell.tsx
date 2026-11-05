@@ -34,26 +34,33 @@ const NEW_PROJECT = '__new__';
 
 /** Project switcher; the last item opens the new-project form. */
 function ProjectSwitcher() {
-  const projects = useProjects().data ?? [];
+  const projects = useProjects().data;
   const project = useProject();
   const [creating, setCreating] = useState(false);
   // the stored selection is read on the client only: render after hydration
-  if (!useMounted() || !project) return <span className="truncate">Office</span>;
+  if (!useMounted() || !projects) return <span className="truncate">Office</span>;
   const items = [...projects.map((p) => ({ value: p.id, label: p.name })), { value: NEW_PROJECT, label: 'New project…' }];
   return (
     <div>
-      <Select items={items} value={project.id} onValueChange={(v) => (v === NEW_PROJECT ? setCreating(true) : selectProject(String(v)))}>
-        <SelectTrigger size="sm" aria-label="Project" className="border-0 text-ink-3 hover:text-ink">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent align="start">
-          {items.map((i) => (
-            <SelectItem key={i.value} value={i.value}>
-              {i.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {project ? (
+        <Select items={items} value={project.id} onValueChange={(v) => (v === NEW_PROJECT ? setCreating(true) : selectProject(String(v)))}>
+          <SelectTrigger size="sm" aria-label="Project" className="border-0 text-ink-3 hover:text-ink">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent align="start">
+            {items.map((i) => (
+              <SelectItem key={i.value} value={i.value}>
+                {i.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        // no project left: the switcher has nothing to select, so the form gets its own button
+        <Button variant="ghost" size="sm" onClick={() => setCreating(true)}>
+          New project…
+        </Button>
+      )}
       <Dialog open={creating} onOpenChange={setCreating}>
         <DialogContent>
           <DialogTitle>New project</DialogTitle>

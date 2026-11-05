@@ -825,6 +825,10 @@ Owner request: see the Claude Code sessions started from a terminal (any folder 
 - Tests: `apps/worker/test/sessions.test.ts` (roots and symlinks, transcript reduction and paging, live refusal, terminal errors), `apps/api/test/claude-sessions.test.ts` (project join, error mapping, no local worker, worker drop). Verified on the owner's machine with the real SDK and CLI: 66 sessions listed under `/home/meren/projects`, the running session flagged live and refused for `open`, `/etc` refused.
 - Not built (later phases): Office-managed manual sessions with a PTY, background-agent attach, handoffs to and from missions, remote workers, transcript search.
 
+## New project with no project left (2026-11-05)
+
+Owner: after deleting every project there was no way to create one. The header's project switcher (whose last item opens the new-project form) was not rendered without a selected project. It now shows a "New project…" button in that case; Playwright covers it with an empty `GET /projects`.
+
 ## Deleting a worker (2026-11-05)
 
 Owner: the Workers page could only revoke a worker; the row stayed forever.
