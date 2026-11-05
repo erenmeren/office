@@ -797,6 +797,14 @@ async function notifyChief(
   hub.publishAll(outbox);
 }
 
+/** Counts the runs a worker is executing right now (not those parked in `waiting_reply`). */
+export const activeRunCount = (prisma: PrismaClient) => prisma.taskRun.count({ where: { status: { in: [...LEASED] } } });
+
+/** Gives every leased run a fresh lease: after this process was frozen, workers have had no chance to renew theirs. */
+export function renewAllLeases(prisma: PrismaClient, config: Config) {
+  return prisma.taskRun.updateMany({ where: { status: { in: [...LEASED] } }, data: { leaseExpiresAt: leaseUntil(config) } });
+}
+
 /** Marks every expired leased run `lost` and requeues or fails its task. Returns the lost runs. */
 export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = new Date()) {
   const expired = await prisma.taskRun.findMany({

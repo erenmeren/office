@@ -2,7 +2,7 @@
 // then the API, the web server and the worker as child processes, and opens the UI in one window.
 // Resources (see scripts/bundle.sh): <res>/server (API, worker, db client, Postgres binaries, boot.mjs),
 // <res>/web (Next.js standalone server), <res>/templates. State lives under $XDG_DATA_HOME/office.
-import { app, BrowserWindow, dialog, shell } from 'electron';
+import { app, BrowserWindow, dialog, powerSaveBlocker, shell } from 'electron';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
@@ -123,7 +123,7 @@ async function start(): Promise<void> {
     COOKIE_SECRET: secret('cookie-secret'),
     WEB_ORIGIN,
     OFFICE_DATA_DIR: dataDir,
-    OFFICE_SKILL_IMPORT_ROOTS: [join(RES, 'templates', 'skills'), join(homedir(), '.claude')].join(':'),
+    OFFICE_SKILL_IMPORT_ROOTS: join(homedir(), '.claude'),
     ...extra,
   });
   node('web', join(RES, 'web', 'apps', 'web', 'server.js'), join(RES, 'web', 'apps', 'web'), {
@@ -143,6 +143,7 @@ async function start(): Promise<void> {
     ...(enrollToken ? { OFFICE_ENROLL_TOKEN: enrollToken } : {}),
   });
   await waitFor(WEB_ORIGIN);
+  keepAwakeWhileRunning();
 
   const win = new BrowserWindow({ width: 1600, height: 1000, autoHideMenuBar: true, title: 'Office', icon: join(RES, 'icon.png') });
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -151,6 +152,23 @@ async function start(): Promise<void> {
   });
   await win.loadURL(WEB_ORIGIN);
   console.log(`ui loaded: ${win.webContents.getTitle()}`);
+}
+
+/** Keeps the machine from sleeping while a worker is executing a run, so an idle suspend cannot freeze an agent. */
+function keepAwakeWhileRunning() {
+  let blocker: number | undefined;
+  setInterval(() => {
+    fetch(`http://127.0.0.1:${API_PORT}/health`)
+      .then((r) => r.json() as Promise<{ activeRuns?: number }>)
+      .then(({ activeRuns }) => {
+        if (activeRuns && blocker === undefined) blocker = powerSaveBlocker.start('prevent-app-suspension');
+        if (!activeRuns && blocker !== undefined) {
+          powerSaveBlocker.stop(blocker);
+          blocker = undefined;
+        }
+      })
+      .catch(() => undefined);
+  }, 15_000).unref();
 }
 
 async function shutdown(): Promise<void> {

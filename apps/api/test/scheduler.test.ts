@@ -206,6 +206,30 @@ describe('scheduler', () => {
     expect((await getTask(task.id)).status).toBe('failed');
   });
 
+  it('after a machine sleep a run keeps its lease until its worker had a lease to report back', async () => {
+    await createTask();
+    const w = await worker();
+    const spec = await assign(w);
+    await accept(w, spec);
+    const status = async () => (await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } })).status;
+    expect((await t.app.inject({ url: '/health' })).json()).toEqual({ ok: true, activeRuns: 1 });
+    await t.app.scheduler.tick();
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 5 * 60_000 });
+    try {
+      // the first tick after the sleep: every lease is long past, none is lost
+      await t.app.scheduler.tick();
+      expect(await status()).toBe('running');
+      // the worker never reports back: the fresh lease runs out and the run is lost as usual
+      for (let i = 0; i < 3; i++) {
+        vi.setSystemTime(Date.now() + 25_000);
+        await t.app.scheduler.tick();
+      }
+      expect(await status()).toBe('lost');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects a result from a worker whose lease was lost', async () => {
     const task = await createTask();
     const w = await worker();

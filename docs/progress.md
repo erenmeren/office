@@ -825,6 +825,13 @@ Owner request: see the Claude Code sessions started from a terminal (any folder 
 - Tests: `apps/worker/test/sessions.test.ts` (roots and symlinks, transcript reduction and paging, live refusal, terminal errors), `apps/api/test/claude-sessions.test.ts` (project join, error mapping, no local worker, worker drop). Verified on the owner's machine with the real SDK and CLI: 66 sessions listed under `/home/meren/projects`, the running session flagged live and refused for `open`, `/etc` refused.
 - Not built (later phases): Office-managed manual sessions with a PTY, background-agent attach, handoffs to and from missions, remote workers, transcript search.
 
+## A sleeping machine no longer loses runs (2026-11-05)
+
+Owner: a mission failed. The machine suspended at 20:50:25 and woke at 20:55:26; the first scheduler tick expired both leases before the worker's heartbeat, so the last attempt was `lost` and the mission `failed`.
+
+- Scheduler: a tick more than 30 s after the previous one renews every leased run and skips expiry that tick. Test `after a machine sleep a run keeps its lease…` fails without the change. Not covered: an API process restarted after a long downtime.
+- Desktop: `powerSaveBlocker` `prevent-app-suspension` while `/health` `activeRuns` > 0, polled every 15 s. A closed lid or a manual suspend may still sleep the machine; then the lease grace applies.
+
 ## Only Claude-installed skills, and a security engineer (2026-11-05)
 
 Owner: remove the skills Office made and use only those installed with Claude; caveman, ponytail, graphify and karpathy-guidelines for developers, superpowers spread by role, UI skills on the designer, plus a security agent that checks downloaded files and the code written.

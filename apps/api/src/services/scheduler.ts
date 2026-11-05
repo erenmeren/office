@@ -5,7 +5,7 @@ import type { Config } from '../config.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 import type { EventHub } from './event-hub.js';
 import { pendingWakeDeliveries } from './message-service.js';
-import { abandonRun, createRun, createRunForTask, expireLeases, failWaitingRun, resumeRun } from './run-service.js';
+import { abandonRun, createRun, createRunForTask, expireLeases, failWaitingRun, renewAllLeases, resumeRun } from './run-service.js';
 import { summaryPrompt } from './summary-prompt.js';
 import { startPlanRun, startReviewRun } from './mission-service.js';
 import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
@@ -15,10 +15,12 @@ import { expireApprovals } from './approval-service.js';
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
 const PARKED_LOG_MS = 60_000;
+const PAUSE_MS = 30_000;
 
 export class Scheduler {
   private timer?: NodeJS.Timeout;
   private inFlight?: Promise<void>;
+  private lastTickAt?: number;
   // ready tasks already warned about having no eligible worker
   private warnedNoWorker = new Set<string>();
   private warnedNoSummarizer = false;
@@ -55,8 +57,17 @@ export class Scheduler {
   }
 
   private async run() {
+    const now = Date.now();
+    // the timer fires every few seconds, so a long gap means this process was frozen (the machine slept)
+    const resumed = this.lastTickAt !== undefined && now - this.lastTickAt > PAUSE_MS;
+    this.lastTickAt = now;
     try {
-      for (const { runId, workerId } of await expireLeases(this.prisma, this.hub)) {
+      if (resumed) {
+        // nobody could renew a lease during the pause: workers get a full lease to report back before any run is lost
+        const { count } = await renewAllLeases(this.prisma, this.config);
+        this.log.warn({ count }, 'scheduler resumed after a pause; leases renewed');
+      }
+      for (const { runId, workerId } of resumed ? [] : await expireLeases(this.prisma, this.hub)) {
         if (!workerId) continue;
         // the worker may still be executing it; it must stop touching the repo
         this.gateway.send(workerId, { type: 'run.cancel', runId });
