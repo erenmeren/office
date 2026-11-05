@@ -70,11 +70,12 @@ The seed creates the project `office-sandbox` with its repository at `<first OFF
 
 | Agent | Model | Eager skills | On-demand skills | Subagents |
 |---|---|---|---|---|
-| `chief` | `opus` | planning | code-review | none |
-| `architect` | `sonnet` | clean-architecture | code-review | none |
-| `designer` | `sonnet` | frontend-design | ui-ux-design, design-systems, accessibility, responsive-design, visual-quality-review | ux-researcher, accessibility-reviewer, visual-reviewer |
-| `qa-engineer` | `sonnet` | test-driven-development | code-review, debugging | test-writer, security-reviewer |
-| `developer` | `sonnet` | lazy-expert-developer, test-driven-development | debugging, code-review, clean-architecture | debugger, test-writer |
+| `chief` | `opus` | none | writing-plans, verification-before-completion, graphify, brainstorming, ponytail-review | none |
+| `architect` | `sonnet` | karpathy-guidelines | graphify, verification-before-completion, brainstorming, ponytail-review | none |
+| `designer` | `sonnet` | frontend-design | apple-design, emil-design-eng, pick-ui-library, prototype, brandkit, design-is, animate, animation-vocabulary, find-animation-opportunities, improve-animations, review-animations, verification-before-completion, brainstorming, design, design-system, brand, banner-design, design-taste-frontend-v1, gpt-taste, high-end-visual-design, minimalist-ui, industrial-brutalist-ui, redesign-existing-projects, image-to-code, stitch-design-taste, imagegen-frontend-web, imagegen-frontend-mobile | ux-researcher, accessibility-reviewer, visual-reviewer |
+| `qa-engineer` | `sonnet` | test-driven-development | systematic-debugging, verification-before-completion, graphify, ponytail-review | test-writer, security-reviewer |
+| `developer` | `sonnet` | caveman, ponytail, karpathy-guidelines, test-driven-development | graphify, systematic-debugging, verification-before-completion, receiving-code-review, requesting-code-review | debugger, test-writer |
+| `security-engineer` | `sonnet` | none | ponytail-review, ponytail-audit, graphify, verification-before-completion | none |
 
 It also creates the hidden system agent `office-summarizer` (model `haiku`), which writes a summary of every finished task run into Project Memory. Agents cannot message it and it is never woken by mail; the sidebar's team list still shows it.
 
