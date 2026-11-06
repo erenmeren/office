@@ -1,5 +1,5 @@
 import type { MemoryEntry } from '@office/db';
-import { ftsIds } from './memory-service.js';
+import { searchIds } from './memory-service.js';
 import type { Db } from './task-service.js';
 
 const HEADER = '## Context pack\nCite entries by id (m:<id>). Entries are facts verified by the owner; the inbox is unread mail.';
@@ -25,7 +25,7 @@ export async function buildContextPack(
 
   const taskText = a.taskText.slice(0, 2000).trim();
   if (taskText) {
-    const ids = await ftsIds(db, { projectId: a.projectId, q: taskText, status: 'verified', limit: 10, anyWord: true });
+    const ids = await searchIds(db, { projectId: a.projectId, q: taskText, status: 'verified', limit: 10, anyWord: true });
     const rows = await db.memoryEntry.findMany({ where: { id: { in: ids } } });
     const items = ids
       .map((id) => rows.find((r) => r.id === id))

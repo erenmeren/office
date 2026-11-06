@@ -1,3 +1,4 @@
+import { embed, embeddingsReady } from '../lib/embeddings.js';
 import { Prisma, type MemoryEntry, type MemorySource } from '@office/db';
 import type { MemoryScope, MemorySourceInput, MemoryStatus, MemoryType } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
@@ -76,8 +77,62 @@ export async function searchMemory(
     });
     return withSupersedes(db, rows);
   }
-  const ids = await ftsIds(db, { ...f, q, limit });
-  return loadOrdered(db, ids);
+  return loadOrdered(db, await searchIds(db, { ...f, q, limit }));
+}
+
+/** Reciprocal rank fusion: an id high in either list ranks high, and in both ranks highest. */
+export function fuseRanks(lists: string[][], limit: number): string[] {
+  const scores = new Map<string, number>();
+  for (const list of lists) list.forEach((id, i) => scores.set(id, (scores.get(id) ?? 0) + 1 / (60 + i)));
+  return [...scores].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => id);
+}
+
+// unrelated text scored under 0.2 on the real model, a Turkish question about an English entry 0.38
+const MIN_SIMILARITY = 0.3;
+
+type MemoryFilter = { projectId: string; q: string; type?: MemoryType; status?: MemoryStatus; agentId?: string; limit: number };
+
+const memoryFilters = (f: Omit<MemoryFilter, 'q' | 'limit'>) => [
+  f.type ? Prisma.sql`AND "type" = ${f.type}::"MemoryType"` : Prisma.empty,
+  f.status ? Prisma.sql`AND "status" = ${f.status}::"MemoryStatus"` : Prisma.empty,
+  f.agentId ? Prisma.sql`AND "agentId" = ${f.agentId}` : Prisma.empty,
+];
+
+/** Entry ids close in meaning to `q`. shortcut: scans the project's vectors in JS; move to pgvector if a project passes some 50k entries. */
+async function semanticIds(db: Db, f: MemoryFilter): Promise<string[]> {
+  const query = await embed(f.q);
+  if (!query) return [];
+  const rows = await db.$queryRaw<{ id: string; v: number[] }[]>`
+    SELECT "id", "localEmbedding" AS v FROM "MemoryEntry"
+    WHERE "projectId" = ${f.projectId} AND "supersededById" IS NULL AND "localEmbedding" IS NOT NULL
+      ${Prisma.join(memoryFilters(f), ' ')}`;
+  return rows
+    .map((r) => ({ id: r.id, score: r.v.reduce((sum, x, i) => sum + x * query[i]!, 0) }))
+    .filter((r) => r.score >= MIN_SIMILARITY)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, f.limit)
+    .map((r) => r.id);
+}
+
+/** Keyword and semantic matches together; keywords alone when embeddings are off. */
+export async function searchIds(db: Db, f: MemoryFilter & { anyWord?: boolean }): Promise<string[]> {
+  const [keyword, semantic] = await Promise.all([ftsIds(db, f), semanticIds(db, f)]);
+  return fuseRanks([keyword, semantic], f.limit);
+}
+
+/** Embeds entries that have no vector yet; returns how many it stored. */
+export async function embedMissingMemory(db: Db, limit: number, log?: { warn: (obj: object, msg: string) => void }): Promise<number> {
+  if (!embeddingsReady()) return 0;
+  const rows = await db.$queryRaw<{ id: string; title: string; content: string }[]>`
+    SELECT "id", "title", "content" FROM "MemoryEntry" WHERE "localEmbedding" IS NULL ORDER BY "createdAt" LIMIT ${limit}`;
+  let stored = 0;
+  for (const r of rows) {
+    const v = await embed(`${r.title}\n${r.content}`, log);
+    if (!v) break;
+    await db.$executeRaw`UPDATE "MemoryEntry" SET "localEmbedding" = ${v}::double precision[] WHERE "id" = ${r.id}`;
+    stored++;
+  }
+  return stored;
 }
 
 /** Entry ids matching `q`, best rank first. Superseded rows are always excluded. */
@@ -89,11 +144,7 @@ export async function ftsIds(
   const tsq = f.anyWord
     ? Prisma.sql`replace(plainto_tsquery('english', ${f.q})::text, ' & ', ' | ')::tsquery`
     : Prisma.sql`plainto_tsquery('english', ${f.q})`;
-  const filters = [
-    f.type ? Prisma.sql`AND "type" = ${f.type}::"MemoryType"` : Prisma.empty,
-    f.status ? Prisma.sql`AND "status" = ${f.status}::"MemoryStatus"` : Prisma.empty,
-    f.agentId ? Prisma.sql`AND "agentId" = ${f.agentId}` : Prisma.empty,
-  ];
+  const filters = memoryFilters(f);
   const rows = await db.$queryRaw<{ id: string }[]>`
     SELECT "id" FROM "MemoryEntry"
     WHERE "projectId" = ${f.projectId} AND "supersededById" IS NULL

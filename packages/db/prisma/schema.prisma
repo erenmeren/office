@@ -687,6 +687,7 @@ model MemoryEntry {
   runId          String?
   verifiedAt     DateTime?
   embedding      Unsupported("vector(1536)")?
+  localEmbedding Unsupported("double precision[]")?
   search         Unsupported("tsvector")?
   sources        MemorySource[]
 

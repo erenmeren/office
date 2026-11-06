@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
@@ -27,6 +28,7 @@ import { workerRoutes } from './routes/workers.js';
 import { gitRoutes } from './routes/git.js';
 import { observabilityRoutes } from './routes/observability.js';
 import { EventHub } from './services/event-hub.js';
+import { configureEmbeddings } from './lib/embeddings.js';
 import { Scheduler } from './services/scheduler.js';
 import { claudeSessionRoutes } from './routes/claude-sessions.js';
 import { terminalRoutes } from './routes/terminals.js';
@@ -90,6 +92,7 @@ export async function buildApp(
   await app.register(agentRoutes);
   await app.register(skillRoutes, { config });
 
+  configureEmbeddings({ enabled: config.embeddings, cacheDir: join(config.dataDir, 'models') });
   const hub = new EventHub();
   const gateway = new WorkerGateway(app.prisma, hub, config, app.log);
   const scheduler = new Scheduler(app.prisma, hub, gateway, config, app.log);

@@ -11,6 +11,7 @@ import { startPlanRun, startReviewRun } from './mission-service.js';
 import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
+import { embedMissingMemory } from './memory-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
@@ -35,6 +36,7 @@ export class Scheduler {
   // waiting_reply runs parked for their pinned worker, with when that was last logged
   private loggedParked = new Map<string, number>();
   private offeredLive = new Set<string>();
+  private embedding: Promise<unknown> | undefined;
 
   constructor(
     private prisma: PrismaClient,
@@ -98,6 +100,10 @@ export class Scheduler {
     } catch (err) {
       this.log.error({ err }, 'scheduler could not list ready tasks');
     }
+    // not awaited: the first call may download the model
+    this.embedding ??= embedMissingMemory(this.prisma, 20, this.log)
+      .catch((err) => this.log.error({ err }, 'embedding memory failed'))
+      .finally(() => (this.embedding = undefined));
     try {
       await this.deliverToLiveRuns();
     } catch (err) {
