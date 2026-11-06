@@ -88,7 +88,12 @@ export function SessionDetail({
             {d.workerName && <span>{d.workerName}</span>}
             {d.model && <span>{d.model}</span>}
           </CardDescription>
-          {live && <CardAction><StopButton runId={d.runId} name={d.agentName} subagent={!!sub} onCancelled={onCancelled} /></CardAction>}
+          {live && (
+            <CardAction className="flex items-center gap-2">
+              {!sub && <PauseResumeButton runId={d.runId} status={d.status} pausedAt={d.pausedAt} onChanged={() => void q.refetch()} />}
+              <StopButton runId={d.runId} name={d.agentName} subagent={!!sub} onCancelled={onCancelled} />
+            </CardAction>
+          )}
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <KpiCard label="Commands" value={commands.length} />
@@ -123,7 +128,7 @@ export function SessionDetail({
         </CardContent>
       </Card>
 
-      <TalkTo key={d.agentId} detail={d} runId={runId} subagent={sub && subagentName(sub)} projectId={projectId} recipients={recipients} />
+      <TalkTo key={d.agentId} detail={d} runId={runId} subagent={sub && subagentName(sub)} subagentToolUseId={sub?.status === 'running' ? sub.toolUseId : undefined} projectId={projectId} recipients={recipients} />
     </div>
   );
 }
@@ -194,6 +199,30 @@ export function FileTable({ files, detail: d }: { files: SessionFile[]; detail: 
   );
 }
 
+/** Pause ends the turn and frees the worker slot; Resume continues the same SDK session. */
+function PauseResumeButton({ runId, status, pausedAt, onChanged }: { runId: string; status: string; pausedAt: string | null; onChanged: () => void }) {
+  const [error, setError] = useState('');
+  const paused = status === 'waiting_reply' && !!pausedAt;
+  if (status !== 'running' && !paused) return null;
+  const toggle = async () => {
+    setError('');
+    try {
+      await post(`/runs/${runId}/${paused ? 'resume' : 'pause'}`);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 409 ? 'The session changed state; try again.' : String(err));
+      onChanged();
+    }
+  };
+  return (
+    <span className="flex items-center gap-2">
+      {error && <span role="alert" className="text-xs text-destructive">{error}</span>}
+      {paused && <Badge>Paused</Badge>}
+      <Button variant="secondary" onClick={() => void toggle()}>{paused ? 'Resume' : 'Pause'}</Button>
+    </span>
+  );
+}
+
 export function StopButton({ runId, name, subagent, onCancelled, label = 'Stop' }: { runId: string; name: string; subagent: boolean; onCancelled: () => void; label?: string }) {
   const [error, setError] = useState('');
   const confirm = useConfirm();
@@ -223,7 +252,7 @@ export function StopButton({ runId, name, subagent, onCancelled, label = 'Stop' 
 type Kind = 'message' | 'question';
 
 /** Writes to the agent's human conversation: delivered at the next run boundary, or now by interrupting the running session. */
-function TalkTo({ detail, runId, subagent, projectId, recipients }: { detail: Detail; runId: string; subagent?: string; projectId: string; recipients: { id: string; name: string }[] }) {
+function TalkTo({ detail, runId, subagent, subagentToolUseId, projectId, recipients }: { detail: Detail; runId: string; subagent?: string; subagentToolUseId?: string; projectId: string; recipients: { id: string; name: string }[] }) {
   const list = recipients.some((r) => r.id === detail.agentId) ? recipients : [{ id: detail.agentId, name: detail.agentName }, ...recipients];
   const [to, setTo] = useState(detail.agentId);
   const [type, setType] = useState<Kind>('message');
@@ -235,6 +264,12 @@ function TalkTo({ detail, runId, subagent, projectId, recipients }: { detail: De
     e.preventDefault();
     setState({ busy: true });
     try {
+      if (subagentToolUseId && to === detail.agentId) {
+        await post(`/runs/${runId}/subagents/${subagentToolUseId}/messages`, { body: body.trim() });
+        setBody('');
+        setState({ sent: `${subagent}, through ${toName}` });
+        return;
+      }
       const conv = await post<Conversation>('/conversations', { projectId, kind: 'human', agentIds: [to] });
       await post(`/conversations/${conv.id}/messages`, { type, body: body.trim() });
       setBody('');
@@ -261,7 +296,9 @@ function TalkTo({ detail, runId, subagent, projectId, recipients }: { detail: De
       <CardHeader>
         <CardTitle>Talk to {toName}</CardTitle>
         <CardDescription>
-          {subagent ? `${subagent} is a subagent and cannot take messages. ` : ''}Subagents are reached through their parent agent.
+          {subagent
+            ? `${subagent} is a subagent: your message goes to ${detail.agentName}, labelled for it, and ${detail.agentName} relays or applies it.`
+            : 'Subagents are reached through their parent agent.'}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -297,8 +334,8 @@ function TalkTo({ detail, runId, subagent, projectId, recipients }: { detail: De
               </Button>
             </div>
           </div>
-          <p className="text-xs text-ink-3">{canInterrupt ? 'Send: delivered at the next run boundary. Interrupt and send: the session stops its current turn and continues with your message.' : 'Delivered at the next run boundary'}</p>
-          {state.sent && <p className="text-xs text-mint">Saved for {state.sent}.</p>}
+          <p className="text-xs text-ink-3">{canInterrupt ? 'Send: reaches the running session within seconds, without stopping it. Interrupt and send: the session stops its current turn and continues with your message.' : 'Reaches a running session within seconds, otherwise its next run.'}</p>
+          {state.sent && <p className="text-xs text-mint">Sent to {state.sent}.</p>}
           {state.error && <p role="alert" className="text-sm text-destructive">{state.error}</p>}
         </form>
       </CardContent>

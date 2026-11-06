@@ -148,6 +148,12 @@ export class FakeAdapter implements RuntimeAdapter {
     });
     sink.emit({ type: 'agent.tool.completed', payload: { toolUseId: 'fake-1', output: 'ok' } });
 
+    if (control) {
+      control.deliver = (messageId) => {
+        sink.emit({ type: 'agent.message.received', payload: { count: 1, messageId } });
+        return true;
+      };
+    }
     if (spec.prompt.includes('SLOW')) {
       await new Promise<void>((resolve) => {
         const t = setTimeout(resolve, 2000);
@@ -156,6 +162,7 @@ export class FakeAdapter implements RuntimeAdapter {
         control?.interrupted.addEventListener('abort', done, { once: true });
       });
     }
+    if (control) control.deliver = undefined;
     if (signal.aborted) {
       sink.emit({ type: 'agent.cancelled', payload: {} });
       return { status: 'cancelled', usage: USAGE };

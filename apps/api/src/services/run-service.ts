@@ -862,6 +862,75 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
   return lost;
 }
 
+/** Owner pause: the turn ends, the worker slot is free, and the run waits without a reply timeout until resumed. */
+export async function pauseRun(prisma: PrismaClient, gateway: Pick<WorkerGateway, 'send'>, runId: string, userId: string) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId } });
+  if (!run) throw new HttpError(404, 'not_found');
+  const { count } = await prisma.taskRun.updateMany({
+    where: { id: runId, status: 'running', waitingForMessageId: null },
+    data: { pausedAt: new Date() },
+  });
+  if (count === 0) throw new HttpError(409, 'not_running', `run is ${run.status}`);
+  if (!run.workerId || !gateway.send(run.workerId, { type: 'run.interrupt', runId })) {
+    await prisma.taskRun.update({ where: { id: runId }, data: { pausedAt: null } });
+    throw new HttpError(409, 'worker_offline');
+  }
+  await audit(prisma, { userId, action: 'run.paused', targetType: 'run', targetId: runId });
+  return { paused: true };
+}
+
+/** Continues a paused run through the interrupt path: the owner's message is what it resumes with. */
+export async function resumePausedRun(prisma: PrismaClient, hub: EventHub, config: Config, runId: string, userId: string, body: string) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId } });
+  if (!run) throw new HttpError(404, 'not_found');
+  if (run.status !== 'waiting_reply' || !run.pausedAt) throw new HttpError(409, 'not_paused', `run is ${run.status}`);
+  const outbox: Outbox = [];
+  const message = await prisma.$transaction(async (tx) => {
+    const { message, deliveries } = await sendMessage(tx, config.messageLimits, {
+      projectId: run.projectId,
+      kind: 'human',
+      type: 'message',
+      body,
+      senderUserId: userId,
+      recipientAgentIds: [run.agentId],
+    });
+    queueMessageCreated(outbox, toMessageView({ ...message, deliveries }));
+    const { count } = await tx.taskRun.updateMany({
+      where: { id: runId, status: 'waiting_reply', pausedAt: { not: null } },
+      data: { pausedAt: null, waitingForMessageId: message.id, waitingSince: new Date() },
+    });
+    if (count === 0) throw new HttpError(409, 'not_paused');
+    await audit(tx, { userId, action: 'run.resumed', targetType: 'run', targetId: runId, detail: { messageId: message.id } });
+    return message;
+  });
+  hub.publishAll(outbox);
+  return { messageId: message.id };
+}
+
+/**
+ * Owner note for a running subagent. The SDK has no way to address one (a message with its parent_tool_use_id
+ * still reaches the main agent), so it goes to the parent, labelled, and the parent relays or applies it.
+ */
+export async function messageSubagent(prisma: PrismaClient, hub: EventHub, config: Config, runId: string, toolUseId: string, userId: string, body: string) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId }, include: { session: true } });
+  if (!run?.session) throw new HttpError(404, 'not_found');
+  const sub = await prisma.subagentRun.findFirst({ where: { sessionId: run.session.id, toolUseId } });
+  if (!sub) throw new HttpError(404, 'not_found');
+  if (run.status !== 'running' || sub.status !== 'running') throw new HttpError(409, 'not_running', 'the subagent is not running');
+  const outbox: Outbox = [];
+  const { message, deliveries } = await sendMessage(prisma, config.messageLimits, {
+    projectId: run.projectId,
+    kind: 'human',
+    type: 'message',
+    body: `For your subagent ${sub.subagentType ?? 'agent'} (${sub.description ?? toolUseId}, tool use ${toolUseId}): relay this to it if you can, otherwise apply it to its work yourself.\n\n${body}`,
+    senderUserId: userId,
+    recipientAgentIds: [run.agentId],
+  });
+  queueMessageCreated(outbox, toMessageView({ ...message, deliveries }));
+  hub.publishAll(outbox);
+  return { messageId: message.id };
+}
+
 /**
  * Owner "interrupt and send": the message is stored in the agent's human conversation, the run is told to end
  * its turn (`run.interrupt`), and once its `suspended` result arrives the scheduler resumes it with the message

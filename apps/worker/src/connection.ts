@@ -244,6 +244,9 @@ export class WorkerConnection {
         this.log.info({ runId: msg.runId }, 'run interrupted by the owner');
         this.executor.interrupt(msg.runId);
         return;
+      case 'run.message':
+        this.send({ type: 'run.message.ack', runId: msg.runId, messageId: msg.messageId, ok: this.executor.deliverMessage(msg.runId, msg.messageId, msg.text) });
+        return;
       case 'roots.add':
         await this.addRoot(msg.requestId, msg.path);
         return;

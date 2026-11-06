@@ -408,6 +408,17 @@ export class WorkerGateway {
         this.send(workerId, { type: 'integration.allowed', runId: msg.runId, ...(run ? { ok: true } : { ok: false, reason: 'lease lost' }) });
         return;
       }
+      case 'run.message.ack': {
+        if (!msg.ok) return;
+        const run = await findLeasedRun(this.prisma, msg.runId, workerId);
+        if (run) {
+          await this.prisma.messageDelivery.updateMany({
+            where: { messageId: msg.messageId, recipientAgentId: run.agentId, status: { in: ['pending', 'delivered'] } },
+            data: { status: 'acknowledged', acknowledgedAt: new Date() },
+          });
+        }
+        return;
+      }
       case 'terminal.opened':
       case 'terminal.error':
       case 'terminal.output':

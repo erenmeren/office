@@ -6,7 +6,7 @@ import { runCheck } from './checks.js';
 import { collectResult, commitLeftovers, createWorktree, ensureMissionBranch, excludeFromGit, fastForward, git, gitAuth, installTrailerHook, rebaseOnto, removeWorktree, sweepWorktrees } from './git.js';
 import { ensureClone } from './repos.js';
 import { removeRunRoot, materializeSkills } from './skills.js';
-import { buildChildEnv, redactSecrets, type RuntimeAdapter, type ToolBridge } from '@office/runtime';
+import { buildChildEnv, redactSecrets, type RunControl, type RuntimeAdapter, type ToolBridge } from '@office/runtime';
 import type {
   ApprovalDecision,
   EventBody,
@@ -105,6 +105,8 @@ function realCwd(cwd: string): string | null {
 export class RunExecutor {
   private active = new Map<string, AbortController>();
   private interrupts = new Map<string, AbortController>();
+  private controls = new Map<string, RunControl>();
+  private deliveredMessages = new Map<string, Set<string>>();
   private pendingTools = new Map<string, { runId: string; resolve: (r: ToolCallResult) => void; timer: NodeJS.Timeout }>();
   // the API's approval timeout answers first; the worker's own timer is a backstop for a lost answer
   private pendingApprovals = new Map<string, { runId: string; resolve: (d: ApprovalDecision) => void; timer: NodeJS.Timeout }>();
@@ -190,6 +192,15 @@ export class RunExecutor {
     this.interrupts.get(runId)?.abort();
   }
 
+  /** A resend after an API restart is answered without delivering twice. */
+  deliverMessage(runId: string, messageId: string, text: string): boolean {
+    const seen = this.deliveredMessages.get(runId) ?? new Set<string>();
+    if (seen.has(messageId)) return true;
+    const ok = this.controls.get(runId)?.deliver?.(messageId, text) ?? false;
+    if (ok) this.deliveredMessages.set(runId, seen.add(messageId));
+    return ok;
+  }
+
   cancel(runId: string): void {
     this.active.get(runId)?.abort();
     for (const [callId, p] of [...this.pendingTools]) {
@@ -226,6 +237,8 @@ export class RunExecutor {
     void this.execute(spec, controller.signal).finally(() => {
       this.active.delete(spec.runId);
       this.interrupts.delete(spec.runId);
+      this.controls.delete(spec.runId);
+      this.deliveredMessages.delete(spec.runId);
     });
   }
 
@@ -289,7 +302,8 @@ export class RunExecutor {
         // summary runs need no skills, so no run root is created for them
         const skillsDir = spec.kind === 'summary' ? undefined : await materializeSkills(this.runsDir, spec.runId, spec.skills);
         const gitDir = worktree ? join(worktree.repo, '.git') : undefined;
-        const control = { interrupted: this.interrupts.get(spec.runId)!.signal };
+        const control: RunControl = { interrupted: this.interrupts.get(spec.runId)!.signal };
+        this.controls.set(spec.runId, control);
         result = await this.adapter.run({ ...spec, cwd, ...(skillsDir && { skillsDir }), ...(gitDir && { gitDir }) }, { emit }, signal, tools, control);
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);

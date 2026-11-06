@@ -213,6 +213,7 @@ function sessionItem(run: RunRow, all: EventRow[], waitingFor: WaitingFor | null
     startedAt: run.startedAt ?? run.session?.startedAt ?? null,
     costUsd: run.costUsd,
     waitingFor,
+    pausedAt: run.pausedAt,
     ...counts(events),
     subagents: (run.session?.subagentRuns ?? []).map((s) => ({
       id: s.id, toolUseId: s.toolUseId, subagentType: s.subagentType, description: s.description, status: s.status, startedAt: s.startedAt, endedAt: s.endedAt,

@@ -434,6 +434,7 @@ model TaskRun {
   conversationId      String?
   waitingSince        DateTime?
   waitingForMessageId String?
+  pausedAt            DateTime?
   summaryOfRunId      String?
   summarizedAt        DateTime?
   agentVersionId      String

@@ -1,0 +1,1 @@
+ALTER TABLE "TaskRun" ADD COLUMN "pausedAt" TIMESTAMP(3);

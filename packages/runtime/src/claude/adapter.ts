@@ -1,4 +1,4 @@
-import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BUILTIN_TOOLS, MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
@@ -164,6 +164,36 @@ export function sandboxFor(spec: RunSpec) {
   };
 }
 
+/** The prompt, then every message delivered into the live session, until closed. */
+function promptInput(prompt: string) {
+  const user = (text: string): SDKUserMessage => ({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null });
+  const queue = [user(prompt)];
+  let wake: (() => void) | undefined;
+  let closed = false;
+  return {
+    push(text: string) {
+      if (closed) return false;
+      queue.push(user(text));
+      wake?.();
+      return true;
+    },
+    close() {
+      closed = true;
+      wake?.();
+    },
+    async *[Symbol.asyncIterator]() {
+      for (;;) {
+        while (queue.length) yield queue.shift()!;
+        if (closed) return;
+        await new Promise<void>((resolve) => (wake = resolve));
+      }
+    },
+  };
+}
+
+/** Background tasks start new turns after a result; the input stays open for them, but never hangs the run. */
+const BACKGROUND_INPUT_MS = 30 * 60_000;
+
 export class ClaudeAdapter implements RuntimeAdapter {
   readonly name = 'claude' as const;
 
@@ -183,6 +213,16 @@ export class ClaudeAdapter implements RuntimeAdapter {
     let suspended = false;
     let initSessionId: string | undefined;
     const parents = new Map<string, string>();
+    const input = promptInput(spec.prompt);
+    const backgroundTasks = new Set<string>();
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    if (control) {
+      control.deliver = (messageId, text) => {
+        if (suspended || !input.push(text)) return false;
+        sink.emit({ type: 'agent.message.received', payload: { count: 1, messageId } });
+        return true;
+      };
+    }
     // the owner's message is delivered by the API when it resumes the suspended run
     const onInterrupt = () => {
       suspended = true;
@@ -192,7 +232,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     control?.interrupted.addEventListener('abort', onInterrupt, { once: true });
     try {
       q = query({
-        prompt: spec.prompt,
+        prompt: input,
         options: {
           ...buildQueryOptions(spec, tools, (info) => {
             suspended = true;
@@ -210,7 +250,11 @@ export class ClaudeAdapter implements RuntimeAdapter {
         // an interrupted result of a suspended run is not a failure
         if (!(suspended && msg.type === 'result')) for (const body of normalizeSdkMessage(msg)) sink.emit(body);
         if (msg.type === 'system' && msg.subtype === 'init') initSessionId = msg.session_id;
+        if (msg.type === 'system' && msg.subtype === 'task_started') backgroundTasks.add(msg.task_id);
+        if (msg.type === 'system' && msg.subtype === 'task_notification') backgroundTasks.delete(msg.task_id);
         if (msg.type !== 'result') continue;
+        if (suspended || backgroundTasks.size === 0) input.close();
+        else closeTimer ??= setTimeout(() => input.close(), BACKGROUND_INPUT_MS);
         const usage = {
           inputTokens: msg.usage.input_tokens,
           outputTokens: msg.usage.output_tokens,
@@ -244,6 +288,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       sink.emit({ type: 'agent.failed', payload: { error } });
       return { status: 'failed', error, usage: ZERO_USAGE };
     } finally {
+      clearTimeout(closeTimer);
+      input.close();
+      if (control) control.deliver = undefined;
       signal.removeEventListener('abort', onAbort);
       control?.interrupted.removeEventListener('abort', onInterrupt);
     }

@@ -132,6 +132,99 @@ describe('run lifecycle', () => {
     expect((await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).attempts).toBe(1);
   });
 
+  it('owner pause: no reply timeout, the slot is free, resume continues the same SDK session', async () => {
+    s = await setup();
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    await until(async () => (await s.run(spec.runId)).status === 'running', 'running');
+    expect((await s.req('POST', `/runs/${spec.runId}/resume`, {})).statusCode).toBe(409);
+    expect((await s.req('POST', `/runs/${spec.runId}/pause`)).statusCode).toBe(200);
+    expect((await w.waitFor('run.interrupt')).runId).toBe(spec.runId);
+    s.result(w, spec, { status: 'suspended', sdkSessionId: 'sdk-1' });
+    await s.flush(w);
+    expect(await s.run(spec.runId)).toMatchObject({ status: 'waiting_reply', leaseExpiresAt: null });
+    // long past the reply timeout: a paused run stays parked
+    await s.t.prisma.taskRun.update({ where: { id: spec.runId }, data: { waitingSince: new Date(Date.now() - 86_400_000) } });
+    await s.t.app.scheduler.tick();
+    expect((await s.run(spec.runId)).status).toBe('waiting_reply');
+    expect((await s.req('POST', `/runs/${spec.runId}/resume`, {})).statusCode).toBe(200);
+    const resumed = await s.assign(w);
+    expect(resumed).toMatchObject({ runId: spec.runId, resumeSdkSessionId: 'sdk-1' });
+    expect(resumed.prompt).toContain('Continue where you stopped.');
+    expect((await s.run(spec.runId)).pausedAt).toBeNull();
+    const actions = (await s.req('GET', `/audit?targetType=run&targetId=${spec.runId}`)).json().map((r: { action: string }) => r.action);
+    expect(actions).toEqual(expect.arrayContaining(['run.paused', 'run.resumed']));
+  });
+
+  it('a pause past the limit ends like a reply timeout', async () => {
+    s = await setup();
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    await until(async () => (await s.run(spec.runId)).status === 'running', 'running');
+    await s.req('POST', `/runs/${spec.runId}/pause`);
+    s.result(w, spec, { status: 'suspended', sdkSessionId: 'sdk-1' });
+    await s.flush(w);
+    const old = new Date(Date.now() - 7 * 86_400_000);
+    await s.t.prisma.taskRun.update({ where: { id: spec.runId }, data: { pausedAt: old, waitingSince: old } });
+    const resumed = await s.assign(w);
+    expect(resumed.prompt).toContain('No reply was received');
+  });
+
+  it('a message for a running agent goes into its session once; refused, it stays pending', async () => {
+    s = await setup();
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    await until(async () => (await s.run(spec.runId)).status === 'running', 'running');
+    const send = async (body: string) => {
+      const conv = await s.req('POST', '/conversations', { projectId: s.projectId, kind: 'human', agentIds: [s.a] });
+      return (await s.req('POST', `/conversations/${conv.json().id}/messages`, { type: 'message', body })).json();
+    };
+    const taken = await send('Use Redis.');
+    await s.t.app.scheduler.tick();
+    const sent = await w.waitFor('run.message');
+    expect(sent).toMatchObject({ runId: spec.runId, messageId: taken.id });
+    expect(sent.text).toContain('Use Redis.');
+    w.send({ type: 'run.message.ack', runId: spec.runId, messageId: taken.id, ok: true });
+    await until(async () => (await s.t.prisma.messageDelivery.findFirstOrThrow({ where: { messageId: taken.id } })).status === 'acknowledged', 'acknowledged');
+
+    const refused = await send('Too late.');
+    await s.t.app.scheduler.tick();
+    expect(await w.waitFor('run.message')).toMatchObject({ messageId: refused.id });
+    w.send({ type: 'run.message.ack', runId: spec.runId, messageId: refused.id, ok: false });
+    await s.flush(w);
+    await s.t.app.scheduler.tick();
+    expect((await s.t.prisma.messageDelivery.findFirstOrThrow({ where: { messageId: refused.id } })).status).toBe('pending');
+    expect(w.received.filter((m: { type: string; messageId?: string }) => m.type === 'run.message' && m.messageId === refused.id)).toHaveLength(1);
+  });
+
+  it('a note for a running subagent goes to its parent, labelled; a finished one is refused', async () => {
+    s = await setup();
+    await s.createTask();
+    const w = await s.worker();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.accepted', runId: spec.runId });
+    await until(async () => (await s.run(spec.runId)).status === 'running', 'running');
+    const session = await s.t.prisma.agentSession.findUniqueOrThrow({ where: { runId: spec.runId } });
+    const sub = (status: string, toolUseId: string) =>
+      s.t.prisma.subagentRun.create({ data: { sessionId: session.id, toolUseId, subagentType: 'reviewer', description: 'check it', status, startedAt: new Date() } });
+    await sub('running', 'tu-1');
+    await sub('completed', 'tu-2');
+    const res = await s.req('POST', `/runs/${spec.runId}/subagents/tu-1/messages`, { body: 'Skip the docs.' });
+    expect(res.statusCode).toBe(200);
+    const stored = await s.t.prisma.message.findUniqueOrThrow({ where: { id: res.json().messageId }, include: { deliveries: true } });
+    expect(stored.body).toContain('For your subagent reviewer (check it, tool use tu-1)');
+    expect(stored.body).toContain('Skip the docs.');
+    expect(stored.deliveries[0]!.recipientAgentId).toBe(s.a);
+    expect((await s.req('POST', `/runs/${spec.runId}/subagents/tu-2/messages`, { body: 'x' })).statusCode).toBe(409);
+    expect((await s.req('POST', `/runs/${spec.runId}/subagents/nope/messages`, { body: 'x' })).statusCode).toBe(404);
+  });
+
   it('owner interrupt: message stored, worker told, the suspended run resumes with the owner message', async () => {
     s = await setup();
     await s.createTask();

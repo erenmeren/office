@@ -2,7 +2,7 @@ import { ClaudeAdapter } from './claude/adapter.js';
 import { FakeAdapter } from './fake/adapter.js';
 import type { RuntimeAdapter } from './types.js';
 
-export type { EventSink, RuntimeAdapter, ToolBridge } from './types.js';
+export type { EventSink, RunControl, RuntimeAdapter, ToolBridge } from './types.js';
 export { redactSecrets } from './redact.js';
 export { machineId } from './machine-id.js';
 export { FakeAdapter } from './fake/adapter.js';

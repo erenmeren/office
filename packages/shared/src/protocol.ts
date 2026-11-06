@@ -55,6 +55,8 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
   }),
   /** Asked right before a fast-forward; the API answers `integration.allowed`. */
   z.object({ type: z.literal('integration.check'), runId: z.string() }),
+  /** `ok: false`: the run cannot take it any more; the delivery stays pending for the next run boundary. */
+  z.object({ type: z.literal('run.message.ack'), runId: z.string(), messageId: z.string(), ok: z.boolean() }),
   /** Answer to `sessions.request` (external Claude Code sessions on this worker's machine). */
   z.object({
     type: z.literal('sessions.response'),
@@ -79,6 +81,8 @@ export const ApiToWorkerSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run.cancel'), runId: z.string() }),
   /** Owner "interrupt and send": end the SDK turn with a `suspended` result; the API resumes the run with the owner's message. */
   z.object({ type: z.literal('run.interrupt'), runId: z.string() }),
+  /** A message for the agent of a running run, delivered into its live session. */
+  z.object({ type: z.literal('run.message'), runId: z.string(), messageId: z.string(), text: z.string() }),
   z.object({ type: z.literal('tool.result'), callId: z.string(), result: ToolCallResultSchema }),
   z.object({ type: z.literal('approval.result'), runId: z.string(), decision: ApprovalDecisionSchema }),
   /** The run.result was applied (or was already, for a resend); the worker may drop it from its outbox. */
