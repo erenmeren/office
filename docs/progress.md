@@ -9,6 +9,16 @@
 | 5 | done (two workers: real Claude on the host, a fake-runtime container cloning over the git endpoint; see "Phase 5 evidence") |
 | 6 | done (expectation 3 passed on its Task 10b re-run; see "Phase 6 evidence") |
 
+## Owner gap sweep (2026-11-06)
+
+The owner asked for every open item except Windows and macOS, and declined `ProjectMember` (single owner stays). Semantic search runs on a local model at the owner's choice.
+
+- Verify task kind and the owner-closed mission summary: a browser check had to be a `code` task to install tools, then failed "no succeeded run changed files"; two missions were closed by owner override because of it.
+- Live delivery, Pause and Resume, subagent notes, local semantic search, Pixel Office List and Timeline: see the 2026-11-06 lines in `CLAUDE.md`.
+- SDK probe (0.3.316): a streamed message reaches the main agent mid-turn; a background subagent starts another turn after the first `result`; a message with `parent_tool_use_id` does not reach the subagent.
+- Evidence: real Claude on an isolated stack, a message sent during a Bash sleep shaped the final answer and left `agent.message.received`; a paused run held no lease, stayed `waiting_reply`, and resumed as the same run. Playwright passes on an isolated database and port. Model check: English queries matched well, a Turkish one 0.38 against its entry and 0.42 against an unrelated one.
+- Maratus: the redesign sat on branches of the `tetris` project. It is now local branch `redesign/calm` of `maratus-website` (site at the repo root, based on `maratus-site`), checked in Chromium at 360, 768 and 1440 px (no overflow, no axe violations, no console errors, no external requests). Not pushed or deployed; `maratus-website` is not yet an Office project.
+
 ## Outstanding
 
 Phase 1:
