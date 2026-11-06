@@ -44,7 +44,8 @@ export async function evidenceFor(db: Db, taskId: string) {
  * §8.2: code -> at least one succeeded run's commits were fast-forwarded into the mission branch, no committed
  * run after the last fast-forwarded one is unintegrated (earlier failed-check or needs_integration runs were
  * superseded by the retry), and the latest check passed (a reopened task's rerun may change nothing);
- * analysis -> an artifact or a memory entry for the task; review -> a `review` artifact.
+ * analysis -> an artifact or a memory entry for the task; review -> a `review` artifact;
+ * verify -> a `verify` artifact (the run's final message) and a passed latest check; commits are optional, but integrated if any.
  */
 export function evidenceRule(e: Pick<Evidence, 'task' | 'runs' | 'artifacts' | 'memoryCount'>): { ok: boolean; reason?: string } {
   if (e.task.kind === 'code') {
@@ -59,6 +60,16 @@ export function evidenceRule(e: Pick<Evidence, 'task' | 'runs' | 'artifacts' | '
     if (check?.status !== 'passed' && check?.status !== 'skipped') return { ok: false, reason: `check ${check?.status ?? 'missing'} on the latest checked run` };
     // the last committed run must be the integrated one; it supersedes earlier unintegrated attempts
     if (committed.at(-1)!.git!.integration !== 'fast_forwarded') return { ok: false, reason: 'commits not integrated' };
+    return { ok: true };
+  }
+  if (e.task.kind === 'verify') {
+    const ok = e.runs.filter((r) => r.status === 'succeeded');
+    if (!ok.length) return { ok: false, reason: 'no succeeded run' };
+    if (!e.artifacts.some((a) => a.kind === 'verify')) return { ok: false, reason: 'no verify artifact for the task' };
+    const check = ok.filter((r) => r.check).at(-1)?.check;
+    if (check && check.status !== 'passed' && check.status !== 'skipped') return { ok: false, reason: `check ${check.status} on the latest checked run` };
+    const committed = ok.filter((r) => r.git && r.git.headCommit !== r.git.baseCommit);
+    if (committed.length && committed.at(-1)!.git!.integration !== 'fast_forwarded') return { ok: false, reason: 'commits not integrated' };
     return { ok: true };
   }
   if (e.task.kind === 'analysis') {

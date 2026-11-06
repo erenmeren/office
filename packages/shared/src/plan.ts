@@ -71,7 +71,7 @@ export const PLAN_JSON_SCHEMA = {
           key: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,31}$' },
           title: { type: 'string', minLength: 1, maxLength: 120 },
           description: { type: 'string', minLength: 1, maxLength: 4000 },
-          kind: { type: 'string', enum: ['code', 'analysis', 'review'] },
+          kind: { type: 'string', enum: ['code', 'analysis', 'review', 'verify'] },
           agent: { type: 'string' },
           requirements: nonEmptyStrArray,
           acceptanceCriteria: nonEmptyStrArray,

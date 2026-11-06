@@ -262,6 +262,9 @@ export async function createRunForTask(
       task.requirements.length ? `Requirements:\n${task.requirements.map((r) => `- ${r}`).join('\n')}` : '',
       task.acceptanceCriteria.length ? `Acceptance criteria:\n${task.acceptanceCriteria.map((r) => `- ${r}`).join('\n')}` : '',
       task.reviewNote ? `Review note:\n${task.reviewNote}` : '',
+      task.kind === 'verify'
+        ? 'You verify; you are not expected to change the repository. Keep tools and screenshots outside the repository (use a temporary directory). Commit only a regression test for a defect you found. Your final message is the stored evidence: say what you ran, what you saw and your verdict.'
+        : '',
       task.kind === 'code'
         ? 'Commit your work on the current branch before you finish (keep build output such as dist/ and node_modules/ out of git). Anything left uncommitted is committed for you as "Office auto-commit"; the branch is then rebased onto the mission head and fast-forwarded when the project check passes.'
         : '',
@@ -281,7 +284,7 @@ async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: 
     prisma.agent.findUniqueOrThrow({ where: { id: task.agentId } }),
     getSettings(prisma, task.projectId),
   ]);
-  const code = task.kind === 'code';
+  const code = task.kind === 'code' || task.kind === 'verify';
   return {
     taskKind: task.kind,
     readOnlyCheckout: !code,

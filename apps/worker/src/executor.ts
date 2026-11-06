@@ -369,7 +369,7 @@ export class RunExecutor {
     let check: RunResult['check'];
     let integration: IntegrationStatus = 'none';
     let integrationReason: string | undefined;
-    const code = spec.taskKind === 'code' && !spec.readOnlyCheckout && result.status === 'succeeded';
+    const code = (spec.taskKind === 'code' || spec.taskKind === 'verify') && !spec.readOnlyCheckout && result.status === 'succeeded';
     const who = { name: g.committerName, email: g.committerEmail };
     if (code && (await commitLeftovers(wt.path, who, `Office auto-commit: changes ${g.agentName} left uncommitted`).catch(() => false))) {
       this.log.warn({ runId: spec.runId }, 'committed changes the agent left uncommitted');
