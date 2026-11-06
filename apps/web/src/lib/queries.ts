@@ -400,6 +400,7 @@ export interface LiveSession {
   costUsd: number;
   /** the message a `waiting_reply` run waits on */
   waitingFor: { messageId: string; body: string; recipientAgentIds: string[] } | null;
+  pausedAt: string | null;
   commands: number;
   files: number;
   subagents: SessionSubagent[];

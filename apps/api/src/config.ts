@@ -13,6 +13,7 @@ const EnvSchema = z.object({
   COOKIE_SECRET: z.string().min(32),
   WEB_ORIGIN: z.string().min(1),
   OFFICE_DATA_DIR: z.string().min(1),
+  OFFICE_EMBEDDINGS: z.enum(['on', 'off']).default('on'),
   OFFICE_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
   OFFICE_HEARTBEAT_SECONDS: z.coerce.number().int().positive().default(10),
   OFFICE_SCHEDULER_INTERVAL_MS: z.coerce.number().int().nonnegative().default(2000),
@@ -35,6 +36,7 @@ export interface Config {
   cookieSecret: string;
   webOrigin: string;
   dataDir: string;
+  embeddings: boolean;
   artifactsDir: string;
   leaseSeconds: number;
   heartbeatSeconds: number;
@@ -86,6 +88,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     webOrigin: e.WEB_ORIGIN,
     // absolute: repository paths derived from it are stored and handed to workers
     dataDir: resolve(e.OFFICE_DATA_DIR),
+    embeddings: e.OFFICE_EMBEDDINGS === 'on',
     artifactsDir: resolve(e.OFFICE_DATA_DIR, 'artifacts'),
     leaseSeconds: e.OFFICE_LEASE_SECONDS,
     heartbeatSeconds: e.OFFICE_HEARTBEAT_SECONDS,

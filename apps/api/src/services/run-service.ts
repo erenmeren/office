@@ -262,6 +262,9 @@ export async function createRunForTask(
       task.requirements.length ? `Requirements:\n${task.requirements.map((r) => `- ${r}`).join('\n')}` : '',
       task.acceptanceCriteria.length ? `Acceptance criteria:\n${task.acceptanceCriteria.map((r) => `- ${r}`).join('\n')}` : '',
       task.reviewNote ? `Review note:\n${task.reviewNote}` : '',
+      task.kind === 'verify'
+        ? 'You verify; you are not expected to change the repository. Keep tools and screenshots outside the repository (use a temporary directory). Commit only a regression test for a defect you found. Your final message is the stored evidence: say what you ran, what you saw and your verdict.'
+        : '',
       task.kind === 'code'
         ? 'Commit your work on the current branch before you finish (keep build output such as dist/ and node_modules/ out of git). Anything left uncommitted is committed for you as "Office auto-commit"; the branch is then rebased onto the mission head and fast-forwarded when the project check passes.'
         : '',
@@ -281,7 +284,7 @@ async function missionRunFields(prisma: PrismaClient, task: Task & { missionId: 
     prisma.agent.findUniqueOrThrow({ where: { id: task.agentId } }),
     getSettings(prisma, task.projectId),
   ]);
-  const code = task.kind === 'code';
+  const code = task.kind === 'code' || task.kind === 'verify';
   return {
     taskKind: task.kind,
     readOnlyCheckout: !code,
@@ -857,6 +860,75 @@ export async function expireLeases(prisma: PrismaClient, hub: EventHub, now = ne
     }
   }
   return lost;
+}
+
+/** Owner pause: the turn ends, the worker slot is free, and the run waits without a reply timeout until resumed. */
+export async function pauseRun(prisma: PrismaClient, gateway: Pick<WorkerGateway, 'send'>, runId: string, userId: string) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId } });
+  if (!run) throw new HttpError(404, 'not_found');
+  const { count } = await prisma.taskRun.updateMany({
+    where: { id: runId, status: 'running', waitingForMessageId: null },
+    data: { pausedAt: new Date() },
+  });
+  if (count === 0) throw new HttpError(409, 'not_running', `run is ${run.status}`);
+  if (!run.workerId || !gateway.send(run.workerId, { type: 'run.interrupt', runId })) {
+    await prisma.taskRun.update({ where: { id: runId }, data: { pausedAt: null } });
+    throw new HttpError(409, 'worker_offline');
+  }
+  await audit(prisma, { userId, action: 'run.paused', targetType: 'run', targetId: runId });
+  return { paused: true };
+}
+
+/** Continues a paused run through the interrupt path: the owner's message is what it resumes with. */
+export async function resumePausedRun(prisma: PrismaClient, hub: EventHub, config: Config, runId: string, userId: string, body: string) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId } });
+  if (!run) throw new HttpError(404, 'not_found');
+  if (run.status !== 'waiting_reply' || !run.pausedAt) throw new HttpError(409, 'not_paused', `run is ${run.status}`);
+  const outbox: Outbox = [];
+  const message = await prisma.$transaction(async (tx) => {
+    const { message, deliveries } = await sendMessage(tx, config.messageLimits, {
+      projectId: run.projectId,
+      kind: 'human',
+      type: 'message',
+      body,
+      senderUserId: userId,
+      recipientAgentIds: [run.agentId],
+    });
+    queueMessageCreated(outbox, toMessageView({ ...message, deliveries }));
+    const { count } = await tx.taskRun.updateMany({
+      where: { id: runId, status: 'waiting_reply', pausedAt: { not: null } },
+      data: { pausedAt: null, waitingForMessageId: message.id, waitingSince: new Date() },
+    });
+    if (count === 0) throw new HttpError(409, 'not_paused');
+    await audit(tx, { userId, action: 'run.resumed', targetType: 'run', targetId: runId, detail: { messageId: message.id } });
+    return message;
+  });
+  hub.publishAll(outbox);
+  return { messageId: message.id };
+}
+
+/**
+ * Owner note for a running subagent. The SDK has no way to address one (a message with its parent_tool_use_id
+ * still reaches the main agent), so it goes to the parent, labelled, and the parent relays or applies it.
+ */
+export async function messageSubagent(prisma: PrismaClient, hub: EventHub, config: Config, runId: string, toolUseId: string, userId: string, body: string) {
+  const run = await prisma.taskRun.findUnique({ where: { id: runId }, include: { session: true } });
+  if (!run?.session) throw new HttpError(404, 'not_found');
+  const sub = await prisma.subagentRun.findFirst({ where: { sessionId: run.session.id, toolUseId } });
+  if (!sub) throw new HttpError(404, 'not_found');
+  if (run.status !== 'running' || sub.status !== 'running') throw new HttpError(409, 'not_running', 'the subagent is not running');
+  const outbox: Outbox = [];
+  const { message, deliveries } = await sendMessage(prisma, config.messageLimits, {
+    projectId: run.projectId,
+    kind: 'human',
+    type: 'message',
+    body: `For your subagent ${sub.subagentType ?? 'agent'} (${sub.description ?? toolUseId}, tool use ${toolUseId}): relay this to it if you can, otherwise apply it to its work yourself.\n\n${body}`,
+    senderUserId: userId,
+    recipientAgentIds: [run.agentId],
+  });
+  queueMessageCreated(outbox, toMessageView({ ...message, deliveries }));
+  hub.publishAll(outbox);
+  return { messageId: message.id };
 }
 
 /**

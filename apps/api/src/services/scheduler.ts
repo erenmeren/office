@@ -11,11 +11,18 @@ import { startPlanRun, startReviewRun } from './mission-service.js';
 import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
+import { embedMissingMemory } from './memory-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
 const PARKED_LOG_MS = 60_000;
 const PAUSE_MS = 30_000;
+
+/** Below the worker's 7-day worktree sweep. */
+const PAUSE_LIMIT_MS = 6 * 86_400_000;
+
+const liveMessageText = (m: { id: string; type: string; body: string }, sender: string) =>
+  `New ${m.type} from ${sender} while you work (message id ${m.id}). Take it into account; if it asks something, answer with send_message.\n\n${m.body}`;
 
 export class Scheduler {
   private timer?: NodeJS.Timeout;
@@ -28,6 +35,8 @@ export class Scheduler {
   private loggedBlocked = new Map<string, string>();
   // waiting_reply runs parked for their pinned worker, with when that was last logged
   private loggedParked = new Map<string, number>();
+  private offeredLive = new Set<string>();
+  private embedding: Promise<unknown> | undefined;
 
   constructor(
     private prisma: PrismaClient,
@@ -90,6 +99,15 @@ export class Scheduler {
       await this.assignReadyTasks();
     } catch (err) {
       this.log.error({ err }, 'scheduler could not list ready tasks');
+    }
+    // not awaited: the first call may download the model
+    this.embedding ??= embedMissingMemory(this.prisma, 20, this.log)
+      .catch((err) => this.log.error({ err }, 'embedding memory failed'))
+      .finally(() => (this.embedding = undefined));
+    try {
+      await this.deliverToLiveRuns();
+    } catch (err) {
+      this.log.error({ err }, 'delivering messages to live runs failed');
     }
     try {
       await this.wakeAgents();
@@ -252,6 +270,38 @@ export class Scheduler {
   }
 
   /**
+   * Mail newer than a running run goes into its live session. A refused delivery stays pending and is not
+   * offered to that run again: the agent reads it with read_inbox or at its next run.
+   */
+  private async deliverToLiveRuns() {
+    const online = new Set(this.gateway.onlineWorkers().map((w) => w.workerId));
+    const runs = await this.prisma.taskRun.findMany({
+      where: { status: 'running', kind: { in: ['task', 'chat', 'inbox'] }, waitingForMessageId: null, pausedAt: null, workerId: { in: [...online] } },
+      orderBy: { createdAt: 'asc' },
+    });
+    const offered = new Set<string>();
+    for (const run of runs) {
+      const messages = await this.prisma.message.findMany({
+        where: {
+          projectId: run.projectId,
+          createdAt: { gt: run.createdAt },
+          deliveries: { some: { recipientAgentId: run.agentId, status: 'pending' } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      for (const m of messages) {
+        const key = `${run.id}:${m.id}`;
+        offered.add(key);
+        if (this.offeredLive.has(key)) continue;
+        this.offeredLive.add(key);
+        const sender = m.senderAgentId ? (await this.prisma.agent.findUnique({ where: { id: m.senderAgentId } }))?.slug ?? 'an agent' : 'the owner';
+        this.gateway.send(run.workerId!, { type: 'run.message', runId: run.id, messageId: m.id, text: liveMessageText(m, sender) });
+      }
+    }
+    for (const key of this.offeredLive) if (!offered.has(key)) this.offeredLive.delete(key);
+  }
+
+  /**
    * waiting_reply runs whose reply arrived or whose wait timed out go back to their own worker (the SDK session
    * lives there). Without a free slot on it they stay parked; with it offline at the timeout they fail.
    */
@@ -262,6 +312,8 @@ export class Scheduler {
     for (const id of this.loggedParked.keys()) if (!ids.has(id)) this.loggedParked.delete(id);
     for (const run of waiting) {
       try {
+        // a paused run waits for the owner, until the worker's worktree sweep would take its worktree
+        if (run.pausedAt && Date.now() - run.pausedAt.getTime() < PAUSE_LIMIT_MS) continue;
         const waited = run.waitingForMessageId ? await this.prisma.message.findUnique({ where: { id: run.waitingForMessageId } }) : null;
         // an owner-authored waited message is an interrupt: it stands for its own reply
         const reply = waited?.senderUserId

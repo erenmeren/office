@@ -69,7 +69,7 @@ export const EventType = z.enum([
 ]);
 export type EventType = z.infer<typeof EventType>;
 
-export const TaskKindSchema = z.enum(['code', 'analysis', 'review']);
+export const TaskKindSchema = z.enum(['code', 'analysis', 'review', 'verify']);
 export type TaskKind = z.infer<typeof TaskKindSchema>;
 
 export const MissionStatusSchema = z.enum([

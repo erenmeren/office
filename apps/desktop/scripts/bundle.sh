@@ -21,6 +21,9 @@ cp apps/desktop/pgstub/* "$PG/share/postgresql/extension/"
 find "$PG/lib" -type l -exec sh -c 'cp --remove-destination "$(readlink -f "$1")" "$1"' _ {} \;
 # dev-only trees that pnpm deploy copies along with the workspace packages
 rm -rf "$OUT"/server/node_modules/@office/*/{src,test,data,tsconfig.json,vitest.config.ts}
+# onnxruntime (local memory embeddings) ships every platform's binaries; this bundle is Linux x64 only
+ORT="$OUT/server/node_modules/onnxruntime-node/bin/napi-v6"
+rm -rf "$ORT/darwin" "$ORT/win32" "$ORT/linux/arm64"
 # node-pty (manual sessions) is a native module: the worker runs under Electron's Node (ELECTRON_RUN_AS_NODE), whose ABI differs
 # from the system Node that pnpm built it with, so rebuild it against Electron's headers (node-addon-api is hoisted next to it)
 ELECTRON_VERSION=$(node -p "require('./apps/desktop/node_modules/electron/package.json').version")

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageView } from '@office/shared';
-import { creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, ownerRoom, projector, roomOrigin, sprite, themeFor, waitingMail } from './office';
+import { creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, ownerRoom, projector, roomOrigin, sprite, themeFor, waitingMail, timelineLanes } from './office';
 import type { Agent, ClaudeSession, LiveSession, Overview, TerminalView } from './queries';
 
 describe('floorLayout', () => {
@@ -71,4 +71,20 @@ it("ownerRoom counts the project's running manual and background sessions", () =
   expect(room).toMatchObject({ status: 'running', task: 'Your Claude sessions: 1 manual, 1 background', workerName: 'Office terminal' });
   expect(room.subs.map((s) => s.name)).toEqual(['a-sessio', 'job x']);
   expect(['owner'].map(themeFor)).toEqual(['couch']);
+});
+
+describe('timelineLanes', () => {
+  const rooms = [{ agentId: 'a' }, { agentId: 'b' }];
+  const row = (agentId: string, ts: number) => ({ agentId, ts: new Date(ts).toISOString() });
+
+  it('places events on a shared axis, oldest at 0', () => {
+    const { lanes, start } = timelineLanes(rooms, [row('a', 1000), row('b', 3000), row('stranger', 0)], 5000);
+    expect(start).toBe(1000);
+    expect(lanes[0]!.events.map((e) => e.at)).toEqual([0]);
+    expect(lanes[1]!.events.map((e) => e.at)).toEqual([0.5]);
+  });
+
+  it('keeps empty lanes when nothing happened', () => {
+    expect(timelineLanes(rooms, [], 5000).lanes.map((l) => l.events)).toEqual([[], []]);
+  });
 });

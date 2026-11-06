@@ -80,6 +80,31 @@ describe('phase 3 end to end with the fake runtime', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it('a message reaches the running session; pause and resume keep the session', async () => {
+    const project = await prisma.project.findUniqueOrThrow({ where: { slug: 'office-sandbox' } });
+    const developer = await prisma.agent.findUniqueOrThrow({ where: { slug: 'developer' } });
+    const task = (await req('POST', '/tasks', { projectId: project.id, agentId: developer.id, title: 'Slow', description: 'SLOW' })).json();
+    await app.scheduler.tick();
+    const running = await until(() => prisma.taskRun.findFirst({ where: { taskId: task.id, status: 'running' } }), 'running');
+
+    const conv = (await req('POST', '/conversations', { projectId: project.id, kind: 'human', agentIds: [developer.id] })).json();
+    const message = (await req('POST', `/conversations/${conv.id}/messages`, { type: 'message', body: 'Use Redis.' })).json();
+    await app.scheduler.tick();
+    await until(
+      () => prisma.messageDelivery.findFirst({ where: { messageId: message.id, status: 'acknowledged' } }),
+      'delivery acknowledged',
+    );
+    expect((await events(running.id)).find((e) => e.type === 'agent.message.received')?.payload).toMatchObject({ messageId: message.id });
+
+    expect((await req('POST', `/runs/${running.id}/pause`)).statusCode).toBe(200);
+    await until(() => prisma.taskRun.findFirst({ where: { id: running.id, status: 'waiting_reply' } }), 'paused');
+    await app.scheduler.tick();
+    expect((await prisma.taskRun.findUniqueOrThrow({ where: { id: running.id } })).status).toBe('waiting_reply');
+    expect((await req('POST', `/runs/${running.id}/resume`, {})).statusCode).toBe(200);
+    await app.scheduler.tick();
+    await until(() => prisma.taskRun.findFirst({ where: { id: running.id, status: 'succeeded' } }), 'resumed run finished');
+  });
+
   it('question, suspend, inbox run, reply, resume, summary, memory and context pack', async () => {
     const project = await prisma.project.findUniqueOrThrow({ where: { slug: 'office-sandbox' } });
     const projectId = project.id;

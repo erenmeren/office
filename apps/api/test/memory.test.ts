@@ -1,6 +1,7 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { buildContextPack } from '../src/services/context-pack.js';
-import { createEntry } from '../src/services/memory-service.js';
+import { configureEmbeddings } from '../src/lib/embeddings.js';
+import { createEntry, embedMissingMemory, fuseRanks } from '../src/services/memory-service.js';
 import { makeApp } from './helpers.js';
 
 describe('memory', () => {
@@ -23,6 +24,47 @@ describe('memory', () => {
       projectId, scope: 'project', type: 'decision', title: 't', content: 'c',
       authorType: 'user', status: 'verified', sources: [], ...over,
     } as Parameters<typeof createEntry>[1]);
+
+  describe('semantic search', () => {
+    // one axis per meaning, so a synonym with no shared keyword is close and anything else is not
+    const custom = async (text: string) => {
+      const t = text.toLowerCase();
+      return [/car|automobile/.test(t) ? 1 : 0, /fish|salmon/.test(t) ? 1 : 0, 0.01];
+    };
+    afterEach(() => configureEmbeddings({ enabled: false, cacheDir: '' }));
+
+    it('finds an entry by meaning, keeps keyword hits, and never returns the vector', async () => {
+      configureEmbeddings({ enabled: true, cacheDir: '', custom });
+      const car = await add({ title: 'Parking', content: 'The car stays in the garage' });
+      const fish = await add({ title: 'Lunch', content: 'Salmon on Fridays' });
+      const stored = await embedMissingMemory(t.prisma, 100);
+      expect(stored).toBeGreaterThanOrEqual(2);
+      const search = async (q: string) =>
+        (await t.app.inject({ method: 'GET', url: `/memory?projectId=${projectId}&q=${q}`, headers: { cookie } })).json();
+      const hits = await search('automobile');
+      expect(hits.map((h: { id: string }) => h.id)).toEqual([car.id]);
+      expect(hits[0]).not.toHaveProperty('localEmbedding');
+      expect((await search('garage')).map((h: { id: string }) => h.id)).toEqual([car.id]);
+      expect((await search('salmon')).map((h: { id: string }) => h.id)).toEqual([fish.id]);
+      expect(await embedMissingMemory(t.prisma, 100)).toBe(0);
+
+      configureEmbeddings({ enabled: false, cacheDir: '' });
+      expect(await search('automobile')).toEqual([]);
+      expect((await search('garage')).map((h: { id: string }) => h.id)).toEqual([car.id]);
+    });
+
+    it('a failing model leaves search on keywords and stores nothing', async () => {
+      configureEmbeddings({ enabled: true, cacheDir: '', custom: async () => { throw new Error('offline'); } });
+      await add({ title: 'Offline', content: 'keyword survives' });
+      expect(await embedMissingMemory(t.prisma, 100)).toBe(0);
+      const res = await t.app.inject({ method: 'GET', url: `/memory?projectId=${projectId}&q=survives`, headers: { cookie } });
+      expect(res.json()).toHaveLength(1);
+    });
+
+    it('fuseRanks puts an id found by both lists first', () => {
+      expect(fuseRanks([['a', 'b'], ['b', 'c']], 2)).toEqual(['b', 'a']);
+    });
+  });
 
   it('owner adds a verified decision and finds it by keyword', async () => {
     const res = await t.app.inject({

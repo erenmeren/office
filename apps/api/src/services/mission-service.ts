@@ -140,7 +140,7 @@ export function planPrompt(mission: Mission & { project: Project }, roster: Agen
     [
       'Rules:',
       '- Split the work into small, verifiable tasks.',
-      '- Give every task a `kind`: code, analysis or review.',
+      '- Give every task a `kind`: code, analysis, review or verify. Use `verify` for QA that must install tools or run the product without changing the repository (browser checks, end-to-end runs); its final message is the evidence. `review` and `analysis` are read-only and cannot install anything.',
       '- Assign every task to one agent by slug from the team above.',
       '- Express order with `dependsOn` (task keys). Run tasks in parallel only when they touch disjoint areas.',
       '- Every task needs requirements and acceptance criteria.',
@@ -509,13 +509,17 @@ export async function onTaskStatusChanged(db: Db, outbox: Outbox, task: Task) {
   if (mission.status === 'approved' || mission.status === 'running') {
     await moveMission(db, outbox, mission.id, ['approved', 'running'], { status: 'review', reviewRunId: null });
   } else if (mission.status === 'failed' && tasks.every((t) => t.status === 'done')) {
-    await moveMission(db, outbox, mission.id, ['failed'], { status: 'done' });
+    await moveMission(db, outbox, mission.id, ['failed'], { status: 'done', summary: ownerClosed(mission) });
   } else if (mission.status === 'review' && mission.reviewRunId && !tasks.some((t) => t.status === 'review')) {
     // a review run already took its turn (reviewRunId kept) and the owner decided the last undecided task: same rule as the review-run settle
     const done = tasks.every((t) => t.status === 'done');
-    await moveMission(db, outbox, mission.id, ['review'], { status: done ? 'done' : 'failed' });
+    await moveMission(db, outbox, mission.id, ['review'], { status: done ? 'done' : 'failed', summary: ownerClosed(mission) });
   }
 }
+
+/** The Chief's summary predates the owner's decision, so it is kept only as the earlier note. */
+const ownerClosed = (mission: Mission) =>
+  `Closed by the owner's decision.${mission.summary ? ` Chief's note before that: ${mission.summary}` : ''}`;
 
 export async function reviewPrompt(db: Db, mission: Mission) {
   const tasks = await db.task.findMany({ where: { missionId: mission.id }, orderBy: { createdAt: 'asc' } });

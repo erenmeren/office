@@ -12,6 +12,8 @@ export interface ToolBridge {
 /** `interrupted` fires on the owner's "interrupt and send": the adapter ends the turn with a `suspended` result. */
 export interface RunControl {
   interrupted: AbortSignal;
+  /** Set by the adapter while the run can take messages; false once it cannot. */
+  deliver?: (messageId: string, text: string) => boolean;
 }
 
 export interface RuntimeAdapter {

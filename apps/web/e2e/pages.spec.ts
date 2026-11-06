@@ -197,7 +197,7 @@ authed.describe('every page renders without console noise', () => {
     await expect(page.getByRole('table', { name: 'Files changed' }).getByText('LoginForm.test.tsx')).toBeVisible();
     await expect(page.getByRole('table', { name: 'Files changed' }).getByText('LoginForm.tsx', { exact: true })).toHaveCount(0);
 
-    await expect(page.getByText('Delivered at the next run boundary')).toBeVisible();
+    await expect(page.getByText('Reaches a running session within seconds, otherwise its next run.')).toBeVisible();
     await expect(page.getByRole('radiogroup', { name: 'Recipient' }).getByRole('radio')).toHaveText([agent.name]);
 
     // the in-app confirm dialog replaces window.confirm
@@ -370,6 +370,17 @@ test('login page is quiet when logged out', async ({ page, noise }) => {
   await page.goto('/login');
   await page.waitForLoadState('networkidle');
   await expect(page.getByRole('button', { name: /log in|create the owner account/i })).toBeVisible();
+  expectQuiet(noise);
+});
+
+authed('the office page switches between floor, list and timeline', async ({ page, noise }) => {
+  await page.goto('/office');
+  await page.getByRole('radio', { name: 'List' }).click();
+  await expect(page.getByRole('table', { name: 'Team' })).toBeVisible();
+  await page.getByRole('radio', { name: 'Timeline' }).click();
+  await expect(page.getByRole('heading', { name: 'Timeline' }).or(page.getByText('Timeline', { exact: true }).first())).toBeVisible();
+  await page.getByRole('radio', { name: 'Floor' }).click();
+  await expect(page.getByRole('table', { name: 'Team' })).toBeHidden();
   expectQuiet(noise);
 });
 

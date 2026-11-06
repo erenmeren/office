@@ -5,5 +5,5 @@ config({ path: new URL('../../.env', import.meta.url).pathname, quiet: true });
 
 export default defineConfig({
   // test files share one database and truncate it, so run them serially
-  test: { passWithNoTests: true, fileParallelism: false },
+  test: { passWithNoTests: true, fileParallelism: false, env: { OFFICE_EMBEDDINGS: 'off' } },
 });

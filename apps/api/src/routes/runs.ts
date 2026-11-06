@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
-import { cancelRun, interruptRun } from '../services/run-service.js';
+import { cancelRun, interruptRun, messageSubagent, pauseRun, resumePausedRun } from '../services/run-service.js';
 import { listEvents } from '../services/event-store.js';
 
 export async function runRoutes(app: FastifyInstance, opts: { config: Config }) {
@@ -29,6 +29,23 @@ export async function runRoutes(app: FastifyInstance, opts: { config: Config }) 
     const { id } = req.params as { id: string };
     const { body } = z.object({ body: z.string().trim().min(1).max(20_000) }).parse(req.body);
     return interruptRun(app.prisma, app.hub, opts.config, app.gateway, id, req.user!.id, body);
+  });
+
+  app.post('/runs/:id/pause', async (req) => {
+    const { id } = req.params as { id: string };
+    return pauseRun(app.prisma, app.gateway, id, req.user!.id);
+  });
+
+  app.post('/runs/:id/resume', async (req) => {
+    const { id } = req.params as { id: string };
+    const { body } = z.object({ body: z.string().trim().min(1).max(20_000).default('Continue where you stopped.') }).parse(req.body ?? {});
+    return resumePausedRun(app.prisma, app.hub, opts.config, id, req.user!.id, body);
+  });
+
+  app.post('/runs/:id/subagents/:toolUseId/messages', async (req) => {
+    const { id, toolUseId } = req.params as { id: string; toolUseId: string };
+    const { body } = z.object({ body: z.string().trim().min(1).max(20_000) }).parse(req.body);
+    return messageSubagent(app.prisma, app.hub, opts.config, id, toolUseId, req.user!.id, body);
   });
 
   app.get('/runs/:id/events', async (req) => {

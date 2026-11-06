@@ -232,7 +232,7 @@ describe('phase 4 end to end with the fake runtime', () => {
     expect(await getMission(missionId)).toMatchObject({ status: 'review', reviewRunId: reviewRun.id });
     expect((await req('POST', `/tasks/${b.id}/done`, {})).statusCode).toBe(200);
     mission = await waitMission(missionId, 'done');
-    expect(mission.summary).toBe('fake review');
+    expect(mission.summary).toBe("Closed by the owner's decision. Chief's note before that: fake review");
 
     // 6. persistence: the mission view carries tasks, dependencies, approvals, checks; the task view its git
     expect(mission.planRun).toMatchObject({ status: 'succeeded' });

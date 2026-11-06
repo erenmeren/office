@@ -232,6 +232,36 @@ describe('orchestration', () => {
     expect(evidenceRule(e('failed'))).toEqual({ ok: false, reason: 'check failed on the latest checked run' });
   });
 
+  it('a verify task gets a writable worktree and the check; its final message lets the Chief close it without commits', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = [{ ...plan.tasks[0]!, kind: 'verify', requiredConsultations: [] }];
+    const { w, k } = await s.approved(1, plan);
+    const run = await s.assign(w);
+    expect(run).toMatchObject({ taskKind: 'verify', readOnlyCheckout: false });
+    expect(run.checkCommand).toBeDefined();
+    expect(run.prompt).toContain('You verify');
+    await s.finish(w, run, { status: 'succeeded', resultText: 'Loaded at 360px, no overflow. Verdict: pass.', git: { ...git(0), integration: 'none' }, check: check('passed') });
+    expect((await s.t.prisma.artifact.findMany({ where: { taskId: k.a, kind: 'verify' } })).length).toBe(1);
+    const review = await s.assign(w);
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: true });
+    expect((await s.task(k.a!)).status).toBe('done');
+  });
+
+  it('verify evidence: the final message and the check count, commits are optional but must be integrated', () => {
+    const task = { kind: 'verify' };
+    const artifacts = [{ kind: 'verify' }];
+    const run = (over: object) => ({ status: 'succeeded', git: null, check: { status: 'passed', exitCode: 0 }, ...over });
+    const e = (r: object, a: object[] = artifacts) => ({ task, runs: [r], artifacts: a, memoryCount: 0 }) as unknown as Parameters<typeof evidenceRule>[0];
+    expect(evidenceRule(e(run({})))).toEqual({ ok: true });
+    expect(evidenceRule(e(run({}), []))).toEqual({ ok: false, reason: 'no verify artifact for the task' });
+    expect(evidenceRule(e(run({ status: 'failed' })))).toEqual({ ok: false, reason: 'no succeeded run' });
+    expect(evidenceRule(e(run({ check: { status: 'failed', exitCode: 1 } })))).toEqual({ ok: false, reason: 'check failed on the latest checked run' });
+    const git = { baseCommit: 'a', headCommit: 'b', integration: 'needs_integration' };
+    expect(evidenceRule(e(run({ git })))).toEqual({ ok: false, reason: 'commits not integrated' });
+    expect(evidenceRule(e(run({ git: { ...git, integration: 'fast_forwarded' } })))).toEqual({ ok: true });
+  });
+
   it('owner failed override: review -> failed with the note, audited, dependent blocked', async () => {
     s = await setup();
     const { w, k } = await s.approved();
@@ -478,6 +508,7 @@ describe('orchestration', () => {
     expect(await s.mission(m.id)).toMatchObject({ status: 'review', reviewRunId: review.runId });
     expect((await s.req('POST', `/tasks/${k.d}/done`, {})).statusCode).toBe(200);
     expect((await s.mission(m.id)).status).toBe(aEnd === 'failed' ? 'failed' : 'done');
+    expect((await s.mission(m.id)).summary).toBe("Closed by the owner's decision. Chief's note before that: partial");
   });
 
   it('required consultation: done needs a question to the consultant and a reply in the task conversation', async () => {

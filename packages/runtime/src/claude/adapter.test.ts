@@ -17,6 +17,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   createSdkMcpServer: (o: { name: string; tools: unknown[] }) => ({ type: 'sdk', name: o.name, instance: {}, tools: o.tools }),
 }));
 
+import type { RunControl } from '../types.js';
+
 const { ClaudeAdapter, buildQueryOptions, effectiveAllowedTools } = await import('./adapter.js');
 
 const spec: RunSpec = {
@@ -64,6 +66,43 @@ describe('ClaudeAdapter', () => {
     expect(events.filter((e) => e.type === 'agent.failed')).toHaveLength(1);
     expect(res.status).toBe('failed');
     expect(res.sdkSessionId).toBe('sess-9');
+  });
+
+  describe('messages into the live session', () => {
+    const start = async (messages: unknown[], during: (control: RunControl) => void) => {
+      const control: RunControl = { interrupted: new AbortController().signal };
+      h.messages = messages;
+      h.beforeEnd = async () => during(control);
+      const events: EventBody[] = [];
+      const res = await new ClaudeAdapter().run(spec, { emit: (e) => events.push(e) }, new AbortController().signal, undefined, control);
+      const params = h.calls.at(-1) as { prompt: AsyncIterable<{ message: { content: string } }> };
+      return { control, events, res, input: params.prompt };
+    };
+    const texts = async (input: AsyncIterable<{ message: { content: string } }>) => {
+      const out: string[] = [];
+      for await (const m of input) out.push(m.message.content);
+      return out;
+    };
+
+    it('takes a message while it runs, then refuses and closes the input', async () => {
+      let taken: boolean | undefined;
+      const { control, events, input } = await start([init, { ...base, type: 'result', subtype: 'success', result: 'ok' }], (c) => {
+        taken = c.deliver?.('m1', 'use Redis');
+      });
+      expect(taken).toBe(true);
+      expect(events.find((e) => e.type === 'agent.message.received')?.payload).toEqual({ count: 1, messageId: 'm1' });
+      expect(control.deliver).toBeUndefined();
+      expect(await texts(input)).toEqual(['hi', 'use Redis']);
+    });
+
+    it('uses the last result when a background task starts another turn', async () => {
+      const task = (subtype: string) => ({ ...base, type: 'system', subtype, task_id: 't1' });
+      const { res } = await start(
+        [init, task('task_started'), { ...base, type: 'result', subtype: 'success', result: 'first' }, task('task_notification'), { ...base, type: 'result', subtype: 'success', result: 'last' }],
+        () => {},
+      );
+      expect(res.resultText).toBe('last');
+    });
   });
 
   it('redacts secrets in resultText', async () => {
