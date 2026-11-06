@@ -92,7 +92,7 @@ export async function buildApp(
   await app.register(agentRoutes);
   await app.register(skillRoutes, { config });
 
-  configureEmbeddings({ enabled: config.embeddings, cacheDir: join(config.dataDir, 'models') });
+  configureEmbeddings({ enabled: config.embeddings, cacheDir: join(config.dataDir, 'models'), modelsDir: config.modelsDir });
   const hub = new EventHub();
   const gateway = new WorkerGateway(app.prisma, hub, config, app.log);
   const scheduler = new Scheduler(app.prisma, hub, gateway, config, app.log);

@@ -1,6 +1,9 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { buildContextPack } from '../src/services/context-pack.js';
-import { configureEmbeddings } from '../src/lib/embeddings.js';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { configureEmbeddings, embed } from '../src/lib/embeddings.js';
 import { createEntry, embedMissingMemory, fuseRanks } from '../src/services/memory-service.js';
 import { makeApp } from './helpers.js';
 
@@ -59,6 +62,14 @@ describe('memory', () => {
       expect(await embedMissingMemory(t.prisma, 100)).toBe(0);
       const res = await t.app.inject({ method: 'GET', url: `/memory?projectId=${projectId}&q=survives`, headers: { cookie } });
       expect(res.json()).toHaveLength(1);
+    });
+
+    it('a models directory without the model never downloads it', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'office-models-'));
+      configureEmbeddings({ enabled: true, cacheDir: dir, modelsDir: dir });
+      expect(await embed('x')).toBeNull();
+      expect(readdirSync(dir)).toEqual([]);
+      rmSync(dir, { recursive: true });
     });
 
     it('fuseRanks puts an id found by both lists first', () => {

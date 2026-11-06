@@ -17,6 +17,7 @@ The owner asked for every open item except Windows and macOS, and declined `Proj
 - Live delivery, Pause and Resume, subagent notes, local semantic search, Pixel Office List and Timeline: see the 2026-11-06 lines in `CLAUDE.md`.
 - SDK probe (0.3.316): a streamed message reaches the main agent mid-turn; a background subagent starts another turn after the first `result`; a message with `parent_tool_use_id` does not reach the subagent.
 - Evidence: real Claude on an isolated stack, a message sent during a Bash sleep shaped the final answer and left `agent.message.received`; a paused run held no lease, stayed `waiting_reply`, and resumed as the same run. Playwright passes on an isolated database and port. Model check: English queries matched well, a Turkish one 0.38 against its entry and 0.42 against an unrelated one.
+- Bundled model (same day, owner): the desktop app ships the model in `resources/models` and never downloads it. Evidence: loaded with no network (`unshare -rn`) and an empty cache, and the installed app refilled a cleared vector with its old model copy deleted. The app grew from 1.5 GB to 1.6 GB.
 - Maratus: the redesign sat on branches of the `tetris` project. It is now local branch `redesign/calm` of `maratus-website` (site at the repo root, based on `maratus-site`), checked in Chromium at 360, 768 and 1440 px (no overflow, no axe violations, no console errors, no external requests). Not pushed or deployed; `maratus-website` is not yet an Office project.
 
 ## Outstanding
