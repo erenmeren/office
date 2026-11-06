@@ -1,4 +1,4 @@
-/** Local text embeddings; memory text never leaves the machine (the model itself is downloaded once). */
+/** Local text embeddings; memory text never leaves the machine. The desktop app ships the model; elsewhere it is downloaded once. */
 export type Embed = (text: string) => Promise<number[]>;
 
 // multilingual: the owner searches in Turkish, agents mostly write English
@@ -8,8 +8,8 @@ const RETRY_MS = 10 * 60_000;
 let embedder: Embed | null = null;
 let failedAt = 0;
 
-/** Off when `enabled` is false; `custom` replaces the model (tests). */
-export function configureEmbeddings(o: { enabled: boolean; cacheDir: string; custom?: Embed }) {
+/** Off when `enabled` is false; `modelsDir` holds the model and nothing is downloaded; `custom` replaces the model (tests). */
+export function configureEmbeddings(o: { enabled: boolean; cacheDir: string; modelsDir?: string; custom?: Embed }) {
   failedAt = 0;
   if (o.custom) embedder = o.custom;
   else if (!o.enabled) embedder = null;
@@ -18,7 +18,10 @@ export function configureEmbeddings(o: { enabled: boolean; cacheDir: string; cus
     embedder = (text) => {
       pipe ??= (async () => {
         const { env, pipeline } = await import('@huggingface/transformers');
-        env.cacheDir = o.cacheDir;
+        if (o.modelsDir) {
+          env.localModelPath = o.modelsDir;
+          env.allowRemoteModels = false;
+        } else env.cacheDir = o.cacheDir;
         const extract = await pipeline('feature-extraction', MODEL, { dtype: 'q8' });
         return async (t: string) => Array.from((await extract(t, { pooling: 'mean', normalize: true })).data as Float32Array);
       })().catch((err) => {

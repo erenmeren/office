@@ -1,7 +1,7 @@
 // Electron main process: starts the bundled Postgres, runs boot.mjs (migrate, seed, enroll the worker),
 // then the API, the web server and the worker as child processes, and opens the UI in one window.
 // Resources (see scripts/bundle.sh): <res>/server (API, worker, db client, Postgres binaries, boot.mjs),
-// <res>/web (Next.js standalone server), <res>/templates. State lives under $XDG_DATA_HOME/office.
+// <res>/web (Next.js standalone server), <res>/templates, <res>/models. State lives under $XDG_DATA_HOME/office.
 import { app, BrowserWindow, dialog, powerSaveBlocker, shell } from 'electron';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
@@ -124,6 +124,7 @@ async function start(): Promise<void> {
     WEB_ORIGIN,
     OFFICE_DATA_DIR: dataDir,
     OFFICE_SKILL_IMPORT_ROOTS: join(homedir(), '.claude'),
+    OFFICE_MODELS_DIR: join(RES, 'models'),
     ...extra,
   });
   node('web', join(RES, 'web', 'apps', 'web', 'server.js'), join(RES, 'web', 'apps', 'web'), {

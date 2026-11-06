@@ -3,6 +3,7 @@
 #   build/server  API, worker, db client, Postgres binaries and boot.mjs (pnpm deploy of @office/desktop-server)
 #   build/web     the Next.js standalone server, built for the desktop ports
 #   build/templates  the agent and subagent templates (seed)
+#   build/models  the memory search model, so the app never downloads it
 # Then `pnpm --filter @office/desktop start` runs it unpackaged, `pnpm --filter @office/desktop dist` makes the AppImage.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
@@ -37,4 +38,15 @@ cp -r apps/web/.next/static "$OUT/web/apps/web/.next/static"
 cp -r apps/web/public "$OUT/web/apps/web/public"
 cp -r templates "$OUT/templates"
 cp apps/desktop/assets/icon.png "$OUT/icon.png"
+# the model comes from Hugging Face once per build machine, and loading it here proves it runs under Electron's Node
+MODEL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/office-models"
+ELECTRON_RUN_AS_NODE=1 apps/desktop/node_modules/.bin/electron -e "
+  import('$PWD/$OUT/server/node_modules/@office/api/dist/lib/embeddings.js').then(async ({ configureEmbeddings, embed }) => {
+    configureEmbeddings({ enabled: true, cacheDir: '$MODEL_CACHE' });
+    const v = await embed('model check', console);
+    if (!v) process.exit(1);
+    console.log('memory search model loads, dimension', v.length);
+    process.exit(0);
+  });"
+cp -r "$MODEL_CACHE" "$OUT/models"
 du -sh "$OUT/server" "$OUT/web"
