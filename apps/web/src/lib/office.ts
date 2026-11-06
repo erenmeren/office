@@ -197,3 +197,18 @@ export function officeRooms(team: Overview['team'], sessions: LiveSession[], age
     };
   });
 }
+
+/** One lane per room with its events placed on a shared axis (0 oldest, 1 now); events of agents outside the rooms are dropped. */
+export function timelineLanes<T extends { agentId: string; ts: string }>(rooms: { agentId: string }[], rows: T[], now: number) {
+  const known = new Set(rooms.map((r) => r.agentId));
+  const times = rows.filter((r) => known.has(r.agentId)).map((r) => Date.parse(r.ts));
+  const start = times.length ? Math.min(...times) : now;
+  const span = Math.max(now - start, 1);
+  return {
+    start,
+    lanes: rooms.map((room) => ({
+      agentId: room.agentId,
+      events: rows.filter((r) => r.agentId === room.agentId).map((event) => ({ event, at: Math.min((Date.parse(event.ts) - start) / span, 1) })),
+    })),
+  };
+}

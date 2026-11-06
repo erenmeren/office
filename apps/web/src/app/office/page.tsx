@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { OfficeFloor } from '@/components/office-floor';
+import { OfficeList, OfficeTimeline } from '@/components/office-views';
 import { OfficeAgentPanel, OfficeApprovals, OfficeOwnerPanel } from '@/components/office-panel';
 import { Card, CardContent } from '@/components/ui/card';
 import { DashboardStack } from '@/components/ui/kpi-card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
+import { Segmented } from '@/components/ui/segmented';
 import { mailFromMessage, officeRooms, ownerRoom, OWNER_ROOM, oneLine, waitingMail, type Mail } from '@/lib/office';
 import { useProject } from '@/lib/project';
 import { useActivity, useAgents, useClaudeSessions, useLiveSessions, useOverview, useTerminals, type Project } from '@/lib/queries';
@@ -77,6 +79,7 @@ function OfficeBody({ project }: { project: Project }) {
   const claude = useClaudeSessions().data?.sessions ?? [];
   const now = useNow();
   const [picked, setPicked] = useState<string | null>(null);
+  const [view, setView] = useState<'floor' | 'list' | 'timeline'>('floor');
   // the owner's own desk sits after the team: manual sessions in Office terminals and background sessions
   const rooms = [...officeRooms(overview?.team ?? [], sessions, agents), ownerRoom(terminals, claude, project.id)];
   const selected = rooms.find((r) => r.agentId === picked) ?? rooms.find((r) => r.status !== 'idle') ?? rooms[0];
@@ -99,6 +102,16 @@ function OfficeBody({ project }: { project: Project }) {
           </PageDescription>
         </div>
         <PageActions>
+          <Segmented
+            label="View"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: 'floor', label: 'Floor' },
+              { value: 'list', label: 'List' },
+              { value: 'timeline', label: 'Timeline' },
+            ]}
+          />
           <span className="flex h-[34px] items-center gap-2 rounded-[10px] border border-mint/30 bg-mint/8 px-3 font-mono text-xs text-mint">
             <span className="size-2 rounded-full bg-mint" style={{ animation: 'om-live 1.6s ease-out infinite' }} />
             live · {new Date(now).toLocaleTimeString([], { hour12: false })}
@@ -106,7 +119,9 @@ function OfficeBody({ project }: { project: Project }) {
         </PageActions>
       </PageHeader>
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <Card className="relative py-0">
+        {view === 'list' && <OfficeList rooms={rooms} selected={selected?.agentId ?? null} onSelect={setPicked} now={now} />}
+        {view === 'timeline' && <OfficeTimeline key={project.id} projectId={project.id} rooms={rooms} selected={selected?.agentId ?? null} onSelect={setPicked} now={now} />}
+        {view === 'floor' && <Card className="relative py-0">
           <div className="absolute top-3.5 left-4 z-[2] flex items-center gap-3.5 text-[11px] text-ink-3">
             {LEGEND.map(([color, label]) => (
               <span key={label} className="flex items-center gap-1.5">
@@ -120,7 +135,7 @@ function OfficeBody({ project }: { project: Project }) {
           ) : (
             <OfficeFloor rooms={rooms} selected={selected?.agentId ?? null} onSelect={setPicked} now={now} mail={mail} bubbles={bubbles} />
           )}
-        </Card>
+        </Card>}
         <DashboardStack>
           <OfficeApprovals projectId={project.id} rooms={rooms} />
           {selected && selected.agentId === OWNER_ROOM ? (

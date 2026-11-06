@@ -17,9 +17,9 @@ export function DashboardActivity() {
   return <ProjectActivity key={projectId} projectId={projectId} />;
 }
 
-function ProjectActivity({ projectId }: { projectId?: string }) {
+/** Stored rows merged with the live events that arrived since mount; remount it per project. */
+export function useLiveActivity(projectId: string | undefined, limit: number) {
   const stored = useActivity(projectId).data;
-  const agents = useAgents().data;
   const [live, setLive] = useState<ActivityItem[]>([]);
 
   useEffect(() => {
@@ -27,14 +27,19 @@ function ProjectActivity({ projectId }: { projectId?: string }) {
     return uiSocket().subscribe(`project:${projectId}`, 0, (m) => {
       if (m.type !== 'event') return;
       const row = activityFromEvent(m.event);
-      setLive((rows) => mergeActivity([row], rows, LIMIT));
+      setLive((rows) => mergeActivity([row], rows, limit));
     });
-  }, [projectId]);
+  }, [projectId, limit]);
+  return { stored, rows: mergeActivity(live, stored ?? [], limit) };
+}
+
+function ProjectActivity({ projectId }: { projectId?: string }) {
+  const { stored, rows } = useLiveActivity(projectId, LIMIT);
+  const agents = useAgents().data;
 
   // live rows carry no name: the agent list, then a stored row of the same agent, then a generic label
   const name = (r: ActivityItem) =>
     agents?.find((a) => a.id === r.agentId)?.name ?? (r.agentName || stored?.find((s) => s.agentId === r.agentId)?.agentName || 'Agent');
-  const rows = mergeActivity(live, stored ?? [], LIMIT);
   return (
     <Card>
       <CardHeader>

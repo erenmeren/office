@@ -232,6 +232,22 @@ describe('orchestration', () => {
     expect(evidenceRule(e('failed'))).toEqual({ ok: false, reason: 'check failed on the latest checked run' });
   });
 
+  it('a verify task gets a writable worktree and the check; its final message lets the Chief close it without commits', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks = [{ ...plan.tasks[0]!, kind: 'verify', requiredConsultations: [] }];
+    const { w, k } = await s.approved(1, plan);
+    const run = await s.assign(w);
+    expect(run).toMatchObject({ taskKind: 'verify', readOnlyCheckout: false });
+    expect(run.checkCommand).toBeDefined();
+    expect(run.prompt).toContain('You verify');
+    await s.finish(w, run, { status: 'succeeded', resultText: 'Loaded at 360px, no overflow. Verdict: pass.', git: { ...git(0), integration: 'none' }, check: check('passed') });
+    expect((await s.t.prisma.artifact.findMany({ where: { taskId: k.a, kind: 'verify' } })).length).toBe(1);
+    const review = await s.assign(w);
+    expect(await s.tool(w, review, 'review_task', { taskId: k.a, decision: 'done' })).toMatchObject({ ok: true });
+    expect((await s.task(k.a!)).status).toBe('done');
+  });
+
   it('verify evidence: the final message and the check count, commits are optional but must be integrated', () => {
     const task = { kind: 'verify' };
     const artifacts = [{ kind: 'verify' }];
