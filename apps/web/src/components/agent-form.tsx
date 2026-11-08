@@ -257,131 +257,140 @@ export function AgentForm({
           </Select>
         </div>
       </div>
-      <div className="space-y-1">
-        <Label>Allowed tools</Label>
-        <ToolPicker lockAlwaysOn value={form.tools} onChange={(tools) => setForm({ ...form, tools })} />
-      </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {(
-          [
-            ['maxTurns', 'Max turns', '1'],
-            ['maxBudgetUsd', 'Max budget (USD, 0 = no cap)', '0.01'],
-            ['maxConcurrentSubagents', 'Max concurrent subagents', '1'],
-            ['maxSubagentDepth', 'Max subagent depth', '1'],
-          ] as const
-        ).map(([k, label, step]) => (
-          <div key={k} className="space-y-1">
-            <Label htmlFor={k}>{label}</Label>
-            <Input id={k} type="number" min={0} step={step} required value={form[k]} onChange={set(k)} />
+      {form.runtime === 'codex' ? (
+        <p className="text-sm text-muted-foreground">
+          Codex runs task runs only, in its own workspace sandbox, without office tools (messages, memory), skills, subagents or turn and budget limits. Those
+          settings are kept for when the agent goes back to Claude. A project whose destructive-command or sensitive-path policy is not auto refuses Codex runs.
+        </p>
+      ) : (
+        <>
+          <div className="space-y-1">
+            <Label>Allowed tools</Label>
+            <ToolPicker lockAlwaysOn value={form.tools} onChange={(tools) => setForm({ ...form, tools })} />
           </div>
-        ))}
-      </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {(
+              [
+                ['maxTurns', 'Max turns', '1'],
+                ['maxBudgetUsd', 'Max budget (USD, 0 = no cap)', '0.01'],
+                ['maxConcurrentSubagents', 'Max concurrent subagents', '1'],
+                ['maxSubagentDepth', 'Max subagent depth', '1'],
+              ] as const
+            ).map(([k, label, step]) => (
+              <div key={k} className="space-y-1">
+                <Label htmlFor={k}>{label}</Label>
+                <Input id={k} type="number" min={0} step={step} required value={form[k]} onChange={set(k)} />
+              </div>
+            ))}
+          </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Skills</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          {skills.isPending && <p className="text-sm text-muted-foreground">Loading skills…</p>}
-          {skills.isError && <p className="text-sm text-destructive">{String(skills.error)}</p>}
-          {skills.isSuccess && approved.length === 0 && <p className="text-sm text-muted-foreground">No approved skills.</p>}
-          {approved.map((s) => {
-            const pin = pins[s.id];
-            return (
-              <div key={s.id} className="flex flex-wrap items-center gap-3">
-                <label className="flex min-w-48 items-center gap-2 font-mono text-sm">
-                  <input type="checkbox" className={CHECK} checked={!!pin} onChange={(e) => togglePin(s.id, e.target.checked)} />
-                  {s.name}
-                </label>
-                {pin && (
-                  <>
-                    <Select value={pin.mode} onValueChange={(v) => setPin(s.id, { mode: v as SkillMode })}>
-                      <SelectTrigger size="sm" aria-label="Skill mode">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="eager">eager</SelectItem>
-                        <SelectItem value="on_demand">on_demand</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <VersionSelect skillId={s.id} value={pin.versionId} onChange={(v) => setPin(s.id, { versionId: v })} />
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Subagents</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {subagents.map((s, i) => (
-            <div key={i} className="space-y-2 rounded-md border p-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label htmlFor={`sa-name-${i}`}>Name</Label>
-                  <Input id={`sa-name-${i}`} required value={s.name} onChange={(e) => setSub(i, { name: e.target.value })} />
-                </div>
-                <div className="space-y-1">
-                  <Label>Model</Label>
-                  <Select value={s.model || 'inherit'} onValueChange={(v) => setSub(i, { model: v === 'inherit' ? '' : String(v) })}>
-                    <SelectTrigger className="w-full" aria-label="Subagent model">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {['inherit', ...MODELS].map((m) => (
-                        <SelectItem key={m} value={m}>
-                          {m}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor={`sa-desc-${i}`}>Description</Label>
-                <Input id={`sa-desc-${i}`} required value={s.description} onChange={(e) => setSub(i, { description: e.target.value })} />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor={`sa-prompt-${i}`}>Prompt</Label>
-                <Textarea id={`sa-prompt-${i}`} rows={3} required value={s.prompt} onChange={(e) => setSub(i, { prompt: e.target.value })} />
-              </div>
-              <div className="space-y-1">
-                <Label>Tools (none = inherit from the agent)</Label>
-                <ToolPicker value={s.tools} onChange={(tools) => setSub(i, { tools })} />
-              </div>
-              <div className="space-y-1">
-                <Label>Skills (pinned only)</Label>
-                {pinnedNames.length === 0 && <p className="text-sm text-muted-foreground">Pin a skill above first.</p>}
-                <div className="flex flex-wrap gap-3">
-                  {pinnedNames.map((n) => (
-                    <label key={n} className="flex items-center gap-2 font-mono text-sm">
-                      <input
-                        type="checkbox"
-                        className={CHECK}
-                        checked={s.skills.includes(n)}
-                        onChange={(e) =>
-                          setSub(i, { skills: e.target.checked ? [...s.skills, n] : s.skills.filter((x) => x !== n) })
-                        }
-                      />
-                      {n}
+          <Card>
+            <CardHeader>
+              <CardTitle>Skills</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {skills.isPending && <p className="text-sm text-muted-foreground">Loading skills…</p>}
+              {skills.isError && <p className="text-sm text-destructive">{String(skills.error)}</p>}
+              {skills.isSuccess && approved.length === 0 && <p className="text-sm text-muted-foreground">No approved skills.</p>}
+              {approved.map((s) => {
+                const pin = pins[s.id];
+                return (
+                  <div key={s.id} className="flex flex-wrap items-center gap-3">
+                    <label className="flex min-w-48 items-center gap-2 font-mono text-sm">
+                      <input type="checkbox" className={CHECK} checked={!!pin} onChange={(e) => togglePin(s.id, e.target.checked)} />
+                      {s.name}
                     </label>
-                  ))}
+                    {pin && (
+                      <>
+                        <Select value={pin.mode} onValueChange={(v) => setPin(s.id, { mode: v as SkillMode })}>
+                          <SelectTrigger size="sm" aria-label="Skill mode">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="eager">eager</SelectItem>
+                            <SelectItem value="on_demand">on_demand</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <VersionSelect skillId={s.id} value={pin.versionId} onChange={(v) => setPin(s.id, { versionId: v })} />
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Subagents</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {subagents.map((s, i) => (
+                <div key={i} className="space-y-2 rounded-md border p-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor={`sa-name-${i}`}>Name</Label>
+                      <Input id={`sa-name-${i}`} required value={s.name} onChange={(e) => setSub(i, { name: e.target.value })} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Model</Label>
+                      <Select value={s.model || 'inherit'} onValueChange={(v) => setSub(i, { model: v === 'inherit' ? '' : String(v) })}>
+                        <SelectTrigger className="w-full" aria-label="Subagent model">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {['inherit', ...MODELS].map((m) => (
+                            <SelectItem key={m} value={m}>
+                              {m}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`sa-desc-${i}`}>Description</Label>
+                    <Input id={`sa-desc-${i}`} required value={s.description} onChange={(e) => setSub(i, { description: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`sa-prompt-${i}`}>Prompt</Label>
+                    <Textarea id={`sa-prompt-${i}`} rows={3} required value={s.prompt} onChange={(e) => setSub(i, { prompt: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Tools (none = inherit from the agent)</Label>
+                    <ToolPicker value={s.tools} onChange={(tools) => setSub(i, { tools })} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Skills (pinned only)</Label>
+                    {pinnedNames.length === 0 && <p className="text-sm text-muted-foreground">Pin a skill above first.</p>}
+                    <div className="flex flex-wrap gap-3">
+                      {pinnedNames.map((n) => (
+                        <label key={n} className="flex items-center gap-2 font-mono text-sm">
+                          <input
+                            type="checkbox"
+                            className={CHECK}
+                            checked={s.skills.includes(n)}
+                            onChange={(e) =>
+                              setSub(i, { skills: e.target.checked ? [...s.skills, n] : s.skills.filter((x) => x !== n) })
+                            }
+                          />
+                          {n}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setSubagents((list) => list.filter((_, j) => j !== i))}>
+                    Remove
+                  </Button>
                 </div>
-              </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setSubagents((list) => list.filter((_, j) => j !== i))}>
-                Remove
+              ))}
+              <Button type="button" variant="outline" size="sm" onClick={() => setSubagents((list) => [...list, { ...NEW_SUBAGENT }])}>
+                Add subagent
               </Button>
-            </div>
-          ))}
-          <Button type="button" variant="outline" size="sm" onClick={() => setSubagents((list) => [...list, { ...NEW_SUBAGENT }])}>
-            Add subagent
-          </Button>
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {error && <p className="whitespace-pre-wrap text-sm text-destructive">{error}</p>}
       {/* without the skill list the payload would drop every pin */}

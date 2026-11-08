@@ -105,7 +105,12 @@ export function SessionDetail({
         <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <KpiCard label="Commands" value={commands.length} />
           <KpiCard label="Files" value={files.length} />
-          <KpiCard label="Cost" value={usd(d.costUsd)} sub={sub ? 'Whole session' : undefined} />
+          {d.routing?.runtime === 'codex' ? (
+            // Codex reports tokens, no price: $0 here would read as free
+            <KpiCard label="Cost" value="—" sub="Codex reports no cost" />
+          ) : (
+            <KpiCard label="Cost" value={usd(d.costUsd)} sub={sub ? 'Whole session' : undefined} />
+          )}
           <KpiCard label={endedAt === null ? 'Running' : 'Ran'} value={ran === undefined ? '—' : elapsed(ran)} />
         </CardContent>
       </Card>

@@ -35,7 +35,7 @@ function Agents() {
       <PageHeader>
         <div>
           <PageTitle>Agent Studio</PageTitle>
-          <PageDescription>Your team. Each agent is a Claude Code session with its own tools, skills and limits.</PageDescription>
+          <PageDescription>Your team. Each agent is a Claude Code or Codex session with its own settings.</PageDescription>
         </div>
         <PageActions>
           <Button onClick={() => setCreating(true)}>

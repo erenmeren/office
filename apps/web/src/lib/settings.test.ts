@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ProjectSettingsSchema } from '@office/shared';
-import { changedKeys, commaToList, linesToList, listToLines, policyRows, validateSettingsDraft } from './settings';
+import { changedKeys, codexBlockedBy, commaToList, linesToList, listToLines, policyRows, validateSettingsDraft } from './settings';
 
 describe('settings helpers', () => {
   it('converts between lines and lists', () => {
@@ -35,5 +35,14 @@ describe('settings helpers', () => {
 
   it('defines the six policy rows, git push and merge together', () => {
     expect(policyRows.map((r) => r.keys)).toEqual([['plan'], ['destructive_command'], ['deploy'], ['git_push', 'merge'], ['sensitive_path'], ['budget_exceeded']]);
+  });
+
+  it('names the policies that make the project refuse Codex, only when Codex is in use', () => {
+    const s = ProjectSettingsSchema.parse({});
+    expect(codexBlockedBy(s, true)).toBeUndefined(); // auto everywhere
+    const gated = { ...s, approvalPolicy: { ...s.approvalPolicy, destructive_command: 'ask' as const, sensitive_path: 'block' as const } };
+    expect(codexBlockedBy(gated, false)).toBeUndefined();
+    expect(codexBlockedBy(gated, true)).toBe('destructive command and sensitive path');
+    expect(codexBlockedBy({ ...gated, routing: [{ runtime: 'codex' }] }, false)).toBe('destructive command and sensitive path');
   });
 });

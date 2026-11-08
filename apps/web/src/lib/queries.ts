@@ -306,6 +306,8 @@ export interface MissionSummary {
   title: string;
   status: MissionStatus;
   taskCounts: Record<string, number>;
+  /** set when the Conductor opened the mission */
+  conductorConversationId: string | null;
 }
 export interface Mission extends Omit<MissionSummary, 'taskCounts'> {
   updatedAt: string;

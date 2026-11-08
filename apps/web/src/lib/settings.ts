@@ -46,3 +46,13 @@ export function validateSettingsDraft(draft: ProjectSettings): { field: string; 
   if (draft.networkAllowedDomains.some((d) => !NetworkDomainSchema.safeParse(d).success)) out.push({ field: 'networkAllowedDomains', message: 'domains look like example.com or *.example.com' });
   return out;
 }
+
+/**
+ * The policies that make the project refuse Codex runs ("destructive command and sensitive path"), when Codex is in use
+ * (a team agent on Codex or a routing rule to it); undefined otherwise. Mirrors `codexRefusal` in the runtime.
+ */
+export function codexBlockedBy(settings: Pick<ProjectSettings, 'approvalPolicy' | 'routing'>, teamUsesCodex: boolean): string | undefined {
+  if (!teamUsesCodex && !settings.routing.some((r) => r.runtime === 'codex')) return undefined;
+  const gated = (['destructive_command', 'sensitive_path'] as const).filter((k) => settings.approvalPolicy[k] !== 'auto');
+  return gated.length ? gated.map((k) => k.replace('_', ' ')).join(' and ') : undefined;
+}

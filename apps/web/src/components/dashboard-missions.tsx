@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { Badge } from '@/components/ui/badge';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { missionStatusLine } from '@/lib/missions';
@@ -39,6 +40,7 @@ export function DashboardMissions() {
                     <Link href={`/mission-control?mission=${m.id}`} className="min-w-0 flex-1 truncate font-medium text-ink hover:underline">
                       {m.title}
                     </Link>
+                    {m.conductorConversationId && <Badge variant="outline">Conductor</Badge>}
                     <StatusPill status={m.status} />
                   </div>
                   <p className={line.yours ? 'text-[12.5px] text-amber' : 'text-[12.5px] text-ink-2'}>

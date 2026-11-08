@@ -98,6 +98,7 @@ function MissionControl() {
             {missions.data?.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.title} · {statusLabel(m.status)}
+                {m.conductorConversationId ? ' · from Conductor' : ''}
               </option>
             ))}
           </NativeSelect>

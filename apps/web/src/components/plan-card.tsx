@@ -8,6 +8,7 @@ import { Activity, FileText, TerminalSquare } from 'lucide-react';
 import { PlanGraph, type PlanGraphNode } from '@/components/plan-graph';
 import { RunEvents } from '@/components/run-events';
 import { ArtifactOutput } from '@/components/task-detail';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EvidenceChip } from '@/components/ui/evidence-chip';
@@ -174,6 +175,11 @@ export function PlanCard({
           <CardTitle>
             Plan v{m.planVersion} · {m.title}
           </CardTitle>
+          {m.conductorConversationId && (
+            <Badge variant="outline" title="Opened by the Conductor">
+              Conductor
+            </Badge>
+          )}
           <StatusPill status={m.status} />
         </div>
         <CardDescription>{subtitle(m)}</CardDescription>

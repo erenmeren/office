@@ -15,7 +15,7 @@ export function AgentsTable() {
     <Card>
       <CardHeader>
         <CardTitle>Team</CardTitle>
-        <CardDescription>Every agent is a Claude Code session with the tools, skills and limits of its current version.</CardDescription>
+        <CardDescription>Every agent is a Claude Code or Codex session with the settings of its current version.</CardDescription>
       </CardHeader>
       <CardContent>
         {agents.isPending && <p className="text-sm text-muted-foreground">Loading agents…</p>}
@@ -48,7 +48,7 @@ export function AgentsTable() {
                   <TableCell>
                     <StatusPill status={a.isActive ? 'active' : 'inactive'} tone={a.isActive ? 'live' : 'idle'} />
                   </TableCell>
-                  <TableCell>{a.currentVersion ? <Badge variant="outline">{a.currentVersion.config.model}</Badge> : '—'}</TableCell>
+                  <TableCell>{a.currentVersion ? <Badge variant="outline">{a.currentVersion.config.runtime === 'codex' ? `Codex ${a.currentVersion.config.model || 'default'}` : a.currentVersion.config.model}</Badge> : '—'}</TableCell>
                   <TableCell className="font-mono text-ink-2">{a.currentVersion ? `v${a.currentVersion.version}` : '—'}</TableCell>
                   <TableCell>
                     <TagList tags={a.currentVersion?.skills.map((s) => `${s.name}@${s.version}`) ?? []} />

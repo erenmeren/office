@@ -16,7 +16,7 @@ import { PageActions, PageDescription, PageHeader, PageTitle } from '@/component
 import { put } from '@/lib/api';
 import { EFFORTS, EFFORT_LABEL } from '@/lib/effort';
 import { useAgents, useBudget, useRuntimeSettings } from '@/lib/queries';
-import { changedKeys, commaToList, validateSettingsDraft } from '@/lib/settings';
+import { changedKeys, codexBlockedBy, commaToList, validateSettingsDraft } from '@/lib/settings';
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 
@@ -43,6 +43,8 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
   const [domainsText, setDomainsText] = useState(settings.networkAllowedDomains.join(', '));
   const problem = (field: string) => problems.find((p) => p.field === field)?.message;
 
+  const teamCodex = agents.some((a) => (ids.length === 0 ? a.isActive : ids.includes(a.id)) && a.currentVersion?.config.runtime === 'codex');
+  const codexBlocked = codexBlockedBy(draft, teamCodex);
   const keys = changedKeys(original, draft);
   const idsChanged = [...ids].sort().join() !== [...originalIds].sort().join();
   const dirty = keys.length > 0 || idsChanged;
@@ -299,6 +301,11 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
+          {codexBlocked && (
+            <p role="alert" className="text-sm text-destructive">
+              Codex runs will be refused here: the {codexBlocked} approval policy is not auto, and Codex has no per-command gate to enforce it.
+            </p>
+          )}
           {draft.routing.map((rule, i) => {
             const setRule = (patch: Partial<typeof rule>) => set('routing', draft.routing.map((r, j) => (j === i ? { ...r, ...patch } : r)));
             return (
