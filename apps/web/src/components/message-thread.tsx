@@ -32,7 +32,15 @@ function Bubble({ m, agents, conv }: { m: MessageView; agents: Agent[]; conv: Co
   );
 }
 
-export function MessageThread({ conversation, agents }: { conversation: Conversation & { messages: MessageView[] }; agents: Agent[] }) {
+export function MessageThread({
+  conversation,
+  agents,
+  ask,
+}: {
+  conversation: Conversation & { messages: MessageView[] };
+  agents: Agent[];
+  ask?: boolean;
+}) {
   const members = agents.filter((a) => conversation.agentIds.includes(a.id));
   const scroller = useRef<HTMLDivElement>(null);
   // Newest message last: stick to the bottom on mount, selection change and new messages.
@@ -67,7 +75,7 @@ export function MessageThread({ conversation, agents }: { conversation: Conversa
         ))}
         {conversation.messages.length === 0 && <p className="text-sm text-ink-3">No messages yet.</p>}
       </div>
-      <MessageComposer conversationId={conversation.id} />
+      <MessageComposer conversationId={conversation.id} ask={ask} />
     </section>
   );
 }

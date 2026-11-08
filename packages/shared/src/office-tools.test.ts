@@ -12,7 +12,7 @@ describe('office tools', () => {
   });
   it('names mcp tools', () => {
     expect(mcpToolName('read_inbox')).toBe('mcp__office__read_inbox');
-    expect(OFFICE_TOOL_NAMES).toHaveLength(16);
+    expect(OFFICE_TOOL_NAMES).toHaveLength(22);
   });
   it('parses review tools', () => {
     expect(parseToolArgs('review_task', { taskId: 't', decision: 'done' }).note).toBe('');

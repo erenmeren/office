@@ -20,8 +20,15 @@ export const BUILTIN_TOOLS = [
   'ReadMcpResourceTool',
   'ReadMcpResourceDirTool',
 ] as const;
-/** Always available to a session; never disallowed. */
+/** Always available to a session; never disallowed (except on Conductor runs, which get no built-in tool). */
 export const ALWAYS_ON_TOOLS = ['Read', 'Glob', 'Grep'] as const;
+
+/** The hidden system agent the owner talks to above all projects. */
+export const CONDUCTOR_SLUG = 'conductor';
+
+/** The agent runtime a run executes on. */
+export const RuntimeSchema = z.enum(['claude', 'codex']);
+export type Runtime = z.infer<typeof RuntimeSchema>;
 
 /** A budget of 0 is "no cap". The lowest positive cap wins; with none, 0. */
 export const minBudget = (...caps: Array<number | undefined>): number =>
@@ -30,6 +37,7 @@ export const minBudget = (...caps: Array<number | undefined>): number =>
 export const AgentConfigSchema = z.object({
   systemPrompt: z.string(),
   model: z.string(),
+  runtime: RuntimeSchema.default('claude'),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
   allowedTools: z.array(z.string()),
   maxTurns: z.number().int().positive().default(50),

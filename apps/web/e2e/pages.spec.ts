@@ -1,6 +1,6 @@
 import { API, authed, expect, expectQuiet, test } from './fixtures';
 
-const STATIC = ['/', '/decisions', '/mission-control', '/sessions', '/office', '/conversations', '/agents', '/skills', '/memory', '/workers', '/audit', '/settings', '/tasks/new'];
+const STATIC = ['/', '/conductor', '/decisions', '/mission-control', '/sessions', '/office', '/conversations', '/agents', '/skills', '/memory', '/workers', '/audit', '/settings', '/tasks/new'];
 
 authed.describe('every page renders without console noise', () => {
   authed('static routes', async ({ page, noise }) => {
@@ -290,7 +290,7 @@ authed.describe('every page renders without console noise', () => {
     expect((await api.post(`${API}/workers`, { data: { name } })).ok()).toBe(true);
     await page.route(`${API}/workers`, async (route) => {
       const real = (await (await route.fetch()).json()) as Record<string, unknown>[];
-      const fixture = { id: 'w-fixture', name: 'e2e-remote', status: 'online', capacity: 2, allowedRoots: [], tags: ['gpu'], canClone: true, lastHeartbeatAt: new Date().toISOString(), online: true, activeRuns: 1 };
+      const fixture = { id: 'w-fixture', name: 'e2e-remote', status: 'online', capacity: 2, allowedRoots: [], tags: ['gpu'], canClone: true, lastHeartbeatAt: new Date().toISOString(), online: true, activeRuns: 1, runtimes: ['claude', 'codex'] };
       await route.fulfill({ json: [...real, fixture] });
     });
     await page.goto('/workers');
@@ -300,6 +300,7 @@ authed.describe('every page renders without console noise', () => {
     await expect(remote.getByText('remote', { exact: true })).toBeVisible();
     await expect(remote.getByText('gpu', { exact: true })).toBeVisible();
     await expect(remote.getByText('1/2')).toBeVisible();
+    await expect(remote.getByText('Runs claude, codex')).toBeVisible();
     // Delete removes the row for good (and this test's worker with it)
     await pending.getByRole('button', { name: `Delete ${name}` }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click();

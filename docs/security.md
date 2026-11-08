@@ -103,7 +103,15 @@ This describes what Phases 1 to 6 enforce and what they do not yet. The target m
 - **Background sessions and deletes run the CLI.** `claude --bg <prompt>`, `stop`, `rm`, `logs` are executed with argv (the prompt is one argument, 20 000 characters at most) in a folder under the roots; `claude rm` deletes the background session's worktree and `DELETE /claude-sessions/:id` deletes the transcript file, both after an in-app confirm.
 - **Handoffs spend no tokens and hand over no process.** A mission draft from a transcript is built in the browser and edited by the owner before it is sent; a manual session after a mission is a fresh `claude` on the checkout.
 
+## Conductor and Codex (2026-11-08)
+
+- The Conductor's runs pass the SDK `tools: []`: no built-in tool at all (no Read, Bash, Edit, Workflow, ...), only its nine office tools, which read and write project records (projects, missions, verified memory) and never a project's files. Its home project holds only starter files.
+- Codex has no per-call hook. A Codex run is confined by the Codex sandbox (`workspace-write`: its working directory and the worktree's git dir), never asks (`approval_policy="never"`), and has network only when the project's `networkAccess` is `open` and `git_push` and `deploy` are `auto`. Projects whose `destructive_command` or `sensitive_path` policy is not `auto` refuse Codex runs, since nothing could enforce them. Codex can still read files outside the sandbox's write roots, like an unsandboxed Claude read.
+- Codex's in-run budget is not enforced: usage arrives at the end of the turn and has no USD price (cost recorded as 0), so mission and daily budgets do not count Codex runs.
+
 ## Not yet enforced
+
+- **Built-in tools outside the deny list**: `disallowedTools` lists `BUILTIN_TOOLS`, but the Claude Code CLI has more built-in tools (seen on 0.3.316: `Workflow`, `EnterWorktree`, `ExitWorktree`, `CronCreate`, `CronDelete`, `CronList`, `RemoteTrigger`, `ScheduleWakeup`, `SendMessage`, `SendToProject`, `SendToProjectContext`, `PushNotification`, `AskUserQuestion`, `ToolSearch`, ...). They stay available to every agent except the Conductor. Moving all agents to an allow list (`tools`) would close it.
 
 - **Worker environment**: the agent's child process inherits the worker's whole environment apart from the keys above. Start the worker with only the variables it needs; any other secret in its environment (for example one added to `.env`, which `scripts/dev-all.sh` exports whole for convenience) reaches the agent. Use this only with throwaway local values.
 - **Worktree confinement** (not built in Phase 6): `chat`, `inbox` and non-mission task runs work in the project repository itself, and no run is confined to its worktree; the approval policy gates their calls but does not sandbox them. Manual sessions (Office terminals) are by design not gated or sandboxed by Office at all.

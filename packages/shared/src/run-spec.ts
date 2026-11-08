@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { CheckStatusSchema, IntegrationStatusSchema, RunKindSchema, TaskKindSchema } from './enums.js';
 import { ApprovalPolicySchema } from './policy.js';
+import { RuntimeSchema } from './agent-config.js';
 import { RunSkillSchema } from './skill.js';
 import { SubagentDefinitionSchema } from './subagent.js';
 
@@ -13,6 +14,7 @@ export const RunSpecSchema = z.object({
   prompt: z.string(),
   systemPrompt: z.string(),
   model: z.string(),
+  runtime: RuntimeSchema.default('claude'),
   effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
   allowedTools: z.array(z.string()),
   maxTurns: z.number().int(),
@@ -24,6 +26,8 @@ export const RunSpecSchema = z.object({
   startSeq: z.number().int().nonnegative().default(0),
   // office tool names this run may call; the worker serves exactly these
   tools: z.array(z.string()).default([]),
+  // Conductor runs: not even Read, Glob and Grep (it never reads a project's files)
+  noBuiltinTools: z.boolean().default(false),
   skills: z.array(RunSkillSchema).default([]),
   subagents: z.array(SubagentDefinitionSchema).default([]),
   // worker-filled: directory passed to additionalDirectories; never set by the API

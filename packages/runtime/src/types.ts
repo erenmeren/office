@@ -17,6 +17,6 @@ export interface RunControl {
 }
 
 export interface RuntimeAdapter {
-  readonly name: 'claude' | 'fake';
+  readonly name: 'claude' | 'codex' | 'fake' | 'routed';
   run(spec: RunSpec, sink: EventSink, signal: AbortSignal, tools?: ToolBridge, control?: RunControl): Promise<RunResult>;
 }

@@ -13,6 +13,8 @@ export interface FakeWorkerOptions {
   activeRunIds?: string[];
   tags?: string[];
   canClone?: boolean;
+  /** Runtimes announced in hello (omitted: the gateway's default, Claude only). */
+  runtimes?: ('claude' | 'codex')[];
   /** Defaults to the API's own machine id (same host); `null` omits it like a pre-Phase 5 worker. */
   machineId?: string | null;
 }
@@ -72,6 +74,7 @@ export async function connectFakeWorker(app: FastifyInstance, opts: FakeWorkerOp
     activeRunIds: opts.activeRunIds ?? [],
     tags: opts.tags ?? [],
     canClone: opts.canClone ?? false,
+    ...(opts.runtimes && { runtimes: opts.runtimes }),
     machineId: opts.machineId === null ? undefined : (opts.machineId ?? machineId(process.env.OFFICE_DATA_DIR!)),
   });
   const first = await new Promise<ApiToWorker>((resolve, reject) => {

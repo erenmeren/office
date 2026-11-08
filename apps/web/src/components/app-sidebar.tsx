@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bot, Building2, ClipboardCheck, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
+import { Bot, Building2, ClipboardCheck, Compass, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { StatusDot } from '@/components/ui/status-pill';
@@ -14,6 +14,7 @@ import { uiSocket } from '@/lib/ws';
 
 export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/conductor', label: 'Conductor', icon: Compass },
   { href: '/decisions', label: 'Decisions', icon: ClipboardCheck },
   { href: '/mission-control', label: 'Mission Control', icon: Target },
   { href: '/sessions', label: 'Live Sessions', icon: Radio },

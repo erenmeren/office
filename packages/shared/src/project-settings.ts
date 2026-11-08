@@ -1,9 +1,20 @@
 import { z } from 'zod';
 import { ApprovalPolicySchema, AUTO_APPROVAL_POLICY } from './policy.js';
 import { WorkerTagSchema } from './protocol.js';
+import { RuntimeSchema } from './agent-config.js';
+import { TaskKindSchema } from './enums.js';
 
 /** A host name, or `*.example.com` for a host and its subdomains (the SDK sandbox wildcard). */
 export const NetworkDomainSchema = z.string().regex(/^(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+$/i, 'domain like example.com or *.example.com');
+
+/** A model router rule: the first rule matching a task run picks its runtime and model; none matching keeps the agent's own. */
+export const RoutingRuleSchema = z.object({
+  taskKind: TaskKindSchema.optional(),
+  minPriority: z.number().int().optional(),
+  runtime: RuntimeSchema,
+  model: z.string().min(1).max(100).optional(),
+});
+export type RoutingRule = z.infer<typeof RoutingRuleSchema>;
 
 export const ProjectSettingsSchema = z.object({
   packageManager: z.enum(['npm', 'pnpm', 'yarn', 'bun']).optional(),
@@ -29,5 +40,6 @@ export const ProjectSettingsSchema = z.object({
   // open: Bash on worktree runs is not sandboxed (the SDK sandbox cannot allow every host); allowlist: sandboxed, reaching only networkAllowedDomains
   networkAccess: z.enum(['open', 'allowlist']).default('open'),
   networkAllowedDomains: z.array(NetworkDomainSchema).default([]),
+  routing: z.array(RoutingRuleSchema).max(20).default([]),
 });
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;

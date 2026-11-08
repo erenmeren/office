@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { PrismaClient } from '@office/db';
-import { ProjectSettingsSchema, type RunSpec } from '@office/shared';
+import { ProjectSettingsSchema, type RunSpec, type Runtime } from '@office/shared';
 import type { Config } from '../config.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
 import type { EventHub } from './event-hub.js';
@@ -12,6 +12,8 @@ import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
 import { embedMissingMemory } from './memory-service.js';
+import { CONDUCTOR_SLUG } from './conductor-service.js';
+import { agentDefault, routeTask } from './router-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
@@ -152,8 +154,16 @@ export class Scheduler {
           continue;
         }
         this.loggedBlocked.delete(task.id);
+        const own = await agentDefault(this.prisma, task.agent);
+        let route = routeTask((await getSettings(this.prisma, task.projectId)).routing, task, own);
         // only a mission run carries git, so only it can go to a worker that clones
-        const worker = this.pickWorker(task.project, { needsRepoAccess: task.missionId ? 'any' : 'local' });
+        const access = { needsRepoAccess: task.missionId ? ('any' as const) : ('local' as const) };
+        let worker = this.pickWorker(task.project, { ...access, runtime: route.runtime });
+        if (!worker && route.runtime !== own.runtime && !this.pickWorker(task.project, { ...access, runtime: route.runtime, ignoreSlots: true })) {
+          // no online worker runs the routed runtime at all: the agent's own runtime instead, and the run says why
+          route = { ...own, reason: `${route.reason} chose ${route.runtime}, which no online worker runs; fell back to the agent's ${own.runtime}` };
+          worker = this.pickWorker(task.project, { ...access, runtime: route.runtime });
+        }
         if (!worker) {
           if (!this.warnedNoWorker.has(task.id)) {
             this.warnedNoWorker.add(task.id);
@@ -162,7 +172,7 @@ export class Scheduler {
           continue;
         }
         this.warnedNoWorker.delete(task.id);
-        const { spec } = await createRunForTask(this.prisma, this.hub, task, worker, this.config);
+        const { spec } = await createRunForTask(this.prisma, this.hub, task, worker, this.config, route);
         await this.assign(worker.workerId, spec);
       } catch (err) {
         this.log.error({ err, taskId: task.id }, 'scheduling task failed');
@@ -248,14 +258,19 @@ export class Scheduler {
     return null;
   }
 
-  private pickWorker(project: { repoPath: string; settings: unknown }, opts: { needsRepoAccess: 'local' | 'any' }) {
+  /** `runtime`: only workers that run it (task runs); `ignoreSlots`: whether one could ever take it, busy or not. */
+  private pickWorker(
+    project: { repoPath: string; settings: unknown },
+    opts: { needsRepoAccess: 'local' | 'any'; runtime?: Runtime; ignoreSlots?: boolean },
+  ) {
     const { requiredWorkerTags } = ProjectSettingsSchema.parse(project.settings ?? {});
     return this.gateway
       .onlineWorkers()
       .map((w) => ({ w, local: w.local(project.repoPath) }))
       .filter(
         ({ w, local }) =>
-          w.capacity - w.activeRuns > 0 &&
+          (opts.ignoreSlots || w.capacity - w.activeRuns > 0) &&
+          (!opts.runtime || w.runtimes.includes(opts.runtime)) &&
           (opts.needsRepoAccess === 'local' || requiredWorkerTags.every((t) => w.tags.includes(t))) &&
           (local || (opts.needsRepoAccess === 'any' && w.canClone)),
       )
@@ -369,7 +384,10 @@ export class Scheduler {
     for (const wake of await pendingWakeDeliveries(this.prisma)) {
       try {
         const agent = await this.prisma.agent.findUnique({ where: { id: wake.agentId } });
-        if (!agent || agent.isSystem || !agent.isActive) continue;
+        // system agents are never woken, except the Conductor, who answers the owner
+        if (!agent || (agent.isSystem && agent.slug !== CONDUCTOR_SLUG) || !agent.isActive) continue;
+        // a Codex agent has no office tools to read or answer mail with
+        if ((await agentDefault(this.prisma, agent)).runtime !== 'claude') continue;
         const scope = { agentId: wake.agentId, projectId: wake.projectId };
         const busy = await this.prisma.taskRun.count({
           where: { ...scope, status: { in: ['queued', 'running', 'waiting_reply', 'waiting_approval'] } },

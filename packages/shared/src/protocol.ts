@@ -6,6 +6,7 @@ import { MessageViewSchema } from './messaging.js';
 import { ToolCallResultSchema } from './office-tools.js';
 import { OfficeEventSchema } from './events.js';
 import { RunResultSchema, RunSpecSchema } from './run-spec.js';
+import { RuntimeSchema } from './agent-config.js';
 import { SessionsErrorCodeSchema, SessionsQuerySchema, SessionsResultSchema } from './claude-sessions.js';
 import { TERMINAL_INPUT_MAX, TerminalErrorCodeSchema, TerminalOpenedSchema, TerminalSizeSchema } from './terminals.js';
 
@@ -24,6 +25,8 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
     canClone: z.boolean().default(false),
     /** The worker host's identity; a worker is local only when it equals the API's (old workers omit it). */
     machineId: z.string().min(1).max(128).optional(),
+    /** Runtimes this worker can execute (old workers omit it: Claude only). */
+    runtimes: z.array(RuntimeSchema).default(['claude']),
   }),
   z.object({
     type: z.literal('heartbeat'),

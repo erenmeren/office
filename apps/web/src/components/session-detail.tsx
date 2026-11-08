@@ -87,6 +87,11 @@ export function SessionDetail({
             <span>{sub ? sub.id.slice(0, 8) : (d.sessionId ?? d.runId).slice(0, 8)}</span>
             {d.workerName && <span>{d.workerName}</span>}
             {d.model && <span>{d.model}</span>}
+            {!sub && d.routing && (
+              <span title={d.routing.reason}>
+                {d.routing.runtime} · {d.routing.reason}
+              </span>
+            )}
           </CardDescription>
           {live && (
             <CardAction className="flex items-center gap-2">

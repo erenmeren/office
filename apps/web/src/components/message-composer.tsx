@@ -10,9 +10,10 @@ import { post } from '@/lib/api';
 
 type Kind = 'message' | 'question';
 
-export function MessageComposer({ conversationId }: { conversationId: string }) {
+/** `ask`: every message is a question (a note would not wake the agent); no type switch. */
+export function MessageComposer({ conversationId, ask = false }: { conversationId: string; ask?: boolean }) {
   const qc = useQueryClient();
-  const [type, setType] = useState<Kind>('message');
+  const [type, setType] = useState<Kind>(ask ? 'question' : 'message');
   const [body, setBody] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -44,15 +45,19 @@ export function MessageComposer({ conversationId }: { conversationId: string }) 
         variant="well"
       />
       <div className="flex items-center justify-between gap-3">
-        <Segmented
-          label="Message type"
-          value={type}
-          onChange={setType}
-          options={[
-            { value: 'message', label: 'Note' },
-            { value: 'question', label: 'Question' },
-          ]}
-        />
+        {ask ? (
+          <span />
+        ) : (
+          <Segmented
+            label="Message type"
+            value={type}
+            onChange={setType}
+            options={[
+              { value: 'message', label: 'Note' },
+              { value: 'question', label: 'Question' },
+            ]}
+          />
+        )}
         <Button type="submit" size="lg" disabled={busy || !body.trim()}>
           <Send data-icon="inline-start" aria-hidden />
           Send

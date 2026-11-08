@@ -10,6 +10,8 @@ export interface WorkerConfig {
   enrollToken?: string;
   workspaceRoots: string[];
   runtime: 'claude' | 'fake';
+  /** The Codex CLI (`OFFICE_CODEX_BIN`, default `codex` on PATH); Codex runs are offered only when it answers `--version`. */
+  codexBin: string;
   capacity: number;
   name: string;
   tags: string[];
@@ -48,6 +50,7 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
       ...granted.map((p) => realpathSync(p)),
     ].filter((p, i, a) => a.indexOf(p) === i),
     runtime,
+    codexBin: env.OFFICE_CODEX_BIN || 'codex',
     capacity,
     name: env.OFFICE_WORKER_NAME || hostname(),
     tags,

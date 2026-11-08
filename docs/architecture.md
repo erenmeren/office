@@ -137,6 +137,12 @@ The owner's own Claude Code next to the agents' sessions, in four parts (`docs/s
 - **Background sessions (Phase 3).** `claude --bg`, `stop`, `rm`, `logs` run on the worker (`runClaude`) through `sessions.request { kind: 'background' }`; `POST /claude-sessions/background`, `/background/:id/stop|rm|logs`; attach through a terminal with `attachId`.
 - **Handoffs (Phase 4).** `apps/web/src/lib/mission-draft.ts` turns a transcript into a draft request for `ChiefComposer` (sessionStorage); a finished mission opens a manual session with its summary beside the terminal (`/sessions?terminal=&mission=`). Pixel Office draws the owner's room (`ownerRoom` in `lib/office.ts`, `OfficeOwnerPanel`); the Dashboard counts manual sessions in "Running sessions".
 
+## Conductor, runtimes and routing (2026-11-08)
+
+- **Conductor.** `services/conductor-service.ts`: `conductorHome` creates the hidden home project and the Conductor's one human conversation; `runConductorTool` answers its six project tools. `toolsForKind(kind, conductor)` gives a run in a system project the Conductor tool set; `specBase` sets `noBuiltinTools` and the Conductor prompt section. `routes/conductor.ts` serves `GET /conductor`; the web page is `app/conductor/page.tsx`.
+- **Runtimes.** `packages/runtime`: `RoutedAdapter` picks `ClaudeAdapter` or `CodexAdapter` by `spec.runtime`; `createAdapter` returns the adapter and the runtimes the worker announces. `codex/adapter.ts` spawns the CLI and maps its JSONL with `codex/normalize.ts`.
+- **Router.** `services/router-service.ts` (`routeTask`, `agentDefault`); `Scheduler.assignReadyTasks` routes, picks a worker by runtime (`pickWorker` `runtime`), falls back, and passes the route to `createRunForTask`, which stores it on `TaskRun.routing`.
+
 ## Where each spec entity lives today
 
 Built in Phase 1 (Prisma schema in `packages/db/prisma/schema.prisma`, logic in `apps/api/src`):

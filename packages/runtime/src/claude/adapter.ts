@@ -1,7 +1,7 @@
 import { createSdkMcpServer, query, tool, type AgentDefinition, type HookCallback, type Options, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { BUILTIN_TOOLS, MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
+import { ALWAYS_ON_TOOLS, BUILTIN_TOOLS, MCP_SERVER_NAME, OFFICE_TOOLS, mcpToolName, type OfficeToolName, type RunResult, type RunSpec } from '@office/shared';
 import { gateToolCall } from '../gate.js';
 import { redactSecrets } from '../redact.js';
 import type { EventSink, RunControl, RuntimeAdapter, ToolBridge } from '../types.js';
@@ -91,6 +91,8 @@ export function buildQueryOptions(
       ? createSdkMcpServer({
           name: MCP_SERVER_NAME,
           version: '1.0.0',
+          // with no built-in tools there is no ToolSearch to load deferred tools
+          ...(spec.noBuiltinTools && { alwaysLoad: true }),
           tools: served.map((name) =>
             tool(name, OFFICE_TOOLS[name].description, OFFICE_TOOLS[name].input, async (args) => {
               const r = await tools.call(name, args as Record<string, unknown>);
@@ -111,7 +113,9 @@ export function buildQueryOptions(
     systemPrompt: spec.systemPrompt,
     allowedTools,
     // strictMcpConfig keeps every MCP server except the in-process office one out of the session
-    disallowedTools: BUILTIN_TOOLS.filter((t) => !granted.includes(t)),
+    disallowedTools: [...BUILTIN_TOOLS.filter((t) => !granted.includes(t)), ...(spec.noBuiltinTools ? ALWAYS_ON_TOOLS : [])],
+    // Conductor runs: no built-in tool at all, including the CLI's newer ones the deny list does not name (Workflow, EnterWorktree, Cron*, ...)
+    ...(spec.noBuiltinTools && { tools: [] }),
     ...(server && { mcpServers: { [MCP_SERVER_NAME]: server } }),
     strictMcpConfig: true,
     permissionMode: 'default',

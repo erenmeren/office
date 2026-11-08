@@ -98,7 +98,7 @@ async function validate(db: Db, projectId: string, plan: Plan) {
 export async function createMission(
   prisma: PrismaClient,
   hub: EventHub,
-  input: { projectId: string; request: string; title?: string; budgetUsd?: number },
+  input: { projectId: string; request: string; title?: string; budgetUsd?: number; conductorConversationId?: string },
 ) {
   const settings = await getSettings(prisma, input.projectId); // 404 when the project is missing
   const chief = await prisma.agent.findFirst({ where: { slug: CHIEF_SLUG, isActive: true } });
@@ -122,6 +122,7 @@ export async function createMission(
         budgetUsd: input.budgetUsd ?? settings.defaultMissionBudgetUsd,
         status: 'planning',
         conversationId: conversation.id,
+        conductorConversationId: input.conductorConversationId,
       },
     });
   });

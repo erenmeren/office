@@ -28,7 +28,7 @@ it('seed is idempotent: second run reports exists and adds no rows', async () =>
   const before = await count();
   const second = await seed(prisma, root);
   expect(second.every((l) => l.includes(' exists '))).toBe(true);
-  expect(second).toHaveLength(1 + 7 + 1 + 6);
+  expect(second).toHaveLength(1 + 8 + 1 + 6);
   expect(await count()).toEqual(before);
 });
 
