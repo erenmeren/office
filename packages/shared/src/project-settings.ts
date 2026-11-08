@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ApprovalPolicySchema, AUTO_APPROVAL_POLICY } from './policy.js';
 import { WorkerTagSchema } from './protocol.js';
-import { RuntimeSchema } from './agent-config.js';
+import { EffortSchema, RuntimeSchema } from './agent-config.js';
 import { TaskKindSchema } from './enums.js';
 
 /** A host name, or `*.example.com` for a host and its subdomains (the SDK sandbox wildcard). */
@@ -13,6 +13,8 @@ export const RoutingRuleSchema = z.object({
   minPriority: z.number().int().optional(),
   runtime: RuntimeSchema,
   model: z.string().min(1).max(100).optional(),
+  // none: the agent's own effort
+  effort: EffortSchema.optional(),
 });
 export type RoutingRule = z.infer<typeof RoutingRuleSchema>;
 

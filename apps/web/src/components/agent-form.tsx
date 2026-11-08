@@ -1,5 +1,6 @@
 'use client';
 
+import { EFFORTS, EFFORT_LABEL } from '@/lib/effort';
 import { useState, type FormEvent } from 'react';
 import { ALWAYS_ON_TOOLS, type AgentConfigInput } from '@office/shared';
 import { Button } from '@/components/ui/button';
@@ -12,7 +13,6 @@ import { ToolPicker } from '@/components/ui/tool-picker';
 import { useSkill, useSkills, type AgentVersionView, type SkillMode } from '@/lib/queries';
 
 const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const CHECK = 'size-4 accent-primary';
 
 export interface AgentFormBody {
@@ -197,6 +197,10 @@ export function AgentForm({
         <div className="space-y-1">
           <Label>Runtime</Label>
           <Select
+            items={[
+              { value: 'claude', label: 'Claude' },
+              { value: 'codex', label: 'Codex' },
+            ]}
             value={form.runtime}
             onValueChange={(v) => {
               const runtime = v === 'codex' ? 'codex' : 'claude';
@@ -234,14 +238,19 @@ export function AgentForm({
         </div>
         <div className="space-y-1">
           <Label>Effort</Label>
-          <Select value={form.effort} onValueChange={(v) => setForm({ ...form, effort: String(v) })}>
+          <Select
+            items={[{ value: 'unset', label: 'Runtime default' }, ...EFFORTS.map((m) => ({ value: m, label: EFFORT_LABEL[m] }))]}
+            value={form.effort}
+            onValueChange={(v) => setForm({ ...form, effort: String(v) })}
+          >
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {['unset', ...EFFORTS].map((m) => (
+              <SelectItem value="unset">Runtime default</SelectItem>
+              {EFFORTS.map((m) => (
                 <SelectItem key={m} value={m}>
-                  {m}
+                  {EFFORT_LABEL[m]}
                 </SelectItem>
               ))}
             </SelectContent>

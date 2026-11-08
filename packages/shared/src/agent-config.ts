@@ -26,6 +26,10 @@ export const ALWAYS_ON_TOOLS = ['Read', 'Glob', 'Grep'] as const;
 /** The hidden system agent the owner talks to above all projects. */
 export const CONDUCTOR_SLUG = 'conductor';
 
+/** Reasoning effort, the same names on Claude and Codex. */
+export const EffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export type Effort = z.infer<typeof EffortSchema>;
+
 /** The agent runtime a run executes on. */
 export const RuntimeSchema = z.enum(['claude', 'codex']);
 export type Runtime = z.infer<typeof RuntimeSchema>;
@@ -38,7 +42,7 @@ export const AgentConfigSchema = z.object({
   systemPrompt: z.string(),
   model: z.string(),
   runtime: RuntimeSchema.default('claude'),
-  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  effort: EffortSchema.optional(),
   allowedTools: z.array(z.string()),
   maxTurns: z.number().int().positive().default(50),
   maxBudgetUsd: z.number().nonnegative().default(0),

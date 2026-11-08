@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { put } from '@/lib/api';
+import { EFFORTS, EFFORT_LABEL } from '@/lib/effort';
 import { useAgents, useBudget, useRuntimeSettings } from '@/lib/queries';
 import { changedKeys, commaToList, validateSettingsDraft } from '@/lib/settings';
 
@@ -293,7 +294,7 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
         <CardHeader>
           <CardTitle>Model routing</CardTitle>
           <CardDescription>
-            For each task run the first matching rule picks the runtime and model; no match keeps the agent&apos;s own. A rule for Codex falls back to the
+            For each task run the first matching rule picks the runtime, model and effort; no match keeps the agent&apos;s own. A rule for Codex falls back to the
             agent&apos;s runtime while no online worker runs Codex. Every run records which rule chose it.
           </CardDescription>
         </CardHeader>
@@ -326,6 +327,18 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
                 <NativeSelect aria-label={`Rule ${i + 1} runtime`} value={rule.runtime} onChange={(e) => setRule({ runtime: e.target.value === 'codex' ? 'codex' : 'claude' })}>
                   <option value="claude">Claude</option>
                   <option value="codex">Codex</option>
+                </NativeSelect>
+                <NativeSelect
+                  aria-label={`Rule ${i + 1} effort`}
+                  value={rule.effort ?? ''}
+                  onChange={(e) => setRule({ effort: (e.target.value || undefined) as typeof rule.effort })}
+                >
+                  <option value="">Agent&apos;s effort</option>
+                  {EFFORTS.map((x) => (
+                    <option key={x} value={x}>
+                      {EFFORT_LABEL[x]}
+                    </option>
+                  ))}
                 </NativeSelect>
                 <Input
                   aria-label={`Rule ${i + 1} model`}

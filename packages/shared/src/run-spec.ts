@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CheckStatusSchema, IntegrationStatusSchema, RunKindSchema, TaskKindSchema } from './enums.js';
 import { ApprovalPolicySchema } from './policy.js';
-import { RuntimeSchema } from './agent-config.js';
+import { EffortSchema, RuntimeSchema } from './agent-config.js';
 import { RunSkillSchema } from './skill.js';
 import { SubagentDefinitionSchema } from './subagent.js';
 
@@ -15,7 +15,7 @@ export const RunSpecSchema = z.object({
   systemPrompt: z.string(),
   model: z.string(),
   runtime: RuntimeSchema.default('claude'),
-  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+  effort: EffortSchema.optional(),
   allowedTools: z.array(z.string()),
   maxTurns: z.number().int(),
   maxBudgetUsd: z.number(),

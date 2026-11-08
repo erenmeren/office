@@ -85,7 +85,7 @@ const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];
 async function specBase(
   prisma: PrismaClient,
   config: Config,
-  a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string; route?: Pick<Route, 'runtime' | 'model'> },
+  a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string; route?: Pick<Route, 'runtime' | 'model' | 'effort'> },
 ) {
   const [project, loaded, settings] = await Promise.all([
     prisma.project.findUniqueOrThrow({ where: { id: a.projectId } }),
@@ -125,7 +125,7 @@ async function specBase(
       systemPrompt,
       model: a.route?.model ?? cfg.model,
       runtime: a.route?.runtime ?? cfg.runtime,
-      effort: cfg.effort,
+      effort: a.route?.effort ?? cfg.effort,
       allowedTools: summary || conductor ? [] : inbox ? cfg.allowedTools.filter((t) => INBOX_TOOLS.includes(t)) : cfg.allowedTools,
       noBuiltinTools: conductor,
       maxTurns: inbox ? Math.min(cfg.maxTurns, 8) : cfg.maxTurns,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import type { ApprovalStatus, ApprovalView, MessageView, MissionStatus, Plan, ProjectSettings, RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
+import type { ApprovalStatus, Effort, ApprovalView, MessageView, MissionStatus, Plan, ProjectSettings, RunStatus, TaskStatus, WorkerStatus } from '@office/shared';
 import { api } from './api';
 
 export type Me = { setupRequired: true } | { setupRequired: false; anonymous: true } | { id: string; email: string; setupRequired: false };
@@ -404,7 +404,7 @@ export interface LiveSession {
   /** the message a `waiting_reply` run waits on */
   waitingFor: { messageId: string; body: string; recipientAgentIds: string[] } | null;
   pausedAt: string | null;
-  routing: { runtime: string; model: string; reason: string } | null;
+  routing: { runtime: string; model: string; effort?: Effort; reason: string } | null;
   commands: number;
   files: number;
   subagents: SessionSubagent[];

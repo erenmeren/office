@@ -1,5 +1,6 @@
 'use client';
 
+import { EFFORT_LABEL } from '@/lib/effort';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Send } from 'lucide-react';
 import type { OfficeEvent } from '@office/shared';
@@ -89,7 +90,8 @@ export function SessionDetail({
             {d.model && <span>{d.model}</span>}
             {!sub && d.routing && (
               <span title={d.routing.reason}>
-                {d.routing.runtime} · {d.routing.reason}
+                {d.routing.runtime}
+                {d.routing.effort && ` · ${EFFORT_LABEL[d.routing.effort]} effort`} · {d.routing.reason}
               </span>
             )}
           </CardDescription>

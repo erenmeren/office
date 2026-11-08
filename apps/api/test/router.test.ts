@@ -21,6 +21,13 @@ describe('routeTask', () => {
     expect(routeTask(rules, { kind: 'code', priority: 1 }, own)).toEqual({ runtime: 'claude', model: 'opus', reason: 'routing rule 3 (every task)' });
     expect(routeTask([{ runtime: 'claude' }], { kind: 'code', priority: 0 }, { runtime: 'codex', model: 'gpt-5-codex' })).toMatchObject({ model: 'sonnet' });
   });
+
+  it("a rule's effort wins; without one the agent's effort stays", () => {
+    const mine = { ...own, effort: 'high' as const };
+    expect(routeTask([{ runtime: 'codex', effort: 'xhigh' }], { kind: 'code', priority: 0 }, mine)).toMatchObject({ runtime: 'codex', effort: 'xhigh' });
+    expect(routeTask([{ runtime: 'codex' }], { kind: 'code', priority: 0 }, mine)).toMatchObject({ effort: 'high' });
+    expect(routeTask([], { kind: 'code', priority: 0 }, mine)).toMatchObject({ effort: 'high' });
+  });
 });
 
 describe('model router in the scheduler', () => {
@@ -37,7 +44,7 @@ describe('model router in the scheduler', () => {
     await t.app.listen({ port: 0, host: '127.0.0.1' });
     projectId = (await req('POST', '/projects', { name: 'P', slug: 'p1', repoPath: '/tmp/office-ws/p1' })).json().id;
     agentId = (await req('POST', '/agents', { name: 'A', slug: 'a', role: 'dev', config: { systemPrompt: 'x', model: 'sonnet', allowedTools: ['Read'] } })).json().id;
-    await req('PUT', `/projects/${projectId}/settings`, { routing: [{ taskKind: 'code', runtime: 'codex', model: 'gpt-5-codex' }] });
+    await req('PUT', `/projects/${projectId}/settings`, { routing: [{ taskKind: 'code', runtime: 'codex', model: 'gpt-5-codex', effort: 'xhigh' }] });
   });
   afterEach(async () => {
     for (const w of workers.splice(0)) await w.close();
@@ -59,9 +66,9 @@ describe('model router in the scheduler', () => {
   it('a matching rule sends the task to a Codex worker; the decision is stored on the run and kept on resume', async () => {
     const w = await worker(['claude', 'codex']);
     const spec = await assign(w);
-    expect(spec).toMatchObject({ runtime: 'codex', model: 'gpt-5-codex' });
+    expect(spec).toMatchObject({ runtime: 'codex', model: 'gpt-5-codex', effort: 'xhigh' });
     const run = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
-    expect(run.routing).toEqual({ runtime: 'codex', model: 'gpt-5-codex', reason: 'routing rule 1 (kind code)' });
+    expect(run.routing).toEqual({ runtime: 'codex', model: 'gpt-5-codex', effort: 'xhigh', reason: 'routing rule 1 (kind code)' });
 
     // interrupted: the resume must go back to the same Codex thread
     w.send({ type: 'run.accepted', runId: spec.runId });
@@ -74,7 +81,7 @@ describe('model router in the scheduler', () => {
     const { workerId } = await t.prisma.taskRun.findUniqueOrThrow({ where: { id: spec.runId } });
     await resumeRun(t.prisma, t.app.hub, t.config, t.app.gateway, spec.runId, { reason: 'timeout', worker: { workerId: workerId!, local: () => true } });
     const resumed: RunSpec = (await w.waitFor('run.assign')).spec;
-    expect(resumed).toMatchObject({ runId: spec.runId, runtime: 'codex', model: 'gpt-5-codex', resumeSdkSessionId: 'th-1' });
+    expect(resumed).toMatchObject({ runId: spec.runId, runtime: 'codex', model: 'gpt-5-codex', effort: 'xhigh', resumeSdkSessionId: 'th-1' });
   });
 
   it('with no Codex worker online the run falls back to the agent runtime and says why', async () => {
