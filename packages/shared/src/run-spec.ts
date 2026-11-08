@@ -77,6 +77,8 @@ export const RunResultSchema = z
     costUsd: z.number(),
     numTurns: z.number(),
     durationMs: z.number(),
+    /** the tokens count the whole SDK session (Codex reports thread totals), not only this result: the API keeps the difference */
+    cumulative: z.boolean().optional(),
   }),
   structuredOutput: z.unknown().optional(),
   git: z

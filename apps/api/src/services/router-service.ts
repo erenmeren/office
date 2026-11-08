@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@office/db';
-import { AgentConfigSchema, type Effort, type RoutingRule, type Runtime, type TaskKind } from '@office/shared';
+import { codexUnenforceable } from '@office/runtime';
+import { AgentConfigSchema, type ApprovalPolicy, type Effort, type RoutingRule, type Runtime, type TaskKind } from '@office/shared';
 
 /** Where a task run executes and why; stored on the run (`TaskRun.routing`). */
 export interface Route {
@@ -29,4 +30,14 @@ export function routeTask(rules: RoutingRule[], task: { kind: TaskKind; priority
   const effort = rule.effort ?? own.effort;
   const when = [rule.taskKind && `kind ${rule.taskKind}`, rule.minPriority !== undefined && `priority >= ${rule.minPriority}`].filter(Boolean).join(', ');
   return { runtime: rule.runtime, model, ...(effort && { effort }), reason: `routing rule ${i + 1}${when ? ` (${when})` : ' (every task)'}` };
+}
+
+/**
+ * Why a task cannot run on Codex, or null: Codex sends no messages (so no required consultation can be met) and cannot
+ * enforce a destructive-command or sensitive-path policy that is not auto (the adapter would refuse the run).
+ */
+export function codexUnfit(task: { requiredConsultations: unknown }, policy: ApprovalPolicy): string | null {
+  if (Array.isArray(task.requiredConsultations) && task.requiredConsultations.length) return 'the task needs consultations, which Codex cannot send';
+  const gated = codexUnenforceable(policy);
+  return gated.length ? `the project's ${gated.join(' and ')} policy is not auto, which Codex cannot enforce` : null;
 }

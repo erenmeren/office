@@ -13,7 +13,7 @@ import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
 import { embedMissingMemory } from './memory-service.js';
 import { CONDUCTOR_SLUG } from './conductor-service.js';
-import { agentDefault, routeTask } from './router-service.js';
+import { agentDefault, codexUnfit, routeTask } from './router-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
 const WAKE_PROMPT = 'You have new messages. Read your inbox and answer.';
@@ -142,7 +142,8 @@ export class Scheduler {
     });
     for (const task of tasks) {
       try {
-        const verdict = await gate(this.prisma, await getSettings(this.prisma, task.projectId), task, task.agent);
+        const settings = await getSettings(this.prisma, task.projectId);
+        const verdict = await gate(this.prisma, settings, task, task.agent);
         if (!verdict.ok) {
           if (this.loggedBlocked.get(task.id) !== verdict.reason) {
             this.loggedBlocked.set(task.id, verdict.reason);
@@ -155,7 +156,10 @@ export class Scheduler {
         }
         this.loggedBlocked.delete(task.id);
         const own = await agentDefault(this.prisma, task.agent);
-        let route = routeTask((await getSettings(this.prisma, task.projectId)).routing, task, own);
+        let route = routeTask(settings.routing, task, own);
+        const unfit = route.runtime === 'codex' && own.runtime !== 'codex' ? codexUnfit(task, settings.approvalPolicy) : null;
+        // a rule may send to Codex only what Codex can run; the agent's own Codex choice fails in the adapter with the reason
+        if (unfit) route = { ...own, reason: `${route.reason} chose codex, but ${unfit}; fell back to the agent's ${own.runtime}` };
         // only a mission run carries git, so only it can go to a worker that clones
         const access = { needsRepoAccess: task.missionId ? ('any' as const) : ('local' as const) };
         let worker = this.pickWorker(task.project, { ...access, runtime: route.runtime });

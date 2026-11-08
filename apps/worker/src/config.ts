@@ -12,6 +12,8 @@ export interface WorkerConfig {
   runtime: 'claude' | 'fake';
   /** The Codex CLI (`OFFICE_CODEX_BIN`, default `codex` on PATH); Codex runs are offered only when it answers `--version`. */
   codexBin: string;
+  /** A Codex run still going after this many minutes is stopped and fails (`OFFICE_CODEX_TIMEOUT_MINUTES`, default 60). */
+  codexTimeoutMinutes: number;
   capacity: number;
   name: string;
   tags: string[];
@@ -27,6 +29,8 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
   if (runtime !== 'claude' && runtime !== 'fake') throw new Error(`Invalid OFFICE_RUNTIME: ${runtime}`);
   const capacity = Number(env.OFFICE_WORKER_CAPACITY ?? 2);
   if (!Number.isInteger(capacity) || capacity < 1) throw new Error('Invalid OFFICE_WORKER_CAPACITY');
+  const codexTimeoutMinutes = Number(env.OFFICE_CODEX_TIMEOUT_MINUTES ?? 60);
+  if (!(codexTimeoutMinutes > 0)) throw new Error('Invalid OFFICE_CODEX_TIMEOUT_MINUTES');
   const roots = (env.OFFICE_WORKSPACE_ROOTS ?? '').split(':').filter(Boolean);
   const canClone = env.OFFICE_WORKER_CAN_CLONE === 'true';
   if (roots.length === 0 && !canClone) throw new Error('OFFICE_WORKSPACE_ROOTS is empty or missing; set it to a colon-separated list of directories');
@@ -51,6 +55,7 @@ export function loadWorkerConfig(env: Record<string, string | undefined> = proce
     ].filter((p, i, a) => a.indexOf(p) === i),
     runtime,
     codexBin: env.OFFICE_CODEX_BIN || 'codex',
+    codexTimeoutMinutes,
     capacity,
     name: env.OFFICE_WORKER_NAME || hostname(),
     tags,

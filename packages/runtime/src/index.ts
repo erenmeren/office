@@ -15,7 +15,7 @@ export { ClaudeAdapter, buildQueryOptions, effectiveAllowedTools } from './claud
 export { buildChildEnv } from './claude/env.js';
 export { normalizeSdkMessage } from './claude/normalize.js';
 
-export { CodexAdapter, codexArgs, codexRefusal } from './codex/adapter.js';
+export { CodexAdapter, codexArgs, codexRefusal, codexUnenforceable } from './codex/adapter.js';
 export { normalizeCodexEvent } from './codex/normalize.js';
 
 /** Sends each run to the adapter of its `spec.runtime`. */
@@ -43,12 +43,15 @@ export function codexAvailable(bin = 'codex'): boolean {
 }
 
 /** `fake` runs every runtime in tests; `claude` adds Codex when its CLI is installed. */
-export function createAdapter(name: 'claude' | 'fake', codexBin?: string): { adapter: RuntimeAdapter; runtimes: Runtime[] } {
+export function createAdapter(
+  name: 'claude' | 'fake',
+  codex?: { bin: string; timeoutMinutes: number },
+): { adapter: RuntimeAdapter; runtimes: Runtime[] } {
   if (name === 'fake') return { adapter: new FakeAdapter(), runtimes: ['claude', 'codex'] };
-  const codex = codexBin ? new CodexAdapter(codexBin) : undefined;
+  const codexAdapter = codex ? new CodexAdapter(codex.bin, codex.timeoutMinutes * 60_000) : undefined;
   return {
-    adapter: new RoutedAdapter({ claude: new ClaudeAdapter(), ...(codex && { codex }) }),
-    runtimes: codex ? ['claude', 'codex'] : ['claude'],
+    adapter: new RoutedAdapter({ claude: new ClaudeAdapter(), ...(codexAdapter && { codex: codexAdapter }) }),
+    runtimes: codexAdapter ? ['claude', 'codex'] : ['claude'],
   };
 }
 export { claudeSessionStore, type ClaudeSessionStore } from './claude/sessions.js';

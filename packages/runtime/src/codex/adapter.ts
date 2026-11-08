@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { RunResult, RunSpec } from '@office/shared';
+import type { ApprovalPolicy, RunResult, RunSpec } from '@office/shared';
 import { buildChildEnv } from '../claude/env.js';
 import { redactSecrets } from '../redact.js';
 import type { EventSink, RunControl, RuntimeAdapter } from '../types.js';
@@ -13,35 +13,38 @@ const STDERR_KEEP = 4000;
  * Why this run cannot go to Codex, or null. Codex has no per-call hook the platform can answer, so policies that need one
  * (destructive commands, sensitive paths) refuse it, and only task runs are supported (no office tools, no structured output).
  */
-export function codexRefusal(spec: RunSpec): string | null {
+export function codexRefusal(spec: Pick<RunSpec, 'kind' | 'approvalPolicy'>): string | null {
   if (spec.kind !== 'task') return `the Codex runtime runs task runs only, not ${spec.kind} runs`;
-  const p = spec.approvalPolicy;
-  const unenforceable = p ? (['destructive_command', 'sensitive_path'] as const).filter((t) => p[t] !== 'auto') : [];
+  const unenforceable = codexUnenforceable(spec.approvalPolicy);
   if (unenforceable.length) {
     return `the project's approval policy for ${unenforceable.join(' and ')} is not "auto", and Codex has no per-command gate to enforce it; run this agent on Claude or set those policies to auto`;
   }
   return null;
 }
 
+/** The approval policies Codex cannot enforce because they are not `auto` (it has no per-command gate). */
+export const codexUnenforceable = (p?: ApprovalPolicy) => (p ? (['destructive_command', 'sensitive_path'] as const).filter((t) => p[t] !== 'auto') : []);
+
 /** Network only when nothing that needs it is gated: `open` access and auto `git_push` and `deploy` (Codex has no domain allowlist). */
 export const codexNetwork = (spec: RunSpec) =>
   spec.networkAccess === 'open' && (!spec.approvalPolicy || (spec.approvalPolicy.git_push === 'auto' && spec.approvalPolicy.deploy === 'auto'));
 
-/** `codex exec` argv: workspace-write sandbox, never asks, prompt on stdin. */
+/** `codex exec` argv: workspace-write sandbox (read-only for a read-only checkout), never asks, prompt on stdin. */
 export function codexArgs(spec: RunSpec): string[] {
+  const readOnly = spec.readOnlyCheckout;
   const network = codexNetwork(spec);
   const model = spec.model && !CLAUDE_MODEL.test(spec.model) ? spec.model : undefined;
   return [
     'exec',
     '--json',
     '--skip-git-repo-check',
-    '--sandbox', 'workspace-write',
+    '--sandbox', readOnly ? 'read-only' : 'workspace-write',
     '--cd', spec.cwd,
     '-c', 'approval_policy="never"',
     '-c', `sandbox_workspace_write.network_access=${network}`,
     '-c', `web_search="${network ? 'live' : 'disabled'}"`,
     // a worktree's commits are written to the repository's git dir
-    ...(spec.gitDir ? ['--add-dir', spec.gitDir] : []),
+    ...(spec.gitDir && !readOnly ? ['--add-dir', spec.gitDir] : []),
     ...(model ? ['--model', model] : []),
     ...(spec.effort ? ['-c', `model_reasoning_effort="${spec.effort}"`] : []),
     ...(spec.resumeSdkSessionId ? ['resume', spec.resumeSdkSessionId] : []),
@@ -64,7 +67,11 @@ const ZERO_USAGE = { inputTokens: 0, outputTokens: 0, costUsd: 0, numTurns: 0, d
  */
 export class CodexAdapter implements RuntimeAdapter {
   readonly name = 'codex' as const;
-  constructor(private bin = 'codex') {}
+  /** `timeoutMs`: a run still going after it is stopped and fails (Codex has no turn or budget limit of its own). */
+  constructor(
+    private bin = 'codex',
+    private timeoutMs = 60 * 60_000,
+  ) {}
 
   async run(spec: RunSpec, sink: EventSink, signal: AbortSignal, _tools?: unknown, control?: RunControl): Promise<RunResult> {
     const failed = (error: string, threadId?: string): RunResult => {
@@ -81,8 +88,8 @@ export class CodexAdapter implements RuntimeAdapter {
     const started = Date.now();
     // own process group: the kill reaches the commands Codex started
     const child = spawn(this.bin, codexArgs(spec), { cwd: spec.cwd, env: buildChildEnv(process.env, spec), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
-    let stopped: 'cancelled' | 'suspended' | undefined;
-    const stop = (why: 'cancelled' | 'suspended') => {
+    let stopped: 'cancelled' | 'suspended' | 'timeout' | undefined;
+    const stop = (why: 'cancelled' | 'suspended' | 'timeout') => {
       stopped ??= why;
       if (why === 'suspended') sink.emit({ type: 'agent.waiting_reply', payload: { reason: 'interrupted' } });
       try {
@@ -93,6 +100,7 @@ export class CodexAdapter implements RuntimeAdapter {
     };
     const onAbort = () => stop('cancelled');
     const onInterrupt = () => stop('suspended');
+    const timer = setTimeout(() => stop('timeout'), this.timeoutMs);
     signal.addEventListener('abort', onAbort, { once: true });
     control?.interrupted.addEventListener('abort', onInterrupt, { once: true });
 
@@ -113,7 +121,8 @@ export class CodexAdapter implements RuntimeAdapter {
     let turnFailed: string | undefined;
     let lastError: string | undefined;
     let completed = false;
-    const usage = { ...ZERO_USAGE };
+    // Codex reports thread totals, so a resumed thread repeats its earlier turns: the API records the difference
+  const usage = { ...ZERO_USAGE, cumulative: true };
     for await (const line of createInterface({ input: child.stdout })) {
       let e: CodexEvent;
       try {
@@ -126,13 +135,15 @@ export class CodexAdapter implements RuntimeAdapter {
       else if (e.type === 'item.completed' && e.item.type === 'agent_message') lastText = e.item.text;
       else if (e.type === 'turn.completed') {
         completed = true;
-        usage.inputTokens += e.usage.input_tokens;
-        usage.outputTokens += e.usage.output_tokens + (e.usage.reasoning_output_tokens ?? 0);
+        // thread totals; output_tokens already includes reasoning_output_tokens
+        usage.inputTokens = e.usage.input_tokens;
+        usage.outputTokens = e.usage.output_tokens;
         usage.numTurns += 1;
       } else if (e.type === 'turn.failed') turnFailed = e.error.message;
       else if (e.type === 'error') lastError = e.message;
     }
     const code = await exited;
+    clearTimeout(timer);
     signal.removeEventListener('abort', onAbort);
     control?.interrupted.removeEventListener('abort', onInterrupt);
     usage.durationMs = Date.now() - started;
@@ -143,6 +154,9 @@ export class CodexAdapter implements RuntimeAdapter {
     }
     if (stopped === 'suspended') {
       return threadId ? { status: 'suspended', sdkSessionId: threadId, usage } : failed('interrupted before Codex started a thread');
+    }
+    if (stopped === 'timeout') {
+      return { ...failed(`codex: stopped after ${Math.round(this.timeoutMs / 60_000)} minutes (OFFICE_CODEX_TIMEOUT_MINUTES)`, threadId), usage };
     }
     if (completed && !turnFailed && code === 0) {
       const resultText = redactSecrets(lastText);

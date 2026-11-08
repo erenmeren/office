@@ -66,7 +66,8 @@ describe('CodexAdapter (fake codex binary)', () => {
     const r = await new CodexAdapter(bin).run(spec(), sink, new AbortController().signal);
     expect(r).toMatchObject({
       status: 'succeeded', resultText: 'Changed src/a.ts; npm test passes.', sdkSessionId: 'th-1',
-      usage: { inputTokens: 1200, outputTokens: 350, costUsd: 0, numTurns: 1 },
+      // output_tokens already counts the 50 reasoning tokens; totals are the thread's
+      usage: { inputTokens: 1200, outputTokens: 300, costUsd: 0, numTurns: 1, cumulative: true },
     });
     expect(events.map((e) => e.type)).toEqual([
       'agent.started', 'agent.tool.started', 'agent.command.executed', 'agent.tool.completed', 'agent.file.changed', 'agent.text', 'agent.completed',
@@ -109,6 +110,12 @@ describe('CodexAdapter (fake codex binary)', () => {
     expect(await second).toMatchObject({ status: 'cancelled' });
   });
 
+  it('a run past its time limit is stopped and fails with the reason, keeping the thread id', async () => {
+    process.env.FAKE_CODEX_MODE = 'hang';
+    const r = await new CodexAdapter(bin, 400).run(spec(), collect().sink, new AbortController().signal);
+    expect(r).toMatchObject({ status: 'failed', sdkSessionId: 'th-1', error: expect.stringContaining('OFFICE_CODEX_TIMEOUT_MINUTES') });
+  });
+
   it('refuses non-task runs and policies it cannot enforce, without starting codex', async () => {
     expect(codexRefusal(spec({ kind: 'chat' }))).toMatch('task runs only');
     expect(codexRefusal(spec({ approvalPolicy: ApprovalPolicySchema.parse({ sensitive_path: 'auto' }) }))).toMatch('destructive_command is not "auto"');
@@ -125,6 +132,13 @@ describe('CodexAdapter (fake codex binary)', () => {
     );
     expect(codexArgs(spec({ model: 'sonnet' }))).not.toContain('--model');
     expect(codexArgs(spec({ gitDir: '/repo/.git' }))).toEqual(expect.arrayContaining(['--add-dir', '/repo/.git']));
+  });
+
+  it('a read-only checkout (analysis, review) runs in the read-only sandbox without the git dir', () => {
+    const ro = codexArgs(spec({ readOnlyCheckout: true, gitDir: '/repo/.git' }));
+    expect(ro).toEqual(expect.arrayContaining(['--sandbox', 'read-only']));
+    expect(ro).not.toContain('workspace-write');
+    expect(ro).not.toContain('--add-dir');
   });
 
   it('normalizes a failed command and redacts secrets', () => {

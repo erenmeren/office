@@ -635,14 +635,14 @@ export async function completeRun(
       where: { id: run.session!.id },
       data: { status, sdkSessionId: r.sdkSessionId, ...(suspended ? {} : { endedAt: now }) },
     });
+    const tokens = await usageTokens(tx, runId, r.usage);
     await tx.usageRecord.create({
       data: {
         runId,
         projectId: run.session!.projectId,
         agentId: run.session!.agentId,
         model: run.session!.model,
-        inputTokens: r.usage.inputTokens,
-        outputTokens: r.usage.outputTokens,
+        ...tokens,
         costUsd: r.usage.costUsd,
       },
     });
@@ -728,10 +728,20 @@ export async function recordCancelledUsage(prisma: PrismaClient, runId: string, 
     await tx.usageRecord.create({
       data: {
         runId, projectId: session.projectId, agentId: session.agentId, model: session.model,
-        inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd,
+        ...(await usageTokens(tx, runId, usage)), costUsd: usage.costUsd,
       },
     });
   });
+}
+
+/** The tokens of this result alone: a cumulative report (a resumed Codex thread) minus what the run already recorded. */
+async function usageTokens(tx: Prisma.TransactionClient, runId: string, usage: RunResult['usage']) {
+  if (!usage.cumulative) return { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
+  const { _sum } = await tx.usageRecord.aggregate({ where: { runId }, _sum: { inputTokens: true, outputTokens: true } });
+  return {
+    inputTokens: Math.max(0, usage.inputTokens - (_sum.inputTokens ?? 0)),
+    outputTokens: Math.max(0, usage.outputTokens - (_sum.outputTokens ?? 0)),
+  };
 }
 
 /** Stores the git summary (run + GitWorkspace), the check (CheckResult + artifact) and an analysis/review result artifact. */
