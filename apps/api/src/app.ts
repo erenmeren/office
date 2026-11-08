@@ -30,6 +30,7 @@ import { observabilityRoutes } from './routes/observability.js';
 import { EventHub } from './services/event-hub.js';
 import { configureEmbeddings } from './lib/embeddings.js';
 import { Scheduler } from './services/scheduler.js';
+import { conductorRoutes } from './routes/conductor.js';
 import { claudeSessionRoutes } from './routes/claude-sessions.js';
 import { terminalRoutes } from './routes/terminals.js';
 import { browseRoutes } from './routes/browse.js';
@@ -115,6 +116,7 @@ export async function buildApp(
   await app.register(claudeSessionRoutes);
   await app.register(terminalRoutes);
   await app.register(browseRoutes, { config });
+  await app.register(conductorRoutes, { config });
   // the owner's own Claude skills (~/.claude) flow into the library on their own; tests run the sync themselves
   const syncSkills = () => syncMachineSkills(app.prisma, app.log).catch((err: unknown) => app.log.error({ err }, 'machine skill sync failed'));
   let skillSync: NodeJS.Timeout | undefined;

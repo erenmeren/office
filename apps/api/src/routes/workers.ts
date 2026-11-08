@@ -20,9 +20,9 @@ const PUBLIC = {
 
 export async function workerRoutes(app: FastifyInstance) {
   app.get('/workers', async () => {
-    const online = new Map(app.gateway.onlineWorkers().map((w) => [w.workerId, w.activeRuns]));
+    const online = new Map(app.gateway.onlineWorkers().map((w) => [w.workerId, w]));
     const workers = await app.prisma.worker.findMany({ select: PUBLIC, orderBy: { createdAt: 'asc' } });
-    return workers.map((w) => ({ ...w, online: online.has(w.id), activeRuns: online.get(w.id) ?? 0 }));
+    return workers.map((w) => ({ ...w, online: online.has(w.id), activeRuns: online.get(w.id)?.activeRuns ?? 0, runtimes: online.get(w.id)?.runtimes ?? [] }));
   });
 
   app.post('/workers', async (req, reply) => {

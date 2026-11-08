@@ -181,6 +181,8 @@ model Project {
   slug          String         @unique
   repoPath      String
   defaultBranch String         @default("main")
+  // the Conductor's hidden home project; left out of GET /projects
+  isSystem      Boolean        @default(false)
   tasks         Task[]
   sessions      AgentSession[]
   usage         UsageRecord[]
@@ -304,27 +306,29 @@ model ProjectAgent {
 }
 
 model Mission {
-  id             String        @id @default(uuid())
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  projectId      String
-  title          String
-  request        String
-  status         MissionStatus @default(planning)
-  branch         String?
-  baseCommit     String?
-  planRunId      String?
-  reviewRunId    String?
-  plan           Json?
-  planVersion    Int           @default(0)
-  planErrors     String[]
-  summary        String?
-  budgetUsd      Float?
-  conversationId String?
-  project        Project       @relation(fields: [projectId], references: [id])
-  tasks          Task[]
-  approvals      Approval[]
-  runs           TaskRun[]
+  id                      String        @id @default(uuid())
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  projectId               String
+  title                   String
+  request                 String
+  status                  MissionStatus @default(planning)
+  branch                  String?
+  baseCommit              String?
+  planRunId               String?
+  reviewRunId             String?
+  plan                    Json?
+  planVersion             Int           @default(0)
+  planErrors              String[]
+  summary                 String?
+  budgetUsd               Float?
+  conversationId          String?
+  // the Conductor conversation that opened this mission
+  conductorConversationId String?
+  project                 Project       @relation(fields: [projectId], references: [id])
+  tasks                   Task[]
+  approvals               Approval[]
+  runs                    TaskRun[]
 
   @@index([projectId, status])
 }
@@ -456,6 +460,8 @@ model TaskRun {
   missionId           String?
   reviewOfMissionId   String?
   structuredOutput    Json?
+  // model router decision for a task run: { runtime, model, reason }
+  routing             Json?
   mission             Mission?          @relation(fields: [missionId], references: [id])
   approvals           Approval[]
   artifacts           Artifact[]
@@ -667,9 +673,9 @@ model MessageDelivery {
 }
 
 model MemoryEntry {
-  id             String                       @id @default(uuid())
-  createdAt      DateTime                     @default(now())
-  updatedAt      DateTime                     @updatedAt
+  id             String                             @id @default(uuid())
+  createdAt      DateTime                           @default(now())
+  updatedAt      DateTime                           @updatedAt
   projectId      String?
   agentId        String?
   scope          MemoryScope
@@ -678,11 +684,11 @@ model MemoryEntry {
   content        String
   authorType     String
   authorAgentId  String?
-  status         MemoryStatus                 @default(proposed)
-  version        Int                          @default(1)
+  status         MemoryStatus                       @default(proposed)
+  version        Int                                @default(1)
   supersededById String?
-  supersededBy   MemoryEntry?                 @relation("Supersedes", fields: [supersededById], references: [id])
-  supersedes     MemoryEntry[]                @relation("Supersedes")
+  supersededBy   MemoryEntry?                       @relation("Supersedes", fields: [supersededById], references: [id])
+  supersedes     MemoryEntry[]                      @relation("Supersedes")
   taskId         String?
   runId          String?
   verifiedAt     DateTime?
@@ -722,7 +728,9 @@ model ManualSession {
   exitCode         Int?
   startedAt        DateTime
   exitedAt         DateTime?
-  /** last `terminal.opened` from its worker; a running row not seen since the worker's connection is over */
+  /**
+   * last `terminal.opened` from its worker; a running row not seen since the worker's connection is over
+   */
   seenAt           DateTime?
 
   @@index([projectId, status])

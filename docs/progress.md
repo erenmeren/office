@@ -9,6 +9,18 @@
 | 5 | done (two workers: real Claude on the host, a fake-runtime container cloning over the git endpoint; see "Phase 5 evidence") |
 | 6 | done (expectation 3 passed on its Task 10b re-run; see "Phase 6 evidence") |
 
+## Conductor, Codex runtime and model router (2026-11-08)
+
+Owner brief "Conductor ve Multi-Model Orchestration"; gap analysis and design in `docs/superpowers/specs/2026-11-08-conductor-multi-runtime-design.md`.
+
+- Conductor: hidden system agent `conductor` in the hidden home project `office-conductor` (`Project.isSystem`, created on first use under `<OFFICE_DATA_DIR>/repos/`). Conductor runs get no built-in tool (SDK `tools: []`) and nine office tools: `read_inbox`, `reply_message`, `get_conversation`, `list_projects`, `get_project`, `search_project_memory`, `create_mission`, `list_missions`, `get_mission`. `/conductor` page with its thread and the missions it opened (`Mission.conductorConversationId`).
+- Codex runtime: `AgentConfig.runtime` `claude|codex`; `CodexAdapter` spawns the installed `codex exec --json` (workspace-write sandbox, `approval_policy="never"`, network per policy, `resume <thread>` on resume). Task runs only; no office tools, live delivery, skills or subagents; tokens recorded, USD 0. Refused when `destructive_command` or `sensitive_path` is not `auto`.
+- Router: project setting `routing` (rules on task kind and minimum priority to runtime and model), decision stored as `TaskRun.routing` and kept on resume; falls back to the agent's runtime when no online worker runs the routed one. Workers announce `runtimes` in `hello`.
+- Tests: shared 67, web 52, db 10, runtime 72, api 258, worker 105 (fake adapter and a fake `codex` script; no test calls Claude or Codex).
+- Real Claude check (isolated API on 4200, scratch database `office_e2e`, mission runs blocked by an impossible worker tag): the Conductor put a Turkish request into `maratus-website` as one mission (a repeated message did not open a second), and on an unclear request it asked, opened nothing and listed the open missions. The first real run showed CLI tools the deny list does not name (`Workflow`, `EnterWorktree`, `Cron*`, `RemoteTrigger`, `SendToProject`, ...); Conductor runs now pass `tools: []`, and the second run had only the nine office tools. Cost $0.33 for that run.
+- Not verified for real: Codex. The CLI (0.154.0) is installed and detected (`runtimes: claude,codex`) but not logged in; a logged-out run fails with its 401. The event shapes come from `@openai/codex-sdk` 0.167.0 and a logged-out probe.
+- Found, not changed: every other agent has the same gap: CLI tools outside `BUILTIN_TOOLS` stay available (see `docs/security.md`).
+
 ## Owner gap sweep (2026-11-06)
 
 The owner asked for every open item except Windows and macOS, and declined `ProjectMember` (single owner stays). Semantic search runs on a local model at the owner's choice.

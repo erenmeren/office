@@ -214,6 +214,8 @@ function sessionItem(run: RunRow, all: EventRow[], waitingFor: WaitingFor | null
     costUsd: run.costUsd,
     waitingFor,
     pausedAt: run.pausedAt,
+    /** model router decision of a task run: { runtime, model, reason } */
+    routing: run.routing as { runtime: string; model: string; reason: string } | null,
     ...counts(events),
     subagents: (run.session?.subagentRuns ?? []).map((s) => ({
       id: s.id, toolUseId: s.toolUseId, subagentType: s.subagentType, description: s.description, status: s.status, startedAt: s.startedAt, endedAt: s.endedAt,

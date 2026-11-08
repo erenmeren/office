@@ -10,6 +10,7 @@ import { audit } from './audit-service.js';
 import { cancelLiveRuns, notifyCancelled, setTaskStatus } from './task-service.js';
 import { buildContextPack } from './context-pack.js';
 import { toolsForKind } from './tool-service.js';
+import type { Route } from './router-service.js';
 import {
   LIVE_TASK,
   cancelMission,
@@ -74,6 +75,8 @@ const MESSAGING_SECTION: Partial<Record<RunKind, string>> = {
     'You are reviewing a mission. Inspect the mission branch read-only, read each task\'s evidence with get_task_evidence, decide each task in review with review_task, then answer only with the review JSON that matches the schema.',
   plan: 'You are planning a mission. Inspect the repository read-only (Read, Glob, Grep, Bash for git log and listing only; writes are blocked). Answer only with the plan JSON that matches the schema.',
 };
+const CONDUCTOR_SECTION =
+  'You are the Conductor. The owner talks to you in this conversation: read it with read_inbox, answer with reply_message. You have no file, shell or code tools and never touch a repository; you open missions with create_mission and follow them with list_missions and get_mission.';
 const DEFAULT_MESSAGING_SECTION =
   'You can message teammates with the office tools (list_agents, send_message, read_inbox, …). Check read_inbox when you are blocked or when the context pack reports unread mail. Propose durable knowledge with propose_memory; the owner verifies it.';
 const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];
@@ -82,7 +85,7 @@ const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];
 async function specBase(
   prisma: PrismaClient,
   config: Config,
-  a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string },
+  a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string; route?: Pick<Route, 'runtime' | 'model'> },
 ) {
   const [project, loaded, settings] = await Promise.all([
     prisma.project.findUniqueOrThrow({ where: { id: a.projectId } }),
@@ -90,9 +93,10 @@ async function specBase(
     getSettings(prisma, a.projectId),
   ]);
   const { config: cfg } = loaded;
+  const conductor = project.isSystem;
   const summary = a.kind === 'summary';
   const inbox = a.kind === 'inbox';
-  const skills = summary ? [] : loaded.skills;
+  const skills = summary || conductor ? [] : loaded.skills;
   const pack = summary
     ? null
     : await buildContextPack(prisma, {
@@ -104,14 +108,14 @@ async function specBase(
   const systemPrompt = [
     cfg.systemPrompt,
     skillPromptSection(skills),
-    MESSAGING_SECTION[a.kind] ?? DEFAULT_MESSAGING_SECTION,
+    conductor ? CONDUCTOR_SECTION : (MESSAGING_SECTION[a.kind] ?? DEFAULT_MESSAGING_SECTION),
     pack?.text,
   ]
     .filter(Boolean)
     .join('\n\n');
   return {
     version: loaded.version,
-    model: cfg.model,
+    model: a.route?.model ?? cfg.model,
     skills,
     pack,
     spec: {
@@ -119,17 +123,19 @@ async function specBase(
       projectId: a.projectId,
       cwd: project.repoPath,
       systemPrompt,
-      model: cfg.model,
+      model: a.route?.model ?? cfg.model,
+      runtime: a.route?.runtime ?? cfg.runtime,
       effort: cfg.effort,
-      allowedTools: summary ? [] : inbox ? cfg.allowedTools.filter((t) => INBOX_TOOLS.includes(t)) : cfg.allowedTools,
+      allowedTools: summary || conductor ? [] : inbox ? cfg.allowedTools.filter((t) => INBOX_TOOLS.includes(t)) : cfg.allowedTools,
+      noBuiltinTools: conductor,
       maxTurns: inbox ? Math.min(cfg.maxTurns, 8) : cfg.maxTurns,
       maxBudgetUsd: inbox ? minBudget(cfg.maxBudgetUsd, 0.25) : cfg.maxBudgetUsd,
       maxConcurrentSubagents: cfg.maxConcurrentSubagents,
       maxSubagentDepth: cfg.maxSubagentDepth,
       kind: a.kind,
-      tools: toolsForKind(a.kind),
+      tools: toolsForKind(a.kind, conductor),
       skills: skills.map(({ name, version, checksum, mode, files }) => ({ name, version, checksum, mode, files })),
-      subagents: summary ? [] : loaded.subagents,
+      subagents: summary || conductor ? [] : loaded.subagents,
       // the project's approval policy gates every run kind, not only mission tasks
       approvalPolicy: settings.approvalPolicy,
       approvalTimeoutMinutes: settings.approvalTimeoutMinutes,
@@ -158,6 +164,8 @@ export interface CreateRunInput {
   reviewOfMissionId?: string;
   /** caps the agent version's maxBudgetUsd */
   taskBudgetUsd?: number;
+  /** model router decision (task runs); stored on the run so a resume keeps it */
+  route?: Route;
   /** mission run fields: git, setup/check commands, env */
   spec?: Partial<Pick<RunSpec, 'git' | 'setupCommand' | 'checkCommand' | 'checkTimeoutSeconds' | 'env'>>;
 }
@@ -167,7 +175,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
   if (!agent.currentVersionId) throw new Error(`Agent ${agent.id} has no current version`);
   const { kind, agentId, projectId, taskId } = input;
   const base = await specBase(prisma, config, {
-    kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt,
+    kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt, route: input.route,
   });
 
   const maxBudgetUsd = minBudget(base.spec.maxBudgetUsd, input.taskBudgetUsd);
@@ -188,6 +196,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
         status: 'queued',
         maxBudgetUsd,
         leaseExpiresAt: leaseUntil(config),
+        ...(input.route && { routing: { ...input.route } }),
       },
     });
     const session = await tx.agentSession.create({
@@ -242,6 +251,7 @@ export async function createRunForTask(
   task: Task,
   worker: RunWorker,
   config: Config,
+  route?: Route,
 ) {
   const input: CreateRunInput = {
     kind: 'task',
@@ -250,6 +260,7 @@ export async function createRunForTask(
     taskId: task.id,
     prompt: `${task.title}\n\n${task.description}`,
     worker,
+    route,
   };
   if (!task.missionId) return createRun(prisma, hub, config, input);
   const fields = await missionRunFields(prisma, task as Task & { missionId: string }, worker);
@@ -341,6 +352,8 @@ export async function resumeRun(
     projectId: run.projectId,
     agentVersionId: run.agentVersionId,
     taskText: run.task ? `${run.task.title}\n\n${run.task.description}` : prompt,
+    // the SDK session belongs to the runtime the run was routed to
+    route: (run.routing as Route | null) ?? undefined,
   });
   const max = await prisma.sessionEvent.aggregate({ where: { sessionId: session.id }, _max: { seq: true } });
   const seq = (max._max.seq ?? 0) + 1;

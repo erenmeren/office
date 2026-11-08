@@ -27,7 +27,7 @@ const run = promisify(execFile);
  * `git init` plus one empty commit on `branch`, so the worker can create mission branches from it.
  * `inPlace`: the owner's own folder, existing or not (files in it stay untracked); otherwise a new directory is required.
  */
-async function initRepository(path: string, branch: string, name: string, inPlace = false): Promise<void> {
+export async function initRepository(path: string, branch: string, name: string, inPlace = false): Promise<void> {
   const { committerName, committerEmail } = ProjectSettingsSchema.parse({});
   await mkdir(join(path, '..'), { recursive: true });
   // mkdir without `recursive` refuses an existing directory: never init over somebody's files unless asked
@@ -76,7 +76,8 @@ const repoRootOf = (path: string) => run('git', ['rev-parse', '--show-toplevel']
 export async function projectRoutes(app: FastifyInstance, opts: { config: Config }) {
   app.get('/settings/runtime', async () => ({ leaseSeconds: opts.config.leaseSeconds, heartbeatSeconds: opts.config.heartbeatSeconds }));
 
-  app.get('/projects', async () => app.prisma.project.findMany({ orderBy: { createdAt: 'asc' } }));
+  // system projects (the Conductor's home) are not the owner's projects
+  app.get('/projects', async () => app.prisma.project.findMany({ where: { isSystem: false }, orderBy: { createdAt: 'asc' } }));
 
   app.post('/projects', async (req, reply) => {
     const data = CreateProject.parse(req.body);

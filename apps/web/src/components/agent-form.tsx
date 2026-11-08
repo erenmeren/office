@@ -78,6 +78,7 @@ export function AgentForm({
     description: initial?.description ?? '',
     systemPrompt: cfg?.systemPrompt ?? '',
     model: cfg?.model ?? 'sonnet',
+    runtime: cfg?.runtime ?? 'claude',
     effort: cfg?.effort ?? 'unset',
     tools: cfg?.allowedTools.filter((t) => !isAlwaysOn(t)) ?? ['Bash', 'Edit', 'Write'],
     maxTurns: String(cfg?.maxTurns ?? 50),
@@ -125,6 +126,7 @@ export function AgentForm({
     const config: AgentConfigInput = {
       systemPrompt: form.systemPrompt,
       model: form.model,
+      runtime: form.runtime,
       ...(form.effort !== 'unset' && { effort: form.effort as (typeof EFFORTS)[number] }),
       allowedTools: [...ALWAYS_ON_TOOLS, ...form.tools],
       maxTurns: Number(form.maxTurns),
@@ -191,21 +193,44 @@ export function AgentForm({
         <Label htmlFor="systemPrompt">System prompt</Label>
         <Textarea id="systemPrompt" rows={5} value={form.systemPrompt} onChange={set('systemPrompt')} />
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         <div className="space-y-1">
-          <Label>Model</Label>
-          <Select value={form.model} onValueChange={(v) => setForm({ ...form, model: String(v) })}>
-            <SelectTrigger className="w-full">
+          <Label>Runtime</Label>
+          <Select
+            value={form.runtime}
+            onValueChange={(v) => {
+              const runtime = v === 'codex' ? 'codex' : 'claude';
+              // Claude aliases mean nothing to Codex: empty is the Codex CLI's own default model
+              setForm({ ...form, runtime, model: runtime === 'codex' ? '' : 'sonnet' });
+            }}
+          >
+            <SelectTrigger className="w-full" aria-label="Runtime">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {MODELS.map((m) => (
-                <SelectItem key={m} value={m}>
-                  {m}
-                </SelectItem>
-              ))}
+              <SelectItem value="claude">Claude</SelectItem>
+              <SelectItem value="codex">Codex</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="model">Model</Label>
+          {form.runtime === 'codex' ? (
+            <Input id="model" value={form.model} onChange={set('model')} placeholder="Codex default" />
+          ) : (
+            <Select value={form.model} onValueChange={(v) => setForm({ ...form, model: String(v) })}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MODELS.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {m}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
         <div className="space-y-1">
           <Label>Effort</Label>

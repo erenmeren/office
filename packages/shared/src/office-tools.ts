@@ -85,6 +85,37 @@ export const OFFICE_TOOLS = {
       'Record your review decision for a task: done, reopen, failed (when it used all its attempts), or blocked when only the owner can unblock it (network access, credentials, missing input): the task waits for the owner with your note and no attempt is used (Chief review only).',
     input: { taskId: z.string(), decision: z.enum(['done', 'reopen', 'failed', 'blocked']), note: z.string().max(2000).default('') },
   },
+  // Conductor only: records across projects, never a project's files
+  list_projects: {
+    description: 'List the projects with their slug, name, team and number of live missions (Conductor only).',
+    input: {},
+  },
+  get_project: {
+    description: "Read one project by slug: its team, recent missions with status and summary, and verified decisions (Conductor only).",
+    input: { project: z.string() },
+  },
+  search_project_memory: {
+    description: "Search one project's verified memory by keyword or meaning (Conductor only).",
+    input: { project: z.string(), query: z.string().min(1), limit: z.number().int().positive().max(20).default(10) },
+  },
+  create_mission: {
+    description:
+      "Open a mission in one project (by slug). The project's Chief plans it and the project's approval policy applies. Only call this once the owner's request clearly belongs to that project (Conductor only).",
+    input: {
+      project: z.string(),
+      request: z.string().min(1).max(8000),
+      title: z.string().min(1).max(120).optional(),
+      budgetUsd: z.number().positive().optional(),
+    },
+  },
+  list_missions: {
+    description: 'List recent missions, optionally of one project (by slug), with status and what each waits for (Conductor only).',
+    input: { project: z.string().optional(), limit: z.number().int().positive().max(50).default(20) },
+  },
+  get_mission: {
+    description: "Read one mission: status, its tasks with status and agent, the plan summary and the final summary (Conductor only).",
+    input: { missionId: z.string() },
+  },
 } as const satisfies Record<string, { description: string; input: z.ZodRawShape }>;
 
 export type OfficeToolName = keyof typeof OFFICE_TOOLS;

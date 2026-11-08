@@ -103,6 +103,7 @@ export function WorkersTable() {
               </TableCell>
               <TableCell>
                 <TagList tags={w.tags} />
+                {w.runtimes.length > 0 && <span className="text-xs text-ink-3">Runs {w.runtimes.join(', ')}</span>}
               </TableCell>
               <TableCell>
                 {w.activeRuns}/{w.capacity}

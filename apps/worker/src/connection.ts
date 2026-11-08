@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import pino, { type Logger } from 'pino';
 import WebSocket from 'ws';
 import { claudeSessionStore, type RuntimeAdapter } from '@office/runtime';
-import { ApiToWorkerSchema, type ApiToWorker, type OfficeEvent, type ToolCallResult, type WorkerToApi } from '@office/shared';
+import { ApiToWorkerSchema, type ApiToWorker, type OfficeEvent, type Runtime, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import { GRANTED_ROOTS_FILE, readGrantedRoots, type WorkerConfig } from './config.js';
 import { loadCredential, saveCredential } from './credentials.js';
 import { Outbox } from './outbox.js';
@@ -28,6 +28,8 @@ const DISCONNECTED: ToolCallResult = { ok: false, code: 'disconnected', error: '
 
 export interface ConnectionOptions {
   adapter: RuntimeAdapter;
+  /** Runtimes the adapter can run, announced in `hello` (default Claude only). */
+  runtimes?: Runtime[];
   heartbeatMs?: number;
   /** First reconnect delay; doubles up to 30 s. Default 1 s. */
   reconnectBaseMs?: number;
@@ -66,11 +68,13 @@ export class WorkerConnection {
   private runsDir: string;
   private outbox: Outbox;
   private started?: { resolve: () => void; reject: (err: Error) => void };
+  private runtimes: Runtime[];
 
   constructor(
     private config: WorkerConfig,
     opts: ConnectionOptions,
   ) {
+    this.runtimes = opts.runtimes ?? ['claude'];
     this.runsDir = join(config.home, 'runs');
     this.outbox = new Outbox(join(config.home, 'outbox'));
     this.log = opts.logger ?? pino({ level: process.env.LOG_LEVEL ?? 'info' });
@@ -140,6 +144,7 @@ export class WorkerConnection {
         tags: this.config.tags,
         canClone: this.config.canClone,
         machineId: this.config.machineId,
+        runtimes: this.runtimes,
       });
     });
     socket.on('message', (data) => {

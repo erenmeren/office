@@ -291,6 +291,64 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
 
       <Card>
         <CardHeader>
+          <CardTitle>Model routing</CardTitle>
+          <CardDescription>
+            For each task run the first matching rule picks the runtime and model; no match keeps the agent&apos;s own. A rule for Codex falls back to the
+            agent&apos;s runtime while no online worker runs Codex. Every run records which rule chose it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {draft.routing.map((rule, i) => {
+            const setRule = (patch: Partial<typeof rule>) => set('routing', draft.routing.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+            return (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <span className="w-6 font-mono text-xs text-ink-3">{i + 1}</span>
+                <NativeSelect
+                  aria-label={`Rule ${i + 1} task kind`}
+                  value={rule.taskKind ?? ''}
+                  onChange={(e) => setRule({ taskKind: (e.target.value || undefined) as typeof rule.taskKind })}
+                >
+                  <option value="">Any kind</option>
+                  {(['code', 'analysis', 'review', 'verify'] as const).map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </NativeSelect>
+                <Input
+                  aria-label={`Rule ${i + 1} minimum priority`}
+                  type="number"
+                  placeholder="Any priority"
+                  className="w-32"
+                  value={rule.minPriority ?? ''}
+                  onChange={(e) => setRule({ minPriority: e.target.value.trim() === '' ? undefined : Number(e.target.value) })}
+                />
+                <NativeSelect aria-label={`Rule ${i + 1} runtime`} value={rule.runtime} onChange={(e) => setRule({ runtime: e.target.value === 'codex' ? 'codex' : 'claude' })}>
+                  <option value="claude">Claude</option>
+                  <option value="codex">Codex</option>
+                </NativeSelect>
+                <Input
+                  aria-label={`Rule ${i + 1} model`}
+                  placeholder="Runtime default"
+                  className="w-44 font-mono"
+                  value={rule.model ?? ''}
+                  onChange={(e) => setRule({ model: e.target.value.trim() || undefined })}
+                />
+                <Button variant="ghost" size="icon" aria-label={`Remove rule ${i + 1}`} onClick={() => set('routing', draft.routing.filter((_, j) => j !== i))}>
+                  <X aria-hidden />
+                </Button>
+              </div>
+            );
+          })}
+          <Button variant="secondary" size="sm" onClick={() => set('routing', [...draft.routing, { runtime: 'claude' }])}>
+            <Plus data-icon="inline-start" aria-hidden />
+            Add rule
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Project agents</CardTitle>
           <CardDescription>No agents selected means every active agent may work on this project.</CardDescription>
         </CardHeader>

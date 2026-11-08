@@ -30,6 +30,7 @@ export interface AgentVersionView {
     systemPrompt: string;
     model: string;
     effort?: string;
+    runtime?: 'claude' | 'codex';
     allowedTools: string[];
     maxTurns: number;
     maxBudgetUsd: number;
@@ -112,6 +113,8 @@ export interface Worker {
   lastHeartbeatAt: string | null;
   online: boolean;
   activeRuns: number;
+  /** runtimes the connected worker runs; empty while offline */
+  runtimes: string[];
 }
 
 export const TERMINAL: TaskStatus[] = ['done', 'failed', 'cancelled'];
@@ -401,6 +404,7 @@ export interface LiveSession {
   /** the message a `waiting_reply` run waits on */
   waitingFor: { messageId: string; body: string; recipientAgentIds: string[] } | null;
   pausedAt: string | null;
+  routing: { runtime: string; model: string; reason: string } | null;
   commands: number;
   files: number;
   subagents: SessionSubagent[];

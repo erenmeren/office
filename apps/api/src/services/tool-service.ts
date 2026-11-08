@@ -19,6 +19,7 @@ import {
 } from './memory-service.js';
 import type { Db } from './task-service.js';
 import { closeTask, consultationsSatisfied, evidenceFor, evidenceRule } from './review-service.js';
+import { ConductorToolError, runConductorTool } from './conductor-service.js';
 import { MessageError, readInbox, sendMessage, toMessageView, type SendInput } from './message-service.js';
 
 type RunKind = TaskRun['kind'];
@@ -34,11 +35,18 @@ class ToolError extends Error {
 }
 
 const REVIEW_ONLY: OfficeToolName[] = ['get_task_evidence', 'review_task'];
-const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter((n) => n !== 'submit_summary' && !REVIEW_ONLY.includes(n));
+const CONDUCTOR_ONLY: OfficeToolName[] = ['list_projects', 'get_project', 'search_project_memory', 'create_mission', 'list_missions', 'get_mission'];
+const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter(
+  (n) => n !== 'submit_summary' && !REVIEW_ONLY.includes(n) && !CONDUCTOR_ONLY.includes(n),
+);
+// the Conductor talks to the owner only: its own conversation plus project records
+const CONDUCTOR_TOOLS: OfficeToolName[] = ['read_inbox', 'reply_message', 'get_conversation', ...CONDUCTOR_ONLY];
 
 const PLAN_TOOLS: OfficeToolName[] = ['search_memory', 'read_memory', 'get_task_history', 'get_project_decisions', 'list_agents'];
 
-export function toolsForKind(kind: RunKind): OfficeToolName[] {
+/** `conductor`: a run in the Conductor's home project (a system project). */
+export function toolsForKind(kind: RunKind, conductor = false): OfficeToolName[] {
+  if (conductor) return [...CONDUCTOR_TOOLS];
   if (kind === 'plan') return [...PLAN_TOOLS];
   if (kind === 'review') return [...PLAN_TOOLS, ...REVIEW_ONLY];
   return kind === 'summary' ? ['submit_summary'] : [...MESSAGING_AND_MEMORY];
@@ -54,15 +62,17 @@ export async function executeTool(
   name: string,
   rawArgs: unknown,
 ): Promise<ToolCallResult> {
-  if (!(OFFICE_TOOL_NAMES as string[]).includes(name) || !toolsForKind(ctx.run.kind).includes(name as OfficeToolName)) {
+  const conductor = !!(await prisma.project.findUnique({ where: { id: ctx.run.projectId }, select: { isSystem: true } }))?.isSystem;
+  if (!(OFFICE_TOOL_NAMES as string[]).includes(name) || !toolsForKind(ctx.run.kind, conductor).includes(name as OfficeToolName)) {
     return fail('unknown_tool', `unknown tool: ${name}`);
   }
   try {
     const args = parseToolArgs(name as OfficeToolName, rawArgs);
+    if (CONDUCTOR_ONLY.includes(name as OfficeToolName)) return { ok: true, result: await runConductorTool(prisma, hub, ctx.run, name, args) };
     return { ok: true, ...(await run(prisma, hub, config, ctx, name as OfficeToolName, args)) };
   } catch (err) {
     if (err instanceof ZodError) return fail('invalid_args', err.message);
-    if (err instanceof ToolError || err instanceof MessageError) return fail(err.code, err.message);
+    if (err instanceof ToolError || err instanceof MessageError || err instanceof ConductorToolError) return fail(err.code, err.message);
     if (err instanceof HttpError) return fail(err.status === 404 ? 'not_found' : err.code, err.detail ?? err.message);
     throw err;
   }
@@ -294,4 +304,6 @@ async function run(
       return { result: { entryId: created.entry.id, proposalIds: created.proposals.map((p) => p.id) } };
     }
   }
+  // the Conductor's tools are answered by executeTool before this switch
+  throw new ToolError('unknown_tool', `unknown tool: ${name}`);
 }

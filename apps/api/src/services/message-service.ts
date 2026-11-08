@@ -1,5 +1,5 @@
 import type { Conversation, Message, MessageDelivery } from '@office/db';
-import { WAKE_TYPES, type MessageLimits, type MessageView } from '@office/shared';
+import { CONDUCTOR_SLUG, WAKE_TYPES, type MessageLimits, type MessageView } from '@office/shared';
 import type { Outbox } from './event-hub.js';
 import type { Db } from './task-service.js';
 
@@ -153,7 +153,10 @@ async function sendInTx(db: Db, limits: MessageLimits, input: SendInput): Promis
     throw new MessageError('self_message', 'an agent cannot message itself');
   }
   if (recipientAgentIds.length > 0) {
-    const found = await db.agent.count({ where: { id: { in: recipientAgentIds }, isSystem: false } });
+    // system agents get no mail, except the Conductor from the owner
+    const found = await db.agent.count({
+      where: { id: { in: recipientAgentIds }, OR: [{ isSystem: false }, ...(input.senderUserId ? [{ slug: CONDUCTOR_SLUG }] : [])] },
+    });
     if (found !== recipientAgentIds.length) throw new MessageError('unknown_recipient', 'unknown recipient agent');
   }
 

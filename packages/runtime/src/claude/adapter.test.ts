@@ -127,6 +127,17 @@ describe('ClaudeAdapter', () => {
     );
   });
 
+  it('noBuiltinTools (Conductor): no built-in tool at all, office tools always loaded', () => {
+    const bridge = { call: vi.fn(), askApproval: vi.fn() };
+    const conductor = { ...spec, noBuiltinTools: true, allowedTools: [], tools: ['read_inbox', 'create_mission'] };
+    const o = buildQueryOptions(conductor, bridge, () => {}) as unknown as Record<string, unknown> & { mcpServers: { office: { tools?: unknown } } };
+    expect(o.tools).toEqual([]);
+    expect(o.disallowedTools).toEqual(expect.arrayContaining(['Read', 'Glob', 'Grep', 'Bash']));
+    expect(o.mcpServers.office).toBeDefined();
+    const plain = buildQueryOptions(spec, bridge, () => {}) as unknown as Record<string, unknown>;
+    expect(plain.tools).toBeUndefined();
+  });
+
   it('open network (default): no sandbox; allowlist: sandbox closed except the listed hosts', async () => {
     const gitSpec = { git: { repoPath: '/repo', defaultBranch: 'main', missionBranch: 'office/m', taskSlug: 't', committerName: 'c', committerEmail: 'c@x.invalid', agentName: 'dev' }, networkAccess: 'allowlist' } as Partial<RunSpec>;
     h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
