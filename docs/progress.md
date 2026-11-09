@@ -981,6 +981,16 @@ Added the same day on the owner's request: speech bubbles (the agent's latest `a
 
 Not built from the design: the List and Timeline views (Live Sessions and Activity cover them), "Open inspector" preselecting the run (the sessions page has no deep link). Verified with a mocked preview screenshot at 1980×1080; Playwright still not run (no `OFFICE_E2E_*` credentials), `/office` was added to its static page list.
 
+## Pixel Office cast (2026-11-09)
+
+Owner request: draw the office's characters as the Matrix cast, with subagents as Agent Smith.
+
+- `CREATURES` in `apps/web/src/lib/office.ts` now holds 12×12 Matrix sprites by role: owner Neo, chief Morpheus, architect the Architect, developer Trinity, designer the woman in red, qa the Oracle (with a cookie), security Seraph, summarizer the operator. Unknown roles still share one by hash. `SMITH` is drawn for every subagent.
+- The sprites use one fixed palette (`CAST_PAL`) instead of the agent's gradient, and a green `drop-shadow` rim so black coats read on the dark floor. Rooms, themes, plates, tags and statuses are unchanged.
+- Fixed on the way: the subagents and their mini desks were wrapped in a plain `div`, which flattens a `preserve-3d` scene, so they lay flat on the floor; the wrapper is a fragment now.
+- Verified with a unit test (every sprite 12×12 and inside the palette) and a static render of the real `OfficeFloor` with mock rooms, screenshotted in Chromium. Not checked against the running app.
+- Seen, not changed: with seven rooms (three rows) the floor is wider than the 1300px stage and the outer rooms are cut off.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):

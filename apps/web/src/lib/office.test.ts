@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageView } from '@office/shared';
-import { creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, ownerRoom, projector, roomOrigin, sprite, themeFor, waitingMail, timelineLanes } from './office';
+import { CAST_PAL, CREATURES, SMITH, creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, ownerRoom, projector, roomOrigin, sprite, themeFor, waitingMail, timelineLanes } from './office';
 import type { Agent, ClaudeSession, LiveSession, Overview, TerminalView } from './queries';
 
 describe('floorLayout', () => {
@@ -29,6 +29,15 @@ it('themes and creatures follow the role, with a fallback', () => {
   expect(['chief', 'qa-engineer', 'office-summarizer', 'frontend-dev', 'researcher'].map(themeFor)).toEqual(['library', 'board', 'fire', 'couch', 'plain']);
   expect(creatureFor('qa-engineer')).toBe(creatureFor('qa'));
   expect(creatureFor('researcher')).toBe(creatureFor('researcher'));
+});
+
+it('the cast is 12×12, drawn only in its palette, and Smith is nobody’s room tenant', () => {
+  for (const rows of [...Object.values(CREATURES), SMITH]) {
+    expect(rows.map((r) => r.length)).toEqual(Array(12).fill(12));
+    expect([...rows.join('')].filter((ch) => ch !== '.' && !CAST_PAL[ch])).toEqual([]);
+  }
+  expect(creatureFor('security-engineer')).toBe(CREATURES.security);
+  expect(Object.values(CREATURES)).not.toContain(SMITH);
 });
 
 it('officeRooms joins the team with live sessions', () => {

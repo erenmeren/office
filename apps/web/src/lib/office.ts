@@ -66,15 +66,35 @@ export function sprite(rows: string[], pal: Record<string, string>, px: number):
 
 const BASE: Record<string, string> = { k: '#1b1033', w: '#ffffff', e: '#1b1033', p: '#ff8fb1' };
 
-export const CREATURES: Record<string, string[]> = {
-  chief: ['....c.c.c...', '....ccccc...', '...kaaaaak..', '..kaaaaaaak.', '.kaaeaaaeaak', '.kaaaaaaaaak', '.kapaaaaapak', '.kaaakkkaaak', '..kaaaaaaak.', '...kaaaaak..', '..kbbk.kbbk.', '..kkk...kkk.'],
-  architect: ['..kk....kk..', '.kaak..kaak.', '.kaaakkaaak.', 'kaaaaaaaaaak', 'kakkkaakkkak', 'kakekaakekak', 'kaaaaccaaaak', 'kabaaaaaabak', '.kbbaaaabbk.', '..kbbbbbbk..', '...kk..kk...', '............'],
-  designer: ['.k.......k..', '.kak....kak.', '.kaak..kaak.', '.kaaakkaaak.', '.kaaaaaaaak.', '.kaeaaaaeak.', '.kaaaaaaaak.', '.kapakkapak.', '..kaaaaaak..', '..kaaaaaakkc', '..kbbkkbbk.c', '..kk....kk..'],
-  developer: ['..kkk..kkk..', '.kaeak.kaeak', '.kaaakkkaaak', 'kaaaaaaaaaak', 'kaaaaaaaaaak', 'kaapaaaapaak', 'kaakkkkkkaak', '.kaaaaaaaak.', '.kbbbbbbbbk.', '.kbbbbbbbbk.', '..kbbk..kbbk', '..kk....kk..'],
-  qa: ['..k......k..', '...k....k...', '..kkkkkkkk..', '.kaaaaaaaak.', 'kaaeaaaaeaak', 'kaaaaaaaaaak', 'kaakaaaakaak', 'kaaaakkaaaak', '.kaaaaaaaak.', '.kakaaaakak.', '..kkaaaakk..', '...kk..kk...'],
-  owner: ['....kkkk....', '...kaaaak...', '..kaaaaaak..', '.kkaeaaeakk.', '.kakaaaaakak', '.kkaaaaaakk.', '..kaapaaak..', '..kkaaaakk..', '...kbbbbk...', '..kbbbbbbk..', '..kbbk.kbbk.', '..kk....kk..'],
-  summarizer: ['....kkkk....', '..kkaaaakk..', '.kaaaaaaaak.', '.kaaeaaaeak.', 'kaaaaaaaaaak', 'kaaaaaaaaaak', 'kaaaakkaaaak', 'kaaaaaaaaaak', 'kaaaaaaaaaak', 'kaakaaakaaak', 'kk.kk.kk.kk.', '............'],
+/** Colours of the Matrix cast below: blacks, skins, hair, and the few bright pieces that tell them apart. */
+export const CAST_PAL: Record<string, string> = {
+  k: '#0d0f14',
+  K: '#4a5262',
+  s: '#f1c7a1',
+  d: '#8d5a3b',
+  e: '#1b1033',
+  w: '#ffffff',
+  y: '#aab1bd',
+  h: '#6b7280',
+  u: '#6b4423',
+  o: '#f6d55c',
+  r: '#e11d2e',
+  t: '#3fae6a',
 };
+
+/** The Matrix cast, 12×12 each: chief Morpheus, the Architect, designer the woman in red, developer Trinity, qa the Oracle, security Seraph, owner Neo, summarizer the operator. */
+export const CREATURES: Record<string, string[]> = {
+  chief: ['............', '....dddd....', '...dddddd...', '...dkKkKd...', '...dddddd...', '....dddd....', '..kkkwwkkk..', '.kkkkttkkkk.', '.kdkkttkkdk.', '..kkkKKkkk..', '.kkkkKKkkkk.', '.kkk.kk.kkk.'],
+  architect: ['....wwww....', '...wwwwww...', '...wssssw...', '...sesses...', '...wssssw...', '....wwww....', '..yyywwyyy..', '.yyyykkyyyy.', '.ysyykkyysy.', '..yyyyyyyy..', '...yy..yy...', '...kk..kk...'],
+  designer: ['....oooo....', '...oooooo...', '..oossssoo..', '..osessseo..', '..ossrrsso..', '..oo.ss.oo..', '..osrrrrso..', '...srrrrs...', '...srrrrs...', '....rrrr....', '...rrrrrr...', '....s..s....'],
+  developer: ['....kkkk....', '...kkkkkk...', '..kkssssk...', '..kskkkks...', '..kssssss...', '....ssss....', '...kkkkkk...', '..kkKkkKkk..', '..skkKKkks..', '...kkkkkk...', '...kK..Kk...', '...kk..kk...'],
+  qa: ['.....kk.....', '....kkkk....', '...kkkkkk...', '...kddddk...', '...dedded...', '....dddd....', '..tttttttt..', '.ttttwwtttt.', '.tdtwwwwtdo.', '..ttwwwwtt..', '..tttttttt..', '...kk..kk...'],
+  security: ['....kkkk....', '...kkkkkk...', '...kssssk...', '...skssks...', '...ssssss...', '....ssss....', '..wwwwwwww..', '.wwwwyywwww.', '.wswwyywwsw.', '..wwwwwwww..', '...ww..ww...', '...kk..kk...'],
+  owner: ['....kkkk....', '...kkkkkk...', '...kssssk...', '...skkkks...', '...ssssss...', '....ssss....', '..kkkkkkkk..', '.kkkkKkkkkk.', '.kskkKkkksk.', '..kkkKkkkk..', '.kkkkKkkkkk.', '.kkk.kk.kkk.'],
+  summarizer: ['....hhhh....', '...hkkkkh...', '..hkddddkh..', '..hdeddedh..', '..hdddddd...', '...hhddd....', '..dyyyyyyd..', '.ddyyyyyydd.', '.d.yyyyyy.d.', '...yyyyyy...', '...kk..kk...', '...kk..kk...'],
+};
+/** Agent Smith; every subagent is a copy of him. */
+export const SMITH = ['....uuuu....', '...uuuuuu...', '...ussssu...', '...skkkks...', '...ssssssw..', '....ssss.w..', '..kwwkkwwk..', '.kkkwkkwkkk.', '.kskkkkkksk.', '..kkkkkkkk..', '...kk..kk...', '...kk..kk...'];
 
 export const PLANT = ['..gG.g..', '.gGggGg.', '.ggGGgg.', '..gggg..', '...gg...', '..pPPp..', '..pppp..', '...pp...'];
 export const PLANT_PAL = { g: '#3fae6a', G: '#8fe3ad', p: '#a9613f', P: '#cf8457' };

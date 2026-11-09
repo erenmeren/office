@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { agentGradient } from '@/lib/agent-identity';
 import {
   BEANBAG,
   BEANBAG_PAL,
+  CAST_PAL,
   CAT,
   CAT_PAL,
   HEAD,
@@ -15,6 +16,7 @@ import {
   PLANT_PAL,
   ROOM_H,
   ROOM_W,
+  SMITH,
   STAGE_W,
   SUBPOS,
   creatureFor,
@@ -48,6 +50,9 @@ const LAMP_S = sprite(LAMP, LAMP_PAL, 3);
 const MONSTERA_S = sprite(MONSTERA, PLANT_PAL, 3);
 const CAT_S = sprite(CAT, CAT_PAL, 3);
 const BEANBAG_S = sprite(BEANBAG, BEANBAG_PAL, 3);
+const SMITH_S = sprite(SMITH, CAST_PAL, 2);
+// the cast wears black on a dark floor; the green rim keeps it readable
+const RIM = 'drop-shadow(0 0 2px rgba(57,255,20,.75))';
 const FLOWER = { pink: sprite(PLANT, { ...PLANT_PAL, G: '#ff8fb1' }, 3), yellow: sprite(PLANT, { ...PLANT_PAL, G: '#ffe14d' }, 3), violet: sprite(PLANT, { ...PLANT_PAL, G: '#b39dff' }, 3) };
 const BOOKS = 'repeating-linear-gradient(90deg,#d9534f 0 4px,#4fe3ff 4px 7px,#ffe14d 7px 10px,#b39dff 10px 14px,#3df5c8 14px 17px,#ff6ad5 17px 19px,#2a1d14 19px 21px)';
 
@@ -144,7 +149,7 @@ function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: numb
   const live = toneKey === 'live';
   const glow = hexA(tone, live ? 0.55 : toneKey === 'decision' ? 0.5 : 0.18);
   const theme = themeFor(room.slug);
-  const creature = sprite(creatureFor(room.slug), { a: c1, b: c2, c: c2 }, 3);
+  const creature = sprite(creatureFor(room.slug), CAST_PAL, 3);
   return (
     <div aria-hidden onClick={onSelect} style={abs(rx, ry, ROOM_W, ROOM_H, { transformStyle: 'preserve-3d', cursor: 'pointer' })}>
       <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg,${hexA(c1, 0.24)},transparent 60%),repeating-linear-gradient(90deg,rgba(255,255,255,.045) 0 1px,transparent 1px 26px),repeating-linear-gradient(0deg,rgba(0,0,0,.12) 0 1px,transparent 1px 130px),#241d4a`, border: '1px solid rgba(255,255,255,.16)', boxShadow: `inset 0 0 0 2px ${selected ? tone : 'transparent'}` }} />
@@ -172,7 +177,7 @@ function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: numb
       {/* chair, worker, desk, lamp, laptop, mug */}
       <div style={abs(138, 24, 24, 30, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#262152', border: '1px solid rgba(255,255,255,.15)' })} />
       <div style={abs(138, 24, 24, 22, { transform: 'translateZ(12px)', background: '#2f2a5e' })} />
-      <div style={stand(132, 6, 36, 12, { filter: toneKey === 'idle' ? 'saturate(.35) brightness(.75)' : 'none' })}><Pixels shadow={creature} /></div>
+      <div style={stand(132, 6, 36, 12, { filter: toneKey === 'idle' ? 'saturate(.35) brightness(.75) drop-shadow(0 0 1px rgba(57,255,20,.4))' : RIM })}><Pixels shadow={creature} /></div>
       <div style={abs(98, 50, 104, 46, { transform: 'translateZ(22px)', background: '#3f3870', border: '1px solid rgba(255,255,255,.18)' })} />
       <div style={abs(98, 96, 104, 22, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#262050' })} />
       <div style={abs(202, 50, 22, 46, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#302a5e' })} />
@@ -186,14 +191,15 @@ function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: numb
       {room.subs.map((s, i) => {
         const [x, y] = SUBPOS[Math.min(i, SUBPOS.length - 1)];
         return (
-          <div key={i}>
-            <div style={stand(x - 12, y - 22, 24, 2, { animation: s.done ? 'om-fade 1.6s ease-in-out infinite' : 'none' })}><Pixels shadow={sprite(creatureFor(room.slug), { a: c1, b: c2, c: c2 }, 2)} px={2} /></div>
+          // a fragment, not a div: a div in between flattens the 3D scene and lays the sprite on the floor
+          <Fragment key={i}>
+            <div style={stand(x - 12, y - 22, 24, 2, { filter: RIM, animation: s.done ? 'om-fade 1.6s ease-in-out infinite' : 'none' })}><Pixels shadow={SMITH_S} px={2} /></div>
             <div style={abs(x - 15, y + 6, 30, 22, { transform: 'translateZ(14px)', background: '#3f3870', border: '1px solid rgba(255,255,255,.18)' })} />
             <div style={abs(x - 15, y + 28, 30, 14, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#262050' })} />
             <div style={abs(x + 15, y + 6, 14, 22, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#302a5e' })} />
             <div style={abs(x - 5, y + 10, 10, 8, { transform: 'translateZ(15px)', background: '#15122e', border: '1px solid rgba(255,255,255,.25)' })} />
             <div style={abs(x - 5, y + 18, 10, 8, { transformOrigin: 'top', transform: 'translateZ(15px) rotateX(90deg)', background: '#0d0a22', border: '1px solid rgba(255,255,255,.3)', boxShadow: `0 0 8px 1px ${s.done ? 'rgba(141,138,179,.25)' : hexA(tone, 0.5)}` })} />
-          </div>
+          </Fragment>
         );
       })}
     </div>
