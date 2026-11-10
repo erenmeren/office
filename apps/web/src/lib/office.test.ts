@@ -36,7 +36,7 @@ it('sprite skips dots and uses the palette, then the base colours', () => {
 });
 
 it('themes and creatures follow the role, with a fallback', () => {
-  expect(['chief', 'qa-engineer', 'office-summarizer', 'frontend-dev', 'researcher'].map(themeFor)).toEqual(['library', 'board', 'fire', 'couch', 'plain']);
+  expect(['chief', 'architect', 'developer', 'designer', 'qa-engineer', 'security-engineer', 'office-summarizer', 'frontend-dev', 'researcher'].map(themeFor)).toEqual(['dojo', 'monitors', 'bike', 'garden', 'kitchen', 'teahouse', 'fire', 'couch', 'plain']);
   expect(creatureFor('qa-engineer')).toBe(creatureFor('qa'));
   expect(creatureFor('researcher')).toBe(creatureFor('researcher'));
 });

@@ -1012,6 +1012,13 @@ Added the same day on the owner's request ("everyone looks like they are standin
 - Verified on the dev server with fixtures: screenshots with the walk cycle frozen at several points (seated, beside the desk, in front of it) and a close-up of the owner's room. Seen on the way: the dev server kept serving a cached stylesheet without the new keyframes until `globals.css` changed while it ran.
 - Not built: leg movement while walking (the sprite bobs), walking for idle tenants, a walk that avoids subagent desks by more than the fixed path.
 
+Added after that on the owner's request (every room should hold something of its tenant, as a nod to the film, like the red armchair):
+
+- Themes by role are now `dojo` (chief: paper screens on the back wall, a rack with a staff and two swords on the left wall, a tatami), `monitors` (architect: the wall of screens, the white door with its light on the floor), `bike` (developer: Trinity's motorcycle, sprite `BIKE`), `garden` plus a rail of red dresses and a mirror (designer), `kitchen` (qa: oven with cookies on top, a vase on a stand, the "TEMET NOSCE" sign), `teahouse` (security: tea table with pot, cups and cushions, two green back doors), `construct` (owner, unchanged). `couch` stays for frontend and backend agents, `fire` for the summarizer, `plain` for the rest.
+- Gone with them: the library, the aquarium, the QA cork board and beanbag (`BEANBAG`).
+- `Box` in `office-floor.tsx` draws a box as its top and its two visible faces; the new furniture and the red armchair use it. `WallArt` and `SideArt` hold what hangs on the back and left wall. A face stood up on its top edge draws bottom up, so the sign is flipped back with `scaleY(-1)`.
+- Verified with close-up screenshots of every team room on the dev server (fixtures). The summarizer's room was left alone: it is a hidden system agent and has no room in a real project.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):

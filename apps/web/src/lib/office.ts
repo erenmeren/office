@@ -464,22 +464,24 @@ export const LAMP_PAL = { l: '#ffc96b', L: '#ffe9b0', s: '#3a3466' };
 export const MONSTERA = ['..gG..Gg..', '.gGGg.gGGg', 'gGGGGgGGGG', '.gGGGGGGg.', '..ggGGgg..', '....gg....', '....gg....', '..pPPPPp..', '..pppppp..', '...pppp...'];
 export const CAT = ['k........k', 'kakkkkkkak', 'kaaaaaaaak', 'kakaakaaak', 'kaaaaaaaak', '.kkkkkkkk.'];
 export const CAT_PAL = { a: '#ffb15c', k: '#1b1033' };
-export const BEANBAG = ['...bbbbbb...', '..bBBBBBBb..', '.bBBBBBBBBb.', 'bBBBBBBBBBBb', 'bBBBBBBBBBBb', 'bbBBBBBBBBbb', '.bbbbbbbbbb.', '..bbbbbbbb..'];
-export const BEANBAG_PAL = { b: '#b8543a', B: '#e8775a' };
+/** Trinity's motorcycle, side on. */
+export const BIKE = ['..........................', '................kk........', '......ggg.....kkGGg.......', '.....gggggkkkkgGGGgg......', '....rgggggkkkgggGGggg.....', '.....ggggggggggggggggw....', '......yyKKKKKKKgggggg.....', '...kkkk.yKKKKKKKKgg.kkkk..', '..kkKKkk..KKKKKK...kkKKkk.', '.kkK..Kkk..KKKK...kkK..Kkk', '.kkK..Kkk.........kkK..Kkk', '..kkKKkk...........kkKKkk.', '...kkkk.............kkkk..'];
+export const BIKE_PAL = { g: '#1f5a3a', G: '#3fae6a', k: '#0d0f14', K: '#4a5262', y: '#aab1bd', w: '#ffffff', r: '#e11d2e' };
 
-export type Theme = 'library' | 'aquarium' | 'garden' | 'couch' | 'board' | 'fire' | 'construct' | 'plain';
+export type Theme = 'dojo' | 'monitors' | 'garden' | 'bike' | 'couch' | 'kitchen' | 'teahouse' | 'fire' | 'construct' | 'plain';
 const THEMES: [string, Theme][] = [
-  ['chief', 'library'],
-  ['architect', 'aquarium'],
+  ['chief', 'dojo'],
+  ['architect', 'monitors'],
   ['design', 'garden'],
-  ['develop', 'couch'],
+  ['develop', 'bike'],
   ['frontend', 'couch'],
   ['backend', 'couch'],
-  ['qa', 'board'],
+  ['qa', 'kitchen'],
+  ['security', 'teahouse'],
   ['summar', 'fire'],
   ['owner', 'construct'],
 ];
-/** Each seeded role has its own corner; other agents get the plain cozy room. */
+/** Each cast member's room carries something of theirs from the film; other agents get the couch or the plain cozy room. */
 export const themeFor = (slug: string): Theme => THEMES.find(([k]) => slug.toLowerCase().includes(k))?.[1] ?? 'plain';
 
 /** The creature of a role; unknown roles share one by hash so a room keeps its tenant. */

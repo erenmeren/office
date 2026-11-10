@@ -5,8 +5,8 @@ import { Minus, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { agentGradient } from '@/lib/agent-identity';
 import {
-  BEANBAG,
-  BEANBAG_PAL,
+  BIKE,
+  BIKE_PAL,
   CAST_H,
   CAST_PAL,
   CAST_W,
@@ -33,6 +33,7 @@ import {
   themeFor,
   type Mail,
   type OfficeRoom,
+  type Theme,
 } from '@/lib/office';
 import { elapsed } from '@/lib/sessions';
 import { statusLabel, statusTone, type Tone } from '@/lib/status';
@@ -56,7 +57,7 @@ const PLANT_S = sprite(PLANT, PLANT_PAL, 3);
 const LAMP_S = sprite(LAMP, LAMP_PAL, 3);
 const MONSTERA_S = sprite(MONSTERA, PLANT_PAL, 3);
 const CAT_S = sprite(CAT, CAT_PAL, 3);
-const BEANBAG_S = sprite(BEANBAG, BEANBAG_PAL, 3);
+const BIKE_S = sprite(BIKE, BIKE_PAL, 2.5);
 // cell size of the cast: the room's tenant, and the smaller Smith copies in front of it
 const MAIN_PX = 2;
 const SUB_PX = 1.5;
@@ -71,38 +72,34 @@ const RAIN = [0.9, 1.6, 1.1, 1.9, 1.3, 0.8, 1.7, 1.2, 1.5, 1.0, 1.8, 1.4];
 // the cast wears black on a dark floor; the green rim keeps it readable
 const RIM = 'drop-shadow(0 0 2px rgba(57,255,20,.75))';
 const FLOWER = { pink: sprite(PLANT, { ...PLANT_PAL, G: '#ff8fb1' }, 3), yellow: sprite(PLANT, { ...PLANT_PAL, G: '#ffe14d' }, 3), violet: sprite(PLANT, { ...PLANT_PAL, G: '#b39dff' }, 3) };
-const BOOKS = 'repeating-linear-gradient(90deg,#d9534f 0 4px,#4fe3ff 4px 7px,#ffe14d 7px 10px,#b39dff 10px 14px,#3df5c8 14px 17px,#ff6ad5 17px 19px,#2a1d14 19px 21px)';
+const RED = ['#b3202a', '#7d141c', '#96181f'];
 
-/** The themed corner of a room: library, aquarium, garden, couch, board or fireplace. */
-function Corner({ theme }: { theme: ReturnType<typeof themeFor> }) {
+/** A box on the floor: its top and the two faces the camera sees. A fragment, because a wrapper element would flatten the 3D scene. */
+function Box({ x, y, w, d, h, z = 0, c }: { x: number; y: number; w: number; d: number; h: number; z?: number; c: string[] }) {
+  return (
+    <>
+      <div style={abs(x, y, w, d, { transform: `translateZ(${z + h}px)`, background: c[0], border: '1px solid rgba(0,0,0,.25)' })} />
+      <div style={abs(x, y + d, w, h, { transformOrigin: 'top', transform: `translateZ(${z}px) rotateX(90deg)`, background: c[1] })} />
+      <div style={abs(x + w, y, h, d, { transformOrigin: 'left', transform: `translateZ(${z}px) rotateY(-90deg)`, background: c[2] })} />
+    </>
+  );
+}
+
+/** What stands in a room besides the desk: for the cast, something of theirs from the film. */
+function Corner({ theme }: { theme: Theme }) {
   switch (theme) {
-    case 'library':
+    case 'dojo':
+      // Morpheus: the tatami of the sparring program
+      return <div style={abs(10, 112, 54, 128, { transform: 'translateZ(.6px)', background: 'repeating-linear-gradient(0deg,rgba(0,0,0,.28) 0 1px,transparent 1px 43px),#c8b77e', border: '3px solid #4a3a22' })} />;
+    case 'monitors':
+      // the Architect: light falling in from the door to the Source
+      return <div style={abs(2, 146, 50, 38, { borderRadius: '50%', transform: 'translateZ(.6px)', background: 'radial-gradient(closest-side,rgba(255,255,255,.45),transparent)' })} />;
+    case 'bike':
+      // Trinity: the motorcycle of the freeway chase
       return (
         <>
-          <div style={abs(20, 0, 90, 16, { transform: 'translateZ(52px)', background: '#3a2a1e', border: '1px solid rgba(255,255,255,.15)' })} />
-          <div style={abs(20, 16, 90, 52, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: `repeating-linear-gradient(0deg,#3a2a1e 0 3px,transparent 3px 13px),${BOOKS}`, border: '1px solid #241810' })} />
-          <div style={abs(110, 0, 52, 16, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#2f2218' })} />
-          <div style={abs(0, 110, 16, 90, { transform: 'translateZ(52px)', background: '#3a2a1e', border: '1px solid rgba(255,255,255,.15)' })} />
-          <div style={abs(16, 110, 52, 90, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: `repeating-linear-gradient(90deg,#3a2a1e 0 3px,transparent 3px 13px),${BOOKS.replace('90deg', '0deg')}`, border: '1px solid #241810' })} />
-          <div style={abs(0, 200, 16, 52, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#2f2218' })} />
-        </>
-      );
-    case 'aquarium':
-      return (
-        <>
-          <div style={abs(190, 28, 84, 44, { borderRadius: '50%', transform: 'translateZ(.6px)', background: 'radial-gradient(closest-side,rgba(79,227,255,.4),transparent)', animation: 'om-glow 3s ease-in-out infinite' })} />
-          <div style={abs(196, 4, 70, 24, { transform: 'translateZ(20px)', background: '#2a2456', border: '1px solid rgba(255,255,255,.15)' })} />
-          <div style={abs(196, 28, 70, 20, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#1f1b45' })} />
-          <div style={abs(266, 4, 20, 24, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#262152' })} />
-          <div style={abs(196, 4, 70, 24, { transform: 'translateZ(52px)', background: 'rgba(79,227,255,.22)', border: '1px solid rgba(255,255,255,.5)' })} />
-          <div style={abs(196, 28, 70, 32, { transformOrigin: 'top', transform: 'translateZ(20px) rotateX(90deg)', background: 'linear-gradient(0deg,rgba(79,227,255,.5),rgba(79,227,255,.25))', border: '1px solid rgba(255,255,255,.55)', boxShadow: '0 0 14px rgba(79,227,255,.45)' })}>
-            <i style={abs(12, 10, 7, 4, { borderRadius: 2, background: '#ffa66b', animation: 'om-bob 2.2s ease-in-out infinite' })} />
-            <i style={abs(40, 18, 6, 3, { borderRadius: 2, background: '#f6f5ff', animation: 'om-bob 1.8s ease-in-out infinite .6s' })} />
-            <i style={abs(26, 4, 5, 3, { borderRadius: 2, background: '#ffe14d', animation: 'om-bob 2.6s ease-in-out infinite 1.1s' })} />
-            <i style={abs(6, 24, 12, 6, { borderRadius: '50% 50% 0 0', background: '#3fae6a' })} />
-            <i style={abs(52, 22, 10, 8, { borderRadius: '50% 50% 0 0', background: '#2f8a52' })} />
-          </div>
-          <div style={abs(266, 4, 32, 24, { transformOrigin: 'left', transform: 'translateZ(20px) rotateY(-90deg)', background: 'rgba(79,227,255,.3)', border: '1px solid rgba(255,255,255,.5)' })} />
+          <div style={abs(14, 14, 62, 24, { borderRadius: '50%', transform: 'translateZ(.6px)', background: 'rgba(0,0,0,.35)' })} />
+          <div style={stand(13.5, 5.5, 65, 0, { height: 32.5 })}><Pixels shadow={BIKE_S} px={2.5} /></div>
         </>
       );
     case 'garden':
@@ -116,23 +113,51 @@ function Corner({ theme }: { theme: ReturnType<typeof themeFor> }) {
           <div style={stand(8, 206, 24, 0)}><Pixels shadow={FLOWER.pink} /></div>
           <div style={stand(266, 212, 30, 0)}><Pixels shadow={MONSTERA_S} /></div>
           <div style={abs(10, 92, 22, 150, { borderRadius: 6, transform: 'translateZ(.6px)', background: 'rgba(63,174,106,.18)', border: '1px dashed rgba(143,227,173,.35)' })} />
+          {/* the woman in red: a rail of red dresses, and a mirror */}
+          <div style={abs(60, 12, 62, 2, { transformOrigin: 'top', transform: 'translateZ(46px) rotateX(90deg)', background: '#c9ccd6' })} />
+          {[60, 120].map((x) => (
+            <div key={x} style={abs(x, 12, 2, 46, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#8d8ab3' })} />
+          ))}
+          {['#e11d2e', '#b3202a', '#ff4d5e', '#9e1220', '#e11d2e'].map((c, n) => (
+            // a face stood up on its top edge is drawn bottom up: the wide end of the polygon is the hem
+            <div key={n} style={abs(65 + n * 11, 13, 9, 28, { transformOrigin: 'top', transform: 'translateZ(17px) rotateX(90deg)', background: c, clipPath: 'polygon(0 0,100% 0,72% 100%,28% 100%)' })} />
+          ))}
+          <div style={stand(27, 22, 18, 0, { height: 34, borderRadius: '50% 50% 20% 20%', background: 'linear-gradient(135deg,#eaf6ff,#9fc3e6 55%,#dfefff)', border: '2px solid #d9a93a' })} />
+        </>
+      );
+    case 'kitchen':
+      // the Oracle: cookies in the oven, and the vase
+      return (
+        <>
+          <Box x={24} y={2} w={40} d={28} h={30} c={['#d9d6e8', '#bdb9d1', '#a9a5c0']} />
+          <div style={abs(27, 6, 14, 10, { borderRadius: '50%', transform: 'translateZ(30.6px)', background: '#2a2438' })} />
+          <div style={abs(44, 6, 17, 12, { transform: 'translateZ(31px)', background: 'radial-gradient(circle at 25% 30%,#c98b4a 0 2px,transparent 2.5px),radial-gradient(circle at 70% 35%,#c98b4a 0 2px,transparent 2.5px),radial-gradient(circle at 45% 75%,#c98b4a 0 2px,transparent 2.5px),#aab1bd' })} />
+          <div style={abs(30, 30.5, 28, 16, { transformOrigin: 'top', transform: 'translateZ(6px) rotateX(90deg)', background: 'radial-gradient(ellipse at 50% 30%,#ffd27a,#ff8a3c 45%,#7a2a2e)', border: '2px solid #2a2438', animation: 'om-glow 1.6s ease-in-out infinite' })} />
+          <div style={abs(30, 30.5, 28, 2, { transformOrigin: 'top', transform: 'translateZ(25px) rotateX(90deg)', background: '#6b7280' })} />
+          <Box x={20} y={140} w={16} d={16} h={14} c={['#7a5230', '#4a2f18', '#5e3d22']} />
+          <div style={stand(21, 126, 14, 14, { height: 22, borderRadius: '45% 45% 50% 50% / 30% 30% 60% 60%', background: 'linear-gradient(90deg,#f1f6ff,#9db8e8)', border: '1px solid #4a67a8' })} />
+        </>
+      );
+    case 'teahouse':
+      // Seraph: the tea table where he tests his guests
+      return (
+        <>
+          <div style={abs(20, 146, 30, 14, { borderRadius: 5, transform: 'translateZ(2px)', background: '#b3202a', border: '1px solid rgba(0,0,0,.3)' })} />
+          <div style={abs(62, 116, 14, 24, { borderRadius: 5, transform: 'translateZ(2px)', background: '#d9a93a', border: '1px solid rgba(0,0,0,.3)' })} />
+          <Box x={18} y={112} w={40} d={30} h={9} c={['#5a3a22', '#3f2815', '#4a2f1a']} />
+          <div style={abs(24, 118, 5, 5, { borderRadius: '50%', transform: 'translateZ(9.6px)', background: '#f6f5ff' })} />
+          <div style={abs(47, 131, 5, 5, { borderRadius: '50%', transform: 'translateZ(9.6px)', background: '#f6f5ff' })} />
+          <div style={stand(32, 118, 12, 9, { height: 10, borderRadius: '50% 50% 40% 40%', background: '#f6f5ff', border: '1px solid #8d8ab3' })} />
         </>
       );
     case 'construct':
-      // the red armchair and the table with the two pills
+      // Neo: the red armchair and the table with the two pills
       return (
         <>
-          <div style={abs(14, 104, 36, 42, { transform: 'translateZ(14px)', background: '#b3202a', border: '1px solid rgba(0,0,0,.3)' })} />
-          <div style={abs(14, 146, 36, 14, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#7d141c' })} />
-          <div style={abs(50, 104, 14, 42, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#96181f' })} />
-          <div style={abs(14, 104, 36, 10, { transform: 'translateZ(40px)', background: '#b3202a', border: '1px solid rgba(0,0,0,.3)' })} />
-          <div style={abs(14, 114, 36, 26, { transformOrigin: 'top', transform: 'translateZ(14px) rotateX(90deg)', background: '#8a161e' })} />
-          <div style={abs(50, 104, 26, 10, { transformOrigin: 'left', transform: 'translateZ(14px) rotateY(-90deg)', background: '#96181f' })} />
-          <div style={abs(14, 114, 6, 32, { transform: 'translateZ(24px)', background: '#c42833' })} />
-          <div style={abs(44, 114, 6, 32, { transform: 'translateZ(24px)', background: '#c42833' })} />
-          <div style={abs(14, 146, 6, 10, { transformOrigin: 'top', transform: 'translateZ(14px) rotateX(90deg)', background: '#7d141c' })} />
-          <div style={abs(44, 146, 6, 10, { transformOrigin: 'top', transform: 'translateZ(14px) rotateX(90deg)', background: '#7d141c' })} />
-          <div style={abs(50, 114, 10, 32, { transformOrigin: 'left', transform: 'translateZ(14px) rotateY(-90deg)', background: '#96181f' })} />
+          <Box x={14} y={104} w={36} d={42} h={14} c={RED} />
+          <Box x={14} y={104} w={36} d={10} h={26} z={14} c={RED} />
+          <Box x={14} y={114} w={6} d={32} h={10} z={14} c={RED} />
+          <Box x={44} y={114} w={6} d={32} h={10} z={14} c={RED} />
           <div style={abs(58, 126, 22, 14, { borderRadius: '50%', transform: 'translateZ(.6px)', background: 'rgba(0,0,0,.3)' })} />
           <div style={abs(68, 131, 2, 18, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#8d8ab3' })} />
           <div style={abs(60, 122, 18, 18, { borderRadius: '50%', transform: 'translateZ(18px)', background: '#e9e7f7', border: '1px solid rgba(0,0,0,.25)' })} />
@@ -156,13 +181,6 @@ function Corner({ theme }: { theme: ReturnType<typeof themeFor> }) {
           <div style={abs(18, 230, 10, 8, { transform: 'translateZ(17px)', background: '#f6f5ff', border: '1px solid rgba(0,0,0,.2)' })} />
         </>
       );
-    case 'board':
-      return (
-        <>
-          <div style={stand(26, 136, 36, 0, { height: 24 })}><Pixels shadow={BEANBAG_S} /></div>
-          <div style={abs(26, 150, 40, 22, { borderRadius: '50%', transform: 'translateZ(.6px)', background: 'rgba(0,0,0,.3)' })} />
-        </>
-      );
     case 'fire':
       return (
         <>
@@ -176,6 +194,70 @@ function Corner({ theme }: { theme: ReturnType<typeof themeFor> }) {
           <div style={stand(42, 70, 30, 2, { height: 18 })}><Pixels shadow={CAT_S} /></div>
         </>
       );
+    default:
+      return null;
+  }
+}
+
+/** What hangs on a room's back wall. The wall is stood up on its top edge, so its y runs up from the floor. */
+function WallArt({ theme }: { theme: Theme }) {
+  switch (theme) {
+    case 'construct':
+      // Neo: green code falling down a screen
+      return (
+        <div style={abs(36, 10, 136, 42, { overflow: 'hidden', background: '#020a04', border: '2px solid #1f5a3a', boxShadow: '0 0 16px rgba(57,255,20,.35)' })}>
+          {RAIN.map((seconds, n) => (
+            // the bright head of a streak is its first stop, because y runs up
+            <i key={n} style={abs(4 + n * 11, 0, 4, 42, { background: 'repeating-linear-gradient(180deg,#d9ffe3 0 2px,#39ff14 2px 7px,rgba(57,255,20,.25) 7px 12px,transparent 12px 21px)', animation: `om-rain ${seconds}s linear infinite`, animationDelay: `-${n * 0.37}s` })} />
+          ))}
+        </div>
+      );
+    case 'dojo':
+      // Morpheus: the paper screens of the dojo
+      return <div style={abs(18, 4, 96, 50, { background: 'repeating-linear-gradient(90deg,#3a2a1e 0 2px,transparent 2px 16px),repeating-linear-gradient(0deg,#3a2a1e 0 2px,transparent 2px 12px),#efe6cf', border: '2px solid #3a2a1e' })} />;
+    case 'monitors':
+      // the Architect: the wall of screens
+      return (
+        <div style={abs(16, 6, 180, 48, { background: '#05070d', border: '2px solid #1b2030', boxShadow: '0 0 16px rgba(160,200,255,.4)' })}>
+          <i style={abs(0, 0, 176, 44, { background: 'repeating-linear-gradient(90deg,#05070d 0 2px,transparent 2px 16px),repeating-linear-gradient(0deg,#05070d 0 2px,transparent 2px 11px),repeating-linear-gradient(90deg,#cfe6ff 0 16px,#7fb2e6 16px 32px,#e8f3ff 32px 48px)', animation: 'om-glow 1.7s ease-in-out infinite' })} />
+        </div>
+      );
+    case 'kitchen':
+      // the Oracle: the sign over her kitchen door, flipped back because the wall draws bottom up
+      return <div style={abs(18, 36, 104, 18, { display: 'grid', placeItems: 'center', transform: 'scaleY(-1)', background: '#7a5230', border: '2px solid #4a2f18', color: '#f6e7c4', fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, letterSpacing: 1 })}>TEMET NOSCE</div>;
+    case 'teahouse':
+      // Seraph: the green back doors he holds the key to
+      return (
+        <>
+          {[26, 74].map((x) => (
+            <div key={x} style={abs(x, 0, 30, 48, { background: 'linear-gradient(90deg,#2f8a52,#256b43)', border: '2px solid #f6f5ff', borderTop: 0 })}>
+              <i style={abs(21, 20, 4, 4, { borderRadius: '50%', background: '#f6d55c' })} />
+            </div>
+          ))}
+        </>
+      );
+    default:
+      return null;
+  }
+}
+
+/** What hangs on a room's left wall beside the agent's poster. Its x runs up from the floor. */
+function SideArt({ theme }: { theme: Theme }) {
+  switch (theme) {
+    case 'dojo':
+      // Morpheus: the rack of training weapons, a staff and two swords
+      return (
+        <>
+          <i style={abs(12, 128, 36, 3, { background: '#3a2a1e' })} />
+          <i style={abs(12, 178, 36, 3, { background: '#3a2a1e' })} />
+          <i style={abs(18, 120, 3, 68, { background: '#b98a5a' })} />
+          <i style={abs(28, 124, 2, 60, { background: 'linear-gradient(180deg,#2a1d14 0 22%,#d6dbe6 22%)' })} />
+          <i style={abs(38, 124, 2, 60, { background: 'linear-gradient(180deg,#2a1d14 0 22%,#d6dbe6 22%)' })} />
+        </>
+      );
+    case 'monitors':
+      // the Architect: the door to the Source
+      return <i style={abs(0, 150, 46, 30, { background: 'linear-gradient(90deg,#ffffff,#dfe9ff)', border: '2px solid #aab1bd', boxShadow: '0 0 18px rgba(255,255,255,.7)' })} />;
     default:
       return null;
   }
@@ -195,31 +277,15 @@ function Room({ room, i, rx, ry, selected, onSelect }: { room: OfficeRoom; i: nu
     <div aria-hidden onClick={onSelect} style={abs(rx, ry, ROOM_W, ROOM_H, { transformStyle: 'preserve-3d', cursor: 'pointer' })}>
       <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg,${hexA(c1, 0.24)},transparent 60%),repeating-linear-gradient(90deg,rgba(255,255,255,.045) 0 1px,transparent 1px 26px),repeating-linear-gradient(0deg,rgba(0,0,0,.12) 0 1px,transparent 1px 130px),#241d4a`, border: '1px solid rgba(255,255,255,.16)', boxShadow: `inset 0 0 0 2px ${selected ? tone : 'transparent'}` }} />
       <div style={abs(66, 32, 170, 112, { borderRadius: 18, transform: 'translateZ(.5px)', background: `repeating-linear-gradient(45deg,rgba(255,255,255,.06) 0 6px,transparent 6px 12px),${hexA(c1, 0.38)}`, border: '2px solid rgba(255,255,255,.12)' })} />
-      {/* back wall with the night window and, in the QA room, the cork board */}
+      {/* back wall with the night window and the room's wall art */}
       <div style={abs(0, 0, ROOM_W, 60, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: 'linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.2))', borderBottom: `2px solid ${c1}`, borderLeft: '1px solid rgba(255,255,255,.25)' })}>
         <div style={abs(206, 16, 60, 30, { background: 'radial-gradient(circle at 68% 36%,#ffe9b0 0 3px,transparent 4px),radial-gradient(circle at 30% 60%,rgba(255,255,255,.5) 0 .8px,transparent 1.5px),linear-gradient(180deg,#1b2a6b,#0d1440)', border: '2px solid rgba(255,255,255,.4)', boxShadow: '0 0 14px rgba(120,150,255,.35)' })} />
-        {theme === 'construct' && (
-          <div style={abs(36, 10, 136, 42, { overflow: 'hidden', background: '#020a04', border: '2px solid #1f5a3a', boxShadow: '0 0 16px rgba(57,255,20,.35)' })}>
-            {RAIN.map((seconds, n) => (
-              // the wall's y runs up from the floor, so the bright head of a streak is its first stop
-              <i key={n} style={abs(4 + n * 11, 0, 4, 42, { background: 'repeating-linear-gradient(180deg,#d9ffe3 0 2px,#39ff14 2px 7px,rgba(57,255,20,.25) 7px 12px,transparent 12px 21px)', animation: `om-rain ${seconds}s linear infinite`, animationDelay: `-${n * 0.37}s` })} />
-            ))}
-          </div>
-        )}
-        {theme === 'board' && (
-          <div style={abs(40, 12, 124, 40, { background: '#a9794f', border: '3px solid #6b4a2e' })}>
-            <i style={abs(8, 6, 13, 13, { background: '#ffe14d', transform: 'rotate(-4deg)' })} />
-            <i style={abs(28, 10, 13, 13, { background: '#ff8fb1', transform: 'rotate(5deg)' })} />
-            <i style={abs(50, 5, 13, 13, { background: '#8fe3ad' })} />
-            <i style={abs(70, 14, 13, 13, { background: '#9cc8ff', transform: 'rotate(-6deg)' })} />
-            <i style={abs(92, 7, 22, 16, { background: '#f6f5ff', transform: 'rotate(3deg)' })} />
-            <i style={abs(14, 26, 30, 8, { background: '#f6f5ff' })} />
-          </div>
-        )}
+        <WallArt theme={theme} />
       </div>
       {/* left wall with the agent poster */}
       <div style={abs(0, 0, 60, ROOM_H, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: 'linear-gradient(90deg,rgba(255,255,255,.05),rgba(255,255,255,.16))', borderRight: `2px solid ${c1}` })}>
         <div style={abs(22, 70, 18, 26, { background: `linear-gradient(135deg,${c1},${c2})`, border: '2px solid rgba(255,255,255,.6)' })} />
+        <SideArt theme={theme} />
       </div>
       <div style={stand(272, -6, 24, 0)}><Pixels shadow={PLANT_S} /></div>
       <Corner theme={theme} />
