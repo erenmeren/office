@@ -1049,6 +1049,10 @@ Third step (owner: let it say so, and make projects in a new folder under `/home
 - Verified by API tests: the folder setting; a done mission merged into the folder with one note and a pending delivery for the Conductor; no second note on a second pass; a folder with uncommitted work left alone, with the note naming the branch; a failed mission announced; an hour-old mission not announced; the next tick giving the Conductor a chat run. Suite: API 265, runtime 74, shared 67, web 57, db 10, worker 105 (two API-restart tests of the worker failed once when every package ran back to back and passed when run again alone). Not verified: a real Conductor run answering such a note.
 - Open: the setting has no switch in the Settings page; a second mission opened while the first still runs can still diverge from it (the merge then joins them when it can).
 
+Review against real use, the same day (owner: weigh the project against two videos on agent teams, then "do the solid parts"). The installed app's database showed what was used since 2026-11-03: nine plans, two Conductor missions (2.15 USD, of which 1.51 went to the Chief and the Conductor), and no approval since the `auto` defaults, no routing rule, no Codex run, no remote worker, no question between agents. Nothing was removed; the unused parts get no new work until real use asks for it. A shorter path for small jobs was not built: two tiny missions are not enough to design it from.
+
+- `CLAUDE.md` went from 36 KB to 2 KB: the standing decisions moved word for word to `docs/decisions.md`, because every session and subagent read the whole file. New decisions are written there.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):
