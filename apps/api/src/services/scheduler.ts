@@ -12,7 +12,7 @@ import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
 import { embedMissingMemory } from './memory-service.js';
-import { CONDUCTOR_SLUG, announceSettledMissions } from './conductor-service.js';
+import { CONDUCTOR_SLUG, announceSettledMissions, missionAhead } from './conductor-service.js';
 import { agentDefault, codexUnfit, routeTask } from './router-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
@@ -88,6 +88,13 @@ export class Scheduler {
       this.log.error({ err }, 'expireLeases failed');
     }
     try {
+      // before missions are planned: a queued mission starts from the folder this fills. Before mail is delivered:
+      // the note it leaves wakes the Conductor in this same tick
+      await announceSettledMissions(this.prisma, this.hub, this.log);
+    } catch (err) {
+      this.log.error({ err }, 'announcing settled missions failed');
+    }
+    try {
       await this.planMissions();
     } catch (err) {
       this.log.error({ err }, 'planning missions failed');
@@ -106,12 +113,6 @@ export class Scheduler {
     this.embedding ??= embedMissingMemory(this.prisma, 20, this.log)
       .catch((err) => this.log.error({ err }, 'embedding memory failed'))
       .finally(() => (this.embedding = undefined));
-    try {
-      // before mail is delivered: the note it leaves wakes the Conductor in this same tick
-      await announceSettledMissions(this.prisma, this.hub, this.log);
-    } catch (err) {
-      this.log.error({ err }, 'announcing settled missions failed');
-    }
     try {
       await this.deliverToLiveRuns();
     } catch (err) {
@@ -219,6 +220,7 @@ export class Scheduler {
     });
     for (const mission of missions) {
       try {
+        if (await missionAhead(this.prisma, mission, mission.project.settings)) continue;
         if (!(await this.missionMayRun(mission))) continue;
         const worker = this.pickWorker(mission.project, { needsRepoAccess: 'any' });
         if (!worker) continue;

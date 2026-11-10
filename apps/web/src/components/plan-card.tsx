@@ -144,7 +144,7 @@ export function PlanCard({
   const confirm = useConfirm();
   const progress = missionProgress(m.tasks);
   const pendingPlan = m.approvals.find((a) => a.type === 'plan' && a.status === 'pending');
-  const line = missionStatusLine({ status: m.status, taskCounts: taskCounts(m.tasks), summary: m.summary, planError: m.planRun?.error, blocked: m.blocked, decisions });
+  const line = missionStatusLine({ status: m.status, taskCounts: taskCounts(m.tasks), summary: m.summary, planError: m.planRun?.error, blocked: m.blocked, waitsFor: m.waitsFor, decisions });
 
   const act = (fn: () => Promise<unknown>) => async () => {
     setBusy(true);

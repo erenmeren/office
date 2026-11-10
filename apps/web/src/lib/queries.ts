@@ -328,6 +328,7 @@ export interface Mission extends Omit<MissionSummary, 'taskCounts'> {
   planRun: { id: string; status: RunStatus; costUsd: number; error: string | null } | null;
   /** planning with no plan run: why no connected worker can take it (null when one can, or not planning) */
   blocked?: string | null;
+  waitsFor?: string | null;
 }
 export const useMissions = (projectId: string | undefined) =>
   useQuery({ queryKey: ['missions', projectId], queryFn: () => api<MissionSummary[]>(`/missions?projectId=${projectId}`), enabled: !!projectId });

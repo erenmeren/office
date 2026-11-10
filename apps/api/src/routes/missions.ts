@@ -4,6 +4,7 @@ import { PlanSchema } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { missionSpent } from '../services/budget-service.js';
+import { missionAhead } from '../services/conductor-service.js';
 import { cancelMission, createMission, editPlan, replan } from '../services/mission-service.js';
 
 const CreateMission = z.object({
@@ -61,6 +62,8 @@ export async function missionRoutes(app: FastifyInstance) {
       ? await app.prisma.project.findUnique({ where: { id: mission.projectId }, select: { repoPath: true, settings: true } })
       : null;
     const blocked = project ? app.scheduler.noWorkerReason(project) : null;
+    // or it stands behind an older mission of a project that takes one at a time
+    const waitsFor = project ? ((await missionAhead(app.prisma, mission, project.settings))?.title ?? null) : null;
     const [spentUsd, reviewArtifact] = await Promise.all([
       missionSpent(app.prisma, id),
       mission.reviewRunId
@@ -78,7 +81,8 @@ export async function missionRoutes(app: FastifyInstance) {
         dependents: dependents.map((d) => d.taskId),
       })),
       planRun,
-      blocked,
+      blocked: waitsFor ? null : blocked,
+      waitsFor,
     };
   });
 

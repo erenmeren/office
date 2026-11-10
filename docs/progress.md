@@ -1052,6 +1052,7 @@ Third step (owner: let it say so, and make projects in a new folder under `/home
 Review against real use, the same day (owner: weigh the project against two videos on agent teams, then "do the solid parts"). The installed app's database showed what was used since 2026-11-03: nine plans, two Conductor missions (2.15 USD, of which 1.51 went to the Chief and the Conductor), and no approval since the `auto` defaults, no routing rule, no Codex run, no remote worker, no question between agents. Nothing was removed; the unused parts get no new work until real use asks for it. A shorter path for small jobs was not built: two tiny missions are not enough to design it from.
 
 - `CLAUDE.md` went from 36 KB to 2 KB: the standing decisions moved word for word to `docs/decisions.md`, because every session and subagent read the whole file. New decisions are written there.
+- Missions queue where finished work lands in the folder (`missionAhead`): the two recipe missions had started together from the same empty folder, so the second never saw the first one's files. Now the second gets its plan run only after the first is settled and merged. Verified by an API test with real git (the second mission is held, then planned in the tick that merges the first; the test fails without the check).
 
 ## Desktop app (2026-11-03)
 

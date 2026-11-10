@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CONDUCTOR_PROJECT_SLUG, announceSettledMissions } from '../src/services/conductor-service.js';
+import { CONDUCTOR_PROJECT_SLUG, announceSettledMissions, missionAhead } from '../src/services/conductor-service.js';
 import { executeTool } from '../src/services/tool-service.js';
 import { connectFakeWorker } from './fake-worker.js';
 import { makeApp } from './helpers.js';
@@ -199,6 +199,51 @@ describe('conductor', () => {
     const { spec } = await w.waitFor('run.assign');
     expect(spec).toMatchObject({ kind: 'chat' });
     expect(spec.systemPrompt).toContain('Office:');
+    await w.close();
+  });
+
+  it('where finished work lands in the folder, a second mission waits for the first and starts from what it left', async () => {
+    const home = await t.prisma.project.findUniqueOrThrow({ where: { slug: CONDUCTOR_PROJECT_SLUG } });
+    const conversation = await t.prisma.conversation.findFirstOrThrow({ where: { projectId: home.id } });
+    const project = await t.prisma.project.findUniqueOrThrow({ where: { slug: 'tarif-sitesi' } });
+    const repo = project.repoPath;
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8' });
+    // nothing the earlier tests opened is still at work in this project
+    await t.prisma.mission.updateMany({ where: { projectId: project.id, status: { in: ['planning', 'awaiting_approval', 'approved', 'running', 'review'] } }, data: { status: 'cancelled' } });
+    git('checkout', '-q', '-b', 'office/first', 'main');
+    writeFileSync(resolve(repo, 'first.html'), 'made by the first mission\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add first.html');
+    git('checkout', '-q', 'main');
+    const first = await t.prisma.mission.create({
+      data: { projectId: project.id, title: 'First', request: 'First', status: 'running', branch: 'office/first', conductorConversationId: conversation.id, createdAt: new Date(Date.now() - 60_000) },
+    });
+    const second = await t.prisma.mission.create({ data: { projectId: project.id, title: 'Second', request: 'Second', status: 'planning', conductorConversationId: conversation.id } });
+
+    expect(await missionAhead(t.prisma, second, project.settings)).toMatchObject({ id: first.id, title: 'First' });
+    expect(await missionAhead(t.prisma, first, project.settings)).toBeNull();
+    // a project that keeps integration manual is not queued: its missions would not see each other's work anyway
+    expect(await missionAhead(t.prisma, second, {})).toBeNull();
+
+    // the Chief of this file has no version yet; a plan run needs one
+    const chief = await t.prisma.agent.findUniqueOrThrow({ where: { slug: 'chief' } });
+    await t.app.inject({ method: 'PUT', url: `/agents/${chief.id}`, headers: { cookie }, payload: { config: { systemPrompt: 'plan', model: 'sonnet', allowedTools: ['Read'] } } });
+    const { enrollToken } = (await req('POST', '/workers', { name: 'w-queue' })).json();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w-queue', capacity: 1, allowedRoots: [repo] });
+    await t.app.scheduler.tick();
+    expect((await t.prisma.mission.findUniqueOrThrow({ where: { id: second.id } })).planRunId).toBeNull();
+    expect((await req('GET', `/missions/${second.id}`)).json()).toMatchObject({ waitsFor: 'First', blocked: null });
+
+    // done a moment ago, not yet put into the folder: still ahead
+    await t.prisma.mission.update({ where: { id: first.id }, data: { status: 'done' } });
+    expect(await missionAhead(t.prisma, second, project.settings)).toMatchObject({ id: first.id });
+
+    // the tick puts the first one's work into the folder, then plans the second from there
+    await t.app.scheduler.tick();
+    const { spec } = await w.waitFor('run.assign');
+    expect(spec).toMatchObject({ kind: 'plan' });
+    expect(existsSync(resolve(repo, 'first.html'))).toBe(true);
+    expect((await req('GET', `/missions/${second.id}`)).json().waitsFor).toBeNull();
     await w.close();
   });
 });

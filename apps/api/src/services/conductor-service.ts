@@ -157,7 +157,9 @@ export async function runConductorTool(
         targetId: mission.id,
         detail: { project: p.slug, runId: run.id },
       });
-      return { missionId: mission.id, project: p.slug, title: mission.title, status: mission.status, budgetUsd: mission.budgetUsd };
+      // the title of the older mission it starts after, when the project takes one at a time
+      const waitsFor = (await missionAhead(prisma, mission, p.settings))?.title ?? null;
+      return { missionId: mission.id, project: p.slug, title: mission.title, status: mission.status, budgetUsd: mission.budgetUsd, waitsFor };
     }
     case 'list_missions': {
       const p = args.project ? await projectBySlug(prisma, args.project) : null;
@@ -284,4 +286,30 @@ export async function announceSettledMissions(prisma: PrismaClient, hub: EventHu
       log.warn({ err, missionId: m.id }, 'announcing a settled mission failed');
     }
   }
+}
+
+/** Statuses in which a mission still works on its branch. */
+const WORKING = ['planning', 'awaiting_approval', 'approved', 'running', 'review'] as const;
+
+/**
+ * The older mission this one stands behind, or null. In a project whose finished work lands in its folder by itself
+ * (`integrateWhenDone`) missions run one at a time, so each starts from what the one before left there: two started
+ * together both branch from the same folder and do not see each other's files.
+ */
+export async function missionAhead(prisma: PrismaClient, mission: { id: string; projectId: string; createdAt: Date }, settings: unknown) {
+  if (!ProjectSettingsSchema.parse(settings ?? {}).integrateWhenDone) return null;
+  const older = { projectId: mission.projectId, createdAt: { lt: mission.createdAt } };
+  const select = { id: true, title: true } as const;
+  const working = await prisma.mission.findFirst({ where: { ...older, status: { in: [...WORKING] } }, orderBy: { createdAt: 'asc' }, select });
+  if (working) return working;
+  // done, but its note is not written yet: announceSettledMissions puts its work into the folder first
+  const done = await prisma.mission.findMany({
+    where: { ...older, status: 'done', conductorConversationId: { not: null }, updatedAt: { gt: new Date(Date.now() - ANNOUNCE_WINDOW_MS) } },
+    orderBy: { createdAt: 'asc' },
+    select,
+  });
+  for (const m of done) {
+    if (!(await prisma.message.findUnique({ where: { idempotencyKey: `mission-settled:${m.id}:done` }, select: { id: true } }))) return m;
+  }
+  return null;
 }
