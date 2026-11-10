@@ -17,7 +17,7 @@ import { storeArtifact } from './artifact-store.js';
 import { closeTask, evidenceFor, evidenceRule } from './review-service.js';
 import type { EventHub, Outbox } from './event-hub.js';
 import { findOrCreateConversation } from './message-service.js';
-import { agentAllowed, getSettings } from './project-service.js';
+import { agentAllowed, getSettings, updateSettings } from './project-service.js';
 import { createRun, repoAccess, type RunWorker } from './run-service.js';
 import { cancelLiveRuns, cancelTask, notifyCancelled, setTaskStatus, type Db } from './task-service.js';
 import type { WorkerGateway } from '../ws/worker-gateway.js';
@@ -148,6 +148,12 @@ export function planPrompt(mission: Mission & { project: Project }, roster: Agen
       "- Add `requiredConsultations` when a task depends on another agent's knowledge.",
       '- Use `approvalPoints` only for push, merge or deploy.',
       `- A task without \`budgetUsd\` gets ${settings.defaultTaskBudgetUsd} USD.`,
+      // under the network allowlist the plan cannot set it: the check runs outside the sandbox (adoptCheckCommand)
+      ...(!settings.checkCommand && settings.networkAccess === 'open'
+        ? [
+            '- This project has no check command yet. If the work is code that can be tested, set `checkCommand` to the one shell command that proves it works (for example `npm test`). From then on it runs in the repository after every code and verify task, and a task whose check fails is not integrated: so the first code task must create whatever the command needs and come before every other code or verify task. Leave `checkCommand` out when nothing can be executed (plain documents, a static page) and plan a `verify` task for that work instead.',
+          ]
+        : []),
     ].join('\n'),
     mission.planErrors.length ? `Problems with the previous plan attempt:\n${mission.planErrors.map((e) => `- ${e}`).join('\n')}` : '',
     'Answer only with the plan JSON.',
@@ -258,10 +264,24 @@ async function deletePlannedTasks(db: Db, missionId: string) {
   await db.task.deleteMany({ where: { id: { in: ids } } });
 }
 
+/**
+ * An approved plan gives a project its first check command, so the tasks that follow are tested. An existing command
+ * is the owner's and stays. Not under the network allowlist: the check runs outside the sandbox the agents are kept in.
+ */
+async function adoptCheckCommand(db: Db, mission: Mission) {
+  const checkCommand = PlanSchema.safeParse(mission.plan).data?.checkCommand;
+  if (!checkCommand) return;
+  const settings = await getSettings(db, mission.projectId);
+  if (settings.checkCommand || settings.networkAccess !== 'open') return;
+  await updateSettings(db, mission.projectId, { checkCommand });
+  await audit(db, { action: 'project.check_set_by_plan', targetType: 'project', targetId: mission.projectId, detail: { missionId: mission.id, checkCommand } });
+}
+
 /** awaiting_approval -> approved; every planned task without dependencies becomes ready. */
 async function approveMissionPlan(db: Db, outbox: Outbox, missionId: string) {
   const mission = await moveMission(db, outbox, missionId, ['awaiting_approval'], { status: 'approved' });
   if (!mission) throw new HttpError(409, 'invalid_transition');
+  await adoptCheckCommand(db, mission);
   const roots = await db.task.findMany({ where: { missionId, status: 'planned', dependencies: { none: {} } } });
   for (const t of roots) await setTaskStatus(db, outbox, t.id, 'ready');
   return mission;

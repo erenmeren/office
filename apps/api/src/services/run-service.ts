@@ -279,6 +279,9 @@ export async function createRunForTask(
       task.kind === 'code'
         ? 'Commit your work on the current branch before you finish (keep build output such as dist/ and node_modules/ out of git). Anything left uncommitted is committed for you as "Office auto-commit"; the branch is then rebased onto the mission head and fast-forwarded when the project check passes.'
         : '',
+      fields.spec.checkCommand
+        ? `The project check is \`${fields.spec.checkCommand}\`. It runs in your worktree when you finish and must pass; run it yourself before you finish.`
+        : '',
     ]
       .filter(Boolean)
       .join('\n\n'),

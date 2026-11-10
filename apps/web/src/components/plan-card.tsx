@@ -39,6 +39,7 @@ function subtitle(m: Mission): string {
   const parts = [`Written by Chief ${time(approval?.createdAt ?? m.updatedAt)}`];
   if (approval?.status === 'approved' && approval.decidedAt) parts.push(`approved by you ${time(approval.decidedAt)}`);
   if (m.planErrors.length === 0) parts.push('dependency graph validated, no cycles');
+  if (m.plan.checkCommand) parts.push(`check: ${m.plan.checkCommand}`);
   return parts.join(' · ');
 }
 

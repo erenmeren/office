@@ -21,6 +21,8 @@ export const PlanSchema = z.object({
   summary: z.string().min(1).max(2000),
   tasks: z.array(PlanTaskSchema).min(1).max(30),
   risks: z.array(z.string()).default([]),
+  /** The shell command that proves the work, for a project that has none yet; adopted when the plan is approved. */
+  checkCommand: z.string().trim().min(1).max(500).optional(),
 });
 export type Plan = z.infer<typeof PlanSchema>;
 
@@ -98,6 +100,7 @@ export const PLAN_JSON_SCHEMA = {
       },
     },
     risks: strArray,
+    checkCommand: { type: 'string', minLength: 1, maxLength: 500 },
   },
 } as const;
 

@@ -293,6 +293,33 @@ describe('missions', () => {
     expect((await s.tasks(m.id)).filter((x) => x.status === 'ready').map((x) => x.key)).toEqual(['analysis', 'typo-fix']);
   });
 
+  it('a plan gives a project without a check command its first one; the tasks that follow run it and are told so', async () => {
+    s = await setup();
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { approvalPolicy: { plan: 'auto' } });
+    const fix = SAMPLE_PLAN.tasks.find((x) => x.key === 'typo-fix')!;
+    const { w, m, spec } = await s.planned({ summary: 'Fix the typo.', risks: [], checkCommand: 'npm test', tasks: [fix] });
+    expect(spec.prompt).toContain('no check command');
+    expect(m.status).toBe('approved');
+    expect((await s.req('GET', `/projects/${s.projectId}/settings`)).json().checkCommand).toBe('npm test');
+    expect(await s.t.prisma.auditLog.findFirst({ where: { action: 'project.check_set_by_plan', targetId: s.projectId } })).toMatchObject({ detail: { missionId: m.id, checkCommand: 'npm test' } });
+    const task = await s.assign(w);
+    expect(task).toMatchObject({ kind: 'task', checkCommand: 'npm test' });
+    expect(task.prompt).toContain('The project check is `npm test`');
+  });
+
+  it.each([
+    ['that has one', { checkCommand: 'pnpm test' }, 'pnpm test'],
+    ['under the network allowlist, where the check would run outside the sandbox', { networkAccess: 'allowlist' }, undefined],
+  ])('a plan does not set the check command of a project %s', async (_name, patch, kept) => {
+    s = await setup();
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { approvalPolicy: { plan: 'auto' }, ...patch });
+    const { m, spec } = await s.planned({ ...SAMPLE_PLAN, checkCommand: 'npm test' });
+    expect(spec.prompt).not.toContain('no check command');
+    expect(m.status).toBe('approved');
+    expect((await s.req('GET', `/projects/${s.projectId}/settings`)).json().checkCommand).toBe(kept);
+    expect(await s.t.prisma.auditLog.count({ where: { action: 'project.check_set_by_plan' } })).toBe(0);
+  });
+
   it('cancel: idle and running tasks cancelled, worker gets run.cancel; a second cancel is a 200 no-op', async () => {
     s = await setup();
     await s.req('PUT', `/projects/${s.projectId}/settings`, { approvalPolicy: { plan: 'auto' } });

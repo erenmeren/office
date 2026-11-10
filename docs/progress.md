@@ -1053,6 +1053,7 @@ Review against real use, the same day (owner: weigh the project against two vide
 
 - `CLAUDE.md` went from 36 KB to 2 KB: the standing decisions moved word for word to `docs/decisions.md`, because every session and subagent read the whole file. New decisions are written there.
 - Missions queue where finished work lands in the folder (`missionAhead`): the two recipe missions had started together from the same empty folder, so the second never saw the first one's files. Now the second gets its plan run only after the first is settled and merged. Verified by an API test with real git (the second mission is held, then planned in the tick that merges the first; the test fails without the check).
+- The plan can set a project's first check command (`PlanSchema.checkCommand`, `adoptCheckCommand`): in the recipe project all five checks were `skipped`, so the Chief's review, the dearest step, decided without one executed test. The Chief is asked for the command only when the project has none; code and verify tasks are told the check and that it must pass. Not under the network allowlist (see `docs/security.md`). Verified by API tests: the setting and audit row after an auto-approved plan, the next task run carrying the command and naming it in its prompt, an existing command kept, nothing set under the allowlist.
 
 ## Desktop app (2026-11-03)
 
