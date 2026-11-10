@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approvalSentence, approvalTypeLabel, countdown, missionProgress, missionStatusLine, planGraphNodes, taskCounts } from './missions';
+import { MISSION_STEPS, approvalSentence, approvalTypeLabel, countdown, missionProgress, missionStatusLine, missionStep, planGraphNodes, taskCounts } from './missions';
 
 describe('mission helpers', () => {
   it('counts done tasks', () => {
@@ -56,6 +56,12 @@ describe('mission helpers', () => {
       { id: 'cccccccc-3333', code: 'cccccccc', title: 'Loose', assignee: undefined, status: 'planned', dependsOn: [], gate: undefined },
     ]);
   });
+});
+
+it('missionStep places a mission on the four steps, and nowhere once it stopped', () => {
+  expect(['planning', 'awaiting_approval', 'approved', 'running', 'review', 'done'].map(missionStep)).toEqual([0, 0, 1, 1, 2, 3]);
+  expect(['plan_failed', 'failed', 'cancelled'].map(missionStep)).toEqual([null, null, null]);
+  expect(MISSION_STEPS).toHaveLength(4);
 });
 
 describe('missionStatusLine', () => {

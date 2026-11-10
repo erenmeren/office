@@ -36,10 +36,15 @@ export function MessageThread({
   conversation,
   agents,
   ask,
+  draft,
+  placeholder,
 }: {
   conversation: Conversation & { messages: MessageView[] };
   agents: Agent[];
   ask?: boolean;
+  /** text put into the message box; a new one replaces what is there */
+  draft?: string;
+  placeholder?: string;
 }) {
   const members = agents.filter((a) => conversation.agentIds.includes(a.id));
   const scroller = useRef<HTMLDivElement>(null);
@@ -75,7 +80,7 @@ export function MessageThread({
         ))}
         {conversation.messages.length === 0 && <p className="text-sm text-ink-3">No messages yet.</p>}
       </div>
-      <MessageComposer conversationId={conversation.id} ask={ask} />
+      <MessageComposer key={draft} conversationId={conversation.id} ask={ask} initial={draft} placeholder={placeholder} />
     </section>
   );
 }

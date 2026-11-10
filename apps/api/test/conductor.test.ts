@@ -1,4 +1,4 @@
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CONDUCTOR_PROJECT_SLUG } from '../src/services/conductor-service.js';
@@ -16,12 +16,15 @@ describe('conductor', () => {
     t = await makeApp();
     await t.app.listen({ port: 0, host: '127.0.0.1' });
     cookie = await t.login();
+    wipe();
     projectId = (await t.prisma.project.create({ data: { name: 'Shop', slug: 'shop', repoPath: '/tmp/office-ws/shop' } })).id;
     await t.prisma.agent.create({ data: { name: 'Chief', slug: 'chief', role: 'chief' } });
   });
+  // folders the tests make under <dataDir>/repos; a leftover one would shift the slugs
+  const wipe = () => [CONDUCTOR_PROJECT_SLUG, 'tarif-sitesi', 'tarif-sitesi-2'].forEach((slug) => rmSync(resolve(t.config.dataDir, 'repos', slug), { recursive: true, force: true }));
   afterAll(async () => {
     await t.close();
-    rmSync(resolve(t.config.dataDir, 'repos', CONDUCTOR_PROJECT_SLUG), { recursive: true, force: true });
+    wipe();
   });
 
   const seedConductor = async () => {
@@ -58,7 +61,7 @@ describe('conductor', () => {
     const { spec } = await w.waitFor('run.assign');
     expect(spec).toMatchObject({ kind: 'chat', cwd: home.repoPath, allowedTools: [], noBuiltinTools: true, skills: [], subagents: [] });
     expect(spec.tools.sort()).toEqual(
-      ['create_mission', 'get_conversation', 'get_mission', 'get_project', 'list_missions', 'list_projects', 'read_inbox', 'reply_message', 'search_project_memory'],
+      ['create_mission', 'create_project', 'get_conversation', 'get_mission', 'get_project', 'list_missions', 'list_projects', 'read_inbox', 'reply_message', 'search_project_memory'],
     );
     expect(spec.systemPrompt).toContain('You are the Conductor');
     await w.close();
@@ -106,5 +109,30 @@ describe('conductor', () => {
 
     const page = (await req('GET', '/conductor')).json();
     expect(page.missions).toMatchObject([{ id: missionId, project: { slug: 'shop' }, taskCounts: {}, pendingApprovals: [] }]);
+  });
+  it('create_project makes a project with its own repository and a slug from the name; a mission can be opened in it at once', async () => {
+    const home = await t.prisma.project.findUniqueOrThrow({ where: { slug: CONDUCTOR_PROJECT_SLUG } });
+    const conductor = await t.prisma.agent.findUniqueOrThrow({ where: { slug: 'conductor' } });
+    const conversation = await t.prisma.conversation.findFirstOrThrow({ where: { projectId: home.id } });
+    const run = await t.prisma.taskRun.create({
+      data: { agentId: conductor.id, projectId: home.id, kind: 'chat', conversationId: conversation.id, agentVersionId: conductor.currentVersionId!, status: 'running' },
+    });
+    const session = await t.prisma.agentSession.create({
+      data: { runId: run.id, agentId: conductor.id, projectId: home.id, model: 'opus', status: 'running', startedAt: new Date() },
+    });
+    const call = (name: string, args: unknown) => executeTool(t.prisma, t.app.hub, t.config, { run, session }, name, args);
+    const repos = resolve(t.config.dataDir, 'repos');
+
+    expect(await call('create_project', { name: 'Tarif Sitesı' })).toMatchObject({ ok: true, result: { project: 'tarif-sitesi', name: 'Tarif Sitesı' } });
+    const project = await t.prisma.project.findUniqueOrThrow({ where: { slug: 'tarif-sitesi' } });
+    expect(project).toMatchObject({ isSystem: false, repoPath: resolve(repos, 'tarif-sitesi'), defaultBranch: 'main' });
+    expect(existsSync(resolve(repos, 'tarif-sitesi', '.git'))).toBe(true);
+    expect(await t.prisma.auditLog.count({ where: { action: 'project.created_by_conductor', targetId: project.id } })).toBe(1);
+    // the same name again is a second project, not an error
+    expect(await call('create_project', { name: 'Tarif Sitesı' })).toMatchObject({ ok: true, result: { project: 'tarif-sitesi-2' } });
+    expect(await call('create_project', { name: '!!!' })).toMatchObject({ ok: false, code: 'invalid_name' });
+    expect(await call('create_mission', { project: 'tarif-sitesi', request: 'A page of recipes' })).toMatchObject({
+      ok: true, result: { project: 'tarif-sitesi', status: 'planning' },
+    });
   });
 });

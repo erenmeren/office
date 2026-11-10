@@ -45,6 +45,8 @@ export const authed = test.extend<{ login: void }>({
       const cookie = res.headersArray().find((h) => h.name.toLowerCase() === 'set-cookie')!.value.split(';')[0];
       const [name, value] = cookie.split('=');
       await page.context().addCookies([{ name, value, domain: 'localhost', path: '/' }]);
+      // the tests walk every page: start in the view that shows them all, not the simple one a new browser gets
+      await page.addInitScript(() => localStorage.getItem('office.simple') ?? localStorage.setItem('office.simple', '0'));
       await run();
     },
     { auto: true },

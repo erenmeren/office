@@ -35,7 +35,7 @@ class ToolError extends Error {
 }
 
 const REVIEW_ONLY: OfficeToolName[] = ['get_task_evidence', 'review_task'];
-const CONDUCTOR_ONLY: OfficeToolName[] = ['list_projects', 'get_project', 'search_project_memory', 'create_mission', 'list_missions', 'get_mission'];
+const CONDUCTOR_ONLY: OfficeToolName[] = ['list_projects', 'get_project', 'search_project_memory', 'create_project', 'create_mission', 'list_missions', 'get_mission'];
 const MESSAGING_AND_MEMORY = OFFICE_TOOL_NAMES.filter(
   (n) => n !== 'submit_summary' && !REVIEW_ONLY.includes(n) && !CONDUCTOR_ONLY.includes(n),
 );
@@ -68,7 +68,7 @@ export async function executeTool(
   }
   try {
     const args = parseToolArgs(name as OfficeToolName, rawArgs);
-    if (CONDUCTOR_ONLY.includes(name as OfficeToolName)) return { ok: true, result: await runConductorTool(prisma, hub, ctx.run, name, args) };
+    if (CONDUCTOR_ONLY.includes(name as OfficeToolName)) return { ok: true, result: await runConductorTool(prisma, hub, config, ctx.run, name, args) };
     return { ok: true, ...(await run(prisma, hub, config, ctx, name as OfficeToolName, args)) };
   } catch (err) {
     if (err instanceof ZodError) return fail('invalid_args', err.message);

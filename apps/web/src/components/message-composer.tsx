@@ -10,11 +10,11 @@ import { post } from '@/lib/api';
 
 type Kind = 'message' | 'question';
 
-/** `ask`: every message is a question (a note would not wake the agent); no type switch. */
-export function MessageComposer({ conversationId, ask = false }: { conversationId: string; ask?: boolean }) {
+/** `ask`: every message is a question (a note would not wake the agent); no type switch. `initial` is the text the box starts with. */
+export function MessageComposer({ conversationId, ask = false, initial = '', placeholder = 'Write a message. It is saved before it is delivered.' }: { conversationId: string; ask?: boolean; initial?: string; placeholder?: string }) {
   const qc = useQueryClient();
   const [type, setType] = useState<Kind>(ask ? 'question' : 'message');
-  const [body, setBody] = useState('');
+  const [body, setBody] = useState(initial);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -41,7 +41,7 @@ export function MessageComposer({ conversationId, ask = false }: { conversationI
         rows={2}
         value={body}
         onChange={(e) => setBody(e.target.value)}
-        placeholder="Write a message. It is saved before it is delivered."
+        placeholder={placeholder}
         variant="well"
       />
       <div className="flex items-center justify-between gap-3">

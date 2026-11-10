@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { Assistant } from '@/components/assistant';
 import { DashboardActivity } from '@/components/dashboard-activity';
 import { DashboardAttention } from '@/components/dashboard-attention';
 import { DashboardCosts } from '@/components/dashboard-costs';
@@ -11,8 +12,14 @@ import { DashboardWorkers } from '@/components/dashboard-workers';
 import { Button } from '@/components/ui/button';
 import { DashboardColumns, DashboardStack } from '@/components/ui/kpi-card';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
+import { useSimpleMode } from '@/lib/simple-mode';
 
-export default function Dashboard() {
+/** The home page: the assistant in the simple view, the dashboard otherwise. */
+export default function Home() {
+  return useSimpleMode() ? <Assistant simple /> : <Dashboard />;
+}
+
+function Dashboard() {
   return (
     <DashboardStack>
       <PageHeader>

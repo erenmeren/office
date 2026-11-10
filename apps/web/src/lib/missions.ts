@@ -114,6 +114,14 @@ export function missionStatusLine(m: MissionStatusInput): { text: string; yours:
   }
 }
 
+/** A mission's pipeline in four words, for someone who does not know it. */
+export const MISSION_STEPS = ['Plan', 'Work', 'Check', 'Done'] as const;
+/** Which of `MISSION_STEPS` a mission is at; null when it stopped (failed, cancelled) and the status line says why. */
+export function missionStep(status: string): number | null {
+  const at = [['planning', 'awaiting_approval'], ['approved', 'running'], ['review'], ['done']].findIndex((statuses) => statuses.includes(status));
+  return at < 0 ? null : at;
+}
+
 /** Task statuses as counts, for `missionStatusLine`. */
 export function taskCounts(tasks: { status: string }[]): Record<string, number> {
   return tasks.reduce<Record<string, number>>((acc, t) => ((acc[t.status] = (acc[t.status] ?? 0) + 1), acc), {});

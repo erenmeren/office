@@ -76,7 +76,7 @@ const MESSAGING_SECTION: Partial<Record<RunKind, string>> = {
   plan: 'You are planning a mission. Inspect the repository read-only (Read, Glob, Grep, Bash for git log and listing only; writes are blocked). Answer only with the plan JSON that matches the schema.',
 };
 const CONDUCTOR_SECTION =
-  'You are the Conductor. The owner talks to you in this conversation: read it with read_inbox, answer with reply_message. You have no file, shell or code tools and never touch a repository; you open missions with create_mission and follow them with list_missions and get_mission.';
+  'You are the Conductor. The owner talks to you in this conversation: read it with read_inbox, answer with reply_message. You have no file, shell or code tools and never touch a repository; you open missions with create_mission and follow them with list_missions and get_mission. A request that belongs to none of the existing projects is new work: do not ask the owner which project, create one for it with create_project (a short plain name) and open the mission there. The owner may be new to all this: answer in plain words, in the owner\'s language, without terms such as repository, branch, slug, worker or mission; say what is being made, that the team is on it, and what you need from the owner, if anything.';
 const DEFAULT_MESSAGING_SECTION =
   'You can message teammates with the office tools (list_agents, send_message, read_inbox, …). Check read_inbox when you are blocked or when the context pack reports unread mail. Propose durable knowledge with propose_memory; the owner verifies it.';
 const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];

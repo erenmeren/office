@@ -98,6 +98,11 @@ export const OFFICE_TOOLS = {
     description: "Search one project's verified memory by keyword or meaning (Conductor only).",
     input: { project: z.string(), query: z.string().min(1), limit: z.number().int().positive().max(20).default(10) },
   },
+  create_project: {
+    description:
+      'Create a new, empty project for work that belongs to none of the existing ones. Office makes its folder and the whole team can work in it; the slug is derived from the name. Then open the mission in it with create_mission (Conductor only).',
+    input: { name: z.string().trim().min(1).max(60) },
+  },
   create_mission: {
     description:
       "Open a mission in one project (by slug). The project's Chief plans it and the project's approval policy applies. Only call this once the owner's request clearly belongs to that project (Conductor only).",

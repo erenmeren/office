@@ -63,6 +63,17 @@ async function projectBySlug(prisma: PrismaClient, slug: string) {
   throw new ConductorToolError('not_found', `unknown project "${slug}"; projects: ${slugs.join(', ') || 'none'}`);
 }
 
+/** A slug from a project's name: ASCII letters and digits with dashes between. The Turkish dotless ı has no Unicode decomposition, so it is mapped by hand. */
+const slugOf = (name: string) =>
+  name
+    .replace(/ı/g, 'i')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, '');
+
 const team = async (prisma: PrismaClient, projectId: string) =>
   (await projectAgents(prisma, projectId)).map((a) => ({ slug: a.slug, name: a.name, role: a.role }));
 
@@ -78,6 +89,7 @@ const missionLine = (m: { id: string; title: string; status: string; summary: st
 export async function runConductorTool(
   prisma: PrismaClient,
   hub: EventHub,
+  config: Config,
   run: TaskRun,
   name: string,
   args: Record<string, any>,
@@ -114,6 +126,18 @@ export async function runConductorTool(
       const p = await projectBySlug(prisma, args.project);
       const entries = await searchMemory(prisma, { projectId: p.id, q: args.query, status: 'verified', limit: args.limit });
       return { entries: entries.map((e) => ({ id: e.id, type: e.type, title: e.title, content: e.content.slice(0, 1200) })) };
+    }
+    case 'create_project': {
+      const base = slugOf(args.name);
+      if (!base) throw new ConductorToolError('invalid_name', 'the name needs at least one letter or digit');
+      const pathOf = (slug: string) => resolve(config.dataDir, 'repos', slug);
+      // the first slug neither a project nor a folder carries yet
+      let slug = base;
+      for (let n = 2; (await prisma.project.findUnique({ where: { slug } })) || existsSync(pathOf(slug)); n++) slug = `${base}-${n}`;
+      await initRepository(pathOf(slug), 'main', args.name);
+      const project = await prisma.project.create({ data: { name: args.name, slug, repoPath: pathOf(slug) } });
+      await audit(prisma, { action: 'project.created_by_conductor', targetType: 'project', targetId: project.id, detail: { slug, runId: run.id } });
+      return { project: slug, name: project.name, team: (await team(prisma, project.id)).map((a) => a.slug) };
     }
     case 'create_mission': {
       const p = await projectBySlug(prisma, args.project);

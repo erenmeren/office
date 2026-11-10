@@ -4,11 +4,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Bot, Building2, ClipboardCheck, Compass, Database, FolderGit2, LayoutDashboard, MessagesSquare, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
+import { Bot, Building2, ClipboardCheck, Compass, Database, FolderGit2, LayoutDashboard, LayoutGrid, MessagesSquare, Minimize2, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { AgentAvatar } from '@/components/ui/agent-avatar';
+import { Button } from '@/components/ui/button';
 import { StatusDot } from '@/components/ui/status-pill';
 import { useProject } from '@/lib/project';
+import { setSimpleMode, useSimpleMode } from '@/lib/simple-mode';
 import { useAgents, useConversations, useLiveSessions, useMemoryCounts, useMissions, useOverview, useSkills, useTasks, useWorkers } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
 
@@ -27,6 +29,23 @@ export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/audit', label: 'Audit', icon: ScrollText },
   { href: '/settings', label: 'Settings', icon: Settings2 },
 ];
+
+/** The simple view's menu: the same pages under plain names, the home page being the assistant. */
+const SIMPLE_NAV: typeof NAV = [
+  { href: '/', label: 'Assistant', icon: Compass },
+  { href: '/mission-control', label: 'My work', icon: Target },
+  { href: '/office', label: 'Office', icon: Building2 },
+  { href: '/agents', label: 'Team', icon: Bot },
+  { href: '/skills', label: 'Skills', icon: Sparkles },
+];
+const NEEDS_YOU = { href: '/decisions', label: 'Needs you', icon: ClipboardCheck };
+
+/** The menu of the current view. In the simple view "Needs you" appears only while something waits for the owner. */
+export function useNav(waiting = 0) {
+  const simple = useSimpleMode();
+  if (!simple) return NAV;
+  return waiting ? [...SIMPLE_NAV, NEEDS_YOU] : SIMPLE_NAV;
+}
 
 export const isActive = (pathname: string, href: string) => (href === '/' ? pathname === '/' : pathname.startsWith(href));
 
@@ -97,6 +116,8 @@ export function AppSidebar({ className }: { className?: string }) {
   const agents = useAgents();
   const tasks = useTasks();
   const counts = useNavCounts();
+  const simple = useSimpleMode();
+  const nav = useNav(counts['/decisions'].n);
   const project = useProject();
   const busy = new Set(tasks.data?.filter((t) => t.status === 'running').map((t) => t.agentId));
 
@@ -107,16 +128,18 @@ export function AppSidebar({ className }: { className?: string }) {
         <span className="font-heading text-[19px] font-semibold tracking-[-0.01em]">Agent Office</span>
       </div>
 
-      <Link href="/tasks/new" className="flex h-14 items-center gap-2.5 rounded-[14px] border border-white/13 bg-white/7 px-3 hover:bg-white/10">
-        <FolderGit2 className="size-4 shrink-0 text-ink-3" aria-hidden />
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="text-xs text-ink-3">Project</span>
-          <span className="truncate font-medium">{project?.name ?? 'No project yet'}</span>
-        </span>
-      </Link>
+      {!simple && (
+        <Link href="/tasks/new" className="flex h-14 items-center gap-2.5 rounded-[14px] border border-white/13 bg-white/7 px-3 hover:bg-white/10">
+          <FolderGit2 className="size-4 shrink-0 text-ink-3" aria-hidden />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="text-xs text-ink-3">Project</span>
+            <span className="truncate font-medium">{project?.name ?? 'No project yet'}</span>
+          </span>
+        </Link>
+      )}
 
       <nav aria-label="Primary" className="flex flex-col gap-[3px]">
-        {NAV.map(({ href, label, icon: Icon }) => {
+        {nav.map(({ href, label, icon: Icon }) => {
           const active = isActive(pathname, href);
           const c = counts[href];
           return (
@@ -148,6 +171,11 @@ export function AppSidebar({ className }: { className?: string }) {
           </Link>
         ))}
       </div>
+
+      <Button variant="ghost" size="sm" className="mt-auto justify-start text-ink-3" onClick={() => setSimpleMode(!simple)}>
+        {simple ? <LayoutGrid data-icon="inline-start" aria-hidden /> : <Minimize2 data-icon="inline-start" aria-hidden />}
+        {simple ? 'Show all pages' : 'Simple view'}
+      </Button>
     </aside>
   );
 }

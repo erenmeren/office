@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { ChevronRight } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { cn } from 'cn';
-import { AppSidebar, NAV, isActive } from '@/components/app-sidebar';
+import { AppSidebar, NAV, isActive, useNav } from '@/components/app-sidebar';
 import { NewProjectForm } from '@/components/new-project-form';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
@@ -75,7 +75,9 @@ function AppHeader() {
   const pathname = usePathname();
   const project = useProject();
   const me = useMe();
-  const page = NAV.find((n) => isActive(pathname, n.href))?.label ?? (pathname.startsWith('/tasks') ? 'Tasks' : 'Office');
+  const nav = useNav();
+  // a page outside the simple menu keeps its full name
+  const page = (nav.find((n) => isActive(pathname, n.href)) ?? NAV.find((n) => isActive(pathname, n.href)))?.label ?? (pathname.startsWith('/tasks') ? 'Tasks' : 'Office');
   const email = me.data && 'email' in me.data ? me.data.email : '';
   const logout = async () => {
     await post('/auth/logout');
@@ -91,7 +93,7 @@ function AppHeader() {
       <BudgetBar projectId={project?.id} />
       {/* compact nav for viewports without the sidebar */}
       <nav aria-label="Primary (compact)" className="flex gap-1 lg:hidden">
-        {NAV.map((n) => (
+        {nav.map((n) => (
           <Link
             key={n.href}
             href={n.href}

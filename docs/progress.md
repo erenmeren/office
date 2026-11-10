@@ -1019,6 +1019,25 @@ Added after that on the owner's request (every room should hold something of its
 - `Box` in `office-floor.tsx` draws a box as its top and its two visible faces; the new furniture and the red armchair use it. `WallArt` and `SideArt` hold what hangs on the back and left wall. A face stood up on its top edge draws bottom up, so the sign is flipped back with `scaleY(-1)`.
 - Verified with close-up screenshots of every team room on the dev server (fixtures). The summarizer's room was left alone: it is a hidden system agent and has no room in a real project.
 
+## Simple view (2026-11-10)
+
+Owner request: the product is too crowded; someone who has only just learned to talk to an AI should be able to use it, and it should explain itself. The agent and skill pages are fine; giving and following work is what is hard. Proposed in chat and accepted: put one conversation at the centre and move the rest behind a switch. This is the first step.
+
+- Two views, kept in `localStorage` (`office.simple`, `apps/web/src/lib/simple-mode.ts`); a new browser starts in the simple one. The sidebar's last button switches ("Show all pages" / "Simple view").
+- Simple menu (`useNav` in `app-sidebar.tsx`): Assistant (`/`), My work (`/mission-control`), Office, Team (`/agents`), Skills. "Needs you" (`/decisions`) is added only while something waits for the owner. The project block of the sidebar is hidden; the header's project switcher stays. No page was removed, and the other view is the menu as it was.
+- `/` is the assistant in the simple view and the Dashboard otherwise. The assistant is the Conductor page under plain words (`components/assistant.tsx`, used by `/conductor` too): a question as the title, three example requests while the thread is empty (a click puts one in the message box), and "Your work" with each mission on four steps, Plan, Work, Check, Done (`missionStep`, `components/ui/steps.tsx`), above its status sentence.
+- `MessageComposer` takes `initial` and `placeholder`; `MessageThread` passes `draft` and `placeholder` on.
+- Verified on the dev server with fixtures: the simple menu, an example filling the box, the switch to all pages and back, and the view surviving a reload. Unit test for `missionStep`. The e2e fixture now starts every test in the full view and one new test covers the simple one; Playwright was not run (no `OFFICE_E2E_*` credentials).
+- Not built yet, from the same proposal: decisions asked as questions inside the chat, a result screen with an "open folder" button, plain wording of the status sentences ("worker", "Chief" still appear), a Turkish interface.
+
+Second step, the same day (owner: "continue with the assistant"): the assistant makes the project itself.
+
+- New Conductor tool `create_project { name }` (`conductor-service.ts`): a greenfield project like `POST /projects` without `repoPath`, in `<OFFICE_DATA_DIR>/repos/<slug>` with the starter files and the whole team (no `ProjectAgent` rows). The slug comes from the name (`slugOf`: diacritics dropped, Turkish `ı` mapped by hand, `a-z0-9` and dashes, 40 characters); a taken slug or an existing folder gets `-2`, `-3`, …; a name without a letter or digit is `invalid_name`. Audit `project.created_by_conductor`. `runConductorTool` now takes the config for the data directory.
+- The platform's Conductor section (`CONDUCTOR_SECTION` in `run-service.ts`, added to every Conductor run whatever its agent version says) tells it to create a project for a request that belongs to none instead of asking which one, and to answer in plain words in the owner's language without terms such as repository, branch, slug, worker or mission. The template (`templates/agents/conductor.json`) says the same for new installs; the seed never rewrites an existing agent, which is why the rule lives in the platform section.
+- The assistant page refreshes the project list when its events arrive; its example requests are all new work now.
+- Unlike the route, the tool does not ask a worker to add the folder to its roots: the desktop worker and the documented dev setup already cover `<OFFICE_DATA_DIR>/repos`. Elsewhere the mission says "Waiting for a worker: …".
+- Verified by an API test (project row, repository on disk, slug from a Turkish name, second project for the same name, refusal of an empty slug, a mission opened in the new project) and the whole suite: API 263, worker 105, runtime 74, shared 67, web 57, db 10. Not verified: a real Conductor run choosing to call the tool.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):
