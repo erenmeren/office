@@ -12,7 +12,7 @@ import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
 import { embedMissingMemory } from './memory-service.js';
-import { CONDUCTOR_SLUG } from './conductor-service.js';
+import { CONDUCTOR_SLUG, announceSettledMissions } from './conductor-service.js';
 import { agentDefault, codexUnfit, routeTask } from './router-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
@@ -106,6 +106,12 @@ export class Scheduler {
     this.embedding ??= embedMissingMemory(this.prisma, 20, this.log)
       .catch((err) => this.log.error({ err }, 'embedding memory failed'))
       .finally(() => (this.embedding = undefined));
+    try {
+      // before mail is delivered: the note it leaves wakes the Conductor in this same tick
+      await announceSettledMissions(this.prisma, this.hub, this.log);
+    } catch (err) {
+      this.log.error({ err }, 'announcing settled missions failed');
+    }
     try {
       await this.deliverToLiveRuns();
     } catch (err) {

@@ -1,12 +1,14 @@
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import type { PrismaClient, TaskRun } from '@office/db';
-import { CONDUCTOR_SLUG } from '@office/shared';
+import { CONDUCTOR_SLUG, ProjectSettingsSchema } from '@office/shared';
 import type { Config } from '../config.js';
 import { initRepository } from '../routes/projects.js';
 import { audit } from './audit-service.js';
-import type { EventHub } from './event-hub.js';
-import { findOrCreateConversation } from './message-service.js';
+import type { EventHub, Outbox } from './event-hub.js';
+import { findOrCreateConversation, queueMessageCreated, toMessageView } from './message-service.js';
 import { createMission } from './mission-service.js';
 import { projectDecisions, searchMemory } from './memory-service.js';
 import { projectAgents } from './project-service.js';
@@ -130,14 +132,15 @@ export async function runConductorTool(
     case 'create_project': {
       const base = slugOf(args.name);
       if (!base) throw new ConductorToolError('invalid_name', 'the name needs at least one letter or digit');
-      const pathOf = (slug: string) => resolve(config.dataDir, 'repos', slug);
+      const pathOf = (slug: string) => resolve(config.projectsDir, slug);
       // the first slug neither a project nor a folder carries yet
       let slug = base;
       for (let n = 2; (await prisma.project.findUnique({ where: { slug } })) || existsSync(pathOf(slug)); n++) slug = `${base}-${n}`;
       await initRepository(pathOf(slug), 'main', args.name);
-      const project = await prisma.project.create({ data: { name: args.name, slug, repoPath: pathOf(slug) } });
+      // the owner looks for the result in this folder, not on a branch: finished work is merged into it
+      const project = await prisma.project.create({ data: { name: args.name, slug, repoPath: pathOf(slug), settings: { integrateWhenDone: true } } });
       await audit(prisma, { action: 'project.created_by_conductor', targetType: 'project', targetId: project.id, detail: { slug, runId: run.id } });
-      return { project: slug, name: project.name, team: (await team(prisma, project.id)).map((a) => a.slug) };
+      return { project: slug, name: project.name, folder: project.repoPath, team: (await team(prisma, project.id)).map((a) => a.slug) };
     }
     case 'create_mission': {
       const p = await projectBySlug(prisma, args.project);
@@ -176,7 +179,7 @@ export async function runConductorTool(
       const m = await prisma.mission.findFirst({
         where: { id: args.missionId, project: { isSystem: false } },
         include: {
-          project: { select: { slug: true } },
+          project: { select: { slug: true, repoPath: true } },
           tasks: { orderBy: { createdAt: 'asc' }, include: { agent: { select: { slug: true } } } },
           approvals: { where: { status: 'pending' }, select: { type: true, reason: true } },
         },
@@ -186,6 +189,8 @@ export async function runConductorTool(
       return {
         ...missionLine(m),
         project: m.project.slug,
+        folder: m.project.repoPath,
+        branch: m.branch,
         request: m.request,
         summary: m.summary,
         planSummary: plan?.summary ?? null,
@@ -196,4 +201,87 @@ export async function runConductorTool(
     }
   }
   throw new ConductorToolError('unknown_tool', `unknown tool: ${name}`);
+}
+
+const run = promisify(execFile);
+
+/**
+ * Merges a finished mission's branch into the default branch checked out in the project's own folder,
+ * so the owner finds the result there. Touches nothing unless that is plainly safe: the folder on its default
+ * branch, no uncommitted change to a tracked file, and a merge without conflicts.
+ */
+export async function integrateIntoFolder(
+  project: { repoPath: string; defaultBranch: string },
+  branch: string,
+  who: { committerName: string; committerEmail: string },
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const git = (...args: string[]) => run('git', args, { cwd: project.repoPath, timeout: 30_000 }).then((r) => r.stdout.trim());
+  try {
+    if ((await git('symbolic-ref', '--short', 'HEAD')) !== project.defaultBranch) return { ok: false, reason: `the folder is not on ${project.defaultBranch}` };
+    if (await git('status', '--porcelain', '--untracked-files=no')) return { ok: false, reason: 'the folder has changes of its own that are not committed' };
+  } catch {
+    return { ok: false, reason: 'the folder could not be read' };
+  }
+  try {
+    await git('-c', `user.name=${who.committerName}`, '-c', `user.email=${who.committerEmail}`, 'merge', '--no-edit', branch);
+    return { ok: true };
+  } catch {
+    // a conflict leaves a half-made merge behind
+    await git('merge', '--abort').catch(() => undefined);
+    return { ok: false, reason: 'it does not merge cleanly with what the folder holds' };
+  }
+}
+
+const SETTLED = ['done', 'failed', 'plan_failed'] as const;
+const ANNOUNCE_WINDOW_MS = 15 * 60_000;
+
+/**
+ * Follows up the missions the Conductor opened once they are settled: merges the work into the project's folder when
+ * the project asks for it (`integrateWhenDone`), then leaves the Conductor one note in its conversation. The note is
+ * mail, so the scheduler wakes the Conductor, which tells the owner in its own words. Only missions settled in the
+ * last 15 minutes are announced: nothing from before this existed, and nothing from before a long stop.
+ */
+export async function announceSettledMissions(prisma: PrismaClient, hub: EventHub, log: { warn: (o: object, msg: string) => void }): Promise<void> {
+  const missions = await prisma.mission.findMany({
+    where: { conductorConversationId: { not: null }, status: { in: [...SETTLED] }, updatedAt: { gt: new Date(Date.now() - ANNOUNCE_WINDOW_MS) } },
+    include: { project: true },
+    orderBy: { updatedAt: 'asc' },
+  });
+  if (missions.length === 0) return;
+  const conductor = await prisma.agent.findUnique({ where: { slug: CONDUCTOR_SLUG } });
+  if (!conductor) return;
+  for (const m of missions) {
+    const idempotencyKey = `mission-settled:${m.id}:${m.status}`;
+    try {
+      if (await prisma.message.findUnique({ where: { idempotencyKey } })) continue;
+      const conversation = await prisma.conversation.findUnique({ where: { id: m.conductorConversationId! } });
+      if (!conversation) continue;
+      let where = '';
+      if (m.status === 'done' && m.branch) {
+        const settings = ProjectSettingsSchema.parse(m.project.settings ?? {});
+        const merged = settings.integrateWhenDone ? await integrateIntoFolder(m.project, m.branch, settings) : null;
+        if (merged) await audit(prisma, { action: merged.ok ? 'mission.integrated' : 'mission.not_integrated', targetType: 'mission', targetId: m.id, detail: { branch: m.branch, folder: m.project.repoPath, ...(merged.ok ? {} : { reason: merged.reason }) } });
+        where = merged?.ok
+          ? ` The files are in the folder ${m.project.repoPath}.`
+          : ` The work is on branch ${m.branch} of the folder ${m.project.repoPath}${merged ? `; it was not put into the folder itself because ${merged.reason}` : ''}.`;
+      }
+      const message = await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          projectId: conversation.projectId,
+          // a wake type: the Conductor gets a chat run for it
+          type: 'escalation',
+          body: `Office: "${m.title}" (mission ${m.id}, project ${m.project.slug}) is ${m.status}.${where} Read it with get_mission and tell the owner.`,
+          idempotencyKey,
+          deliveries: { create: [{ recipientAgentId: conductor.id }] },
+        },
+        include: { deliveries: true },
+      });
+      const outbox: Outbox = [];
+      queueMessageCreated(outbox, toMessageView(message));
+      hub.publishAll(outbox);
+    } catch (err) {
+      log.warn({ err, missionId: m.id }, 'announcing a settled mission failed');
+    }
+  }
 }

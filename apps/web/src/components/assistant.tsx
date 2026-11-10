@@ -61,6 +61,8 @@ export function Assistant({ simple = false }: { simple?: boolean }) {
   const agent = view.data?.agent;
   const agents = agent ? [{ ...agent, currentVersion: null } as Agent] : [];
   const missions = view.data?.missions ?? [];
+  // the simple view shows the talk between the owner and the assistant, not the notes the platform leaves it
+  const shown = thread.data && simple ? { ...thread.data, messages: thread.data.messages.filter((m) => m.senderAgentId || m.senderUserId) } : thread.data;
   // Mission Control shows the selected project: switch to the mission's project first
   const open = (m: ConductorView['missions'][number]) => {
     selectProject(m.project.id);
@@ -101,7 +103,7 @@ export function Assistant({ simple = false }: { simple?: boolean }) {
         <div className="flex flex-wrap gap-5">
           <Card className="min-w-0 flex-[3_1_480px]">
             <CardContent>
-              {simple && thread.data?.messages.length === 0 && (
+              {simple && shown?.messages.length === 0 && (
                 <div className="mb-4 flex flex-col items-start gap-2">
                   <p className="text-[13px] text-ink-3">Not sure how to start? Pick one and change it to your own:</p>
                   {EXAMPLES.map((example) => (
@@ -111,8 +113,8 @@ export function Assistant({ simple = false }: { simple?: boolean }) {
                   ))}
                 </div>
               )}
-              {thread.data ? (
-                <MessageThread conversation={thread.data} agents={agents} ask draft={draft} placeholder={simple ? 'Describe what you want, as you would to a person.' : undefined} />
+              {shown ? (
+                <MessageThread conversation={shown} agents={agents} ask draft={draft} placeholder={simple ? 'Describe what you want, as you would to a person.' : undefined} />
               ) : (
                 <p className="text-sm text-ink-3">Loading…</p>
               )}

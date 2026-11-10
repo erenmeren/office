@@ -1,7 +1,8 @@
-import { existsSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { CONDUCTOR_PROJECT_SLUG } from '../src/services/conductor-service.js';
+import { CONDUCTOR_PROJECT_SLUG, announceSettledMissions } from '../src/services/conductor-service.js';
 import { executeTool } from '../src/services/tool-service.js';
 import { connectFakeWorker } from './fake-worker.js';
 import { makeApp } from './helpers.js';
@@ -121,11 +122,12 @@ describe('conductor', () => {
       data: { runId: run.id, agentId: conductor.id, projectId: home.id, model: 'opus', status: 'running', startedAt: new Date() },
     });
     const call = (name: string, args: unknown) => executeTool(t.prisma, t.app.hub, t.config, { run, session }, name, args);
-    const repos = resolve(t.config.dataDir, 'repos');
+    const repos = t.config.projectsDir;
+    expect(repos).toBe(resolve(t.config.dataDir, 'repos'));
 
     expect(await call('create_project', { name: 'Tarif Sitesı' })).toMatchObject({ ok: true, result: { project: 'tarif-sitesi', name: 'Tarif Sitesı' } });
     const project = await t.prisma.project.findUniqueOrThrow({ where: { slug: 'tarif-sitesi' } });
-    expect(project).toMatchObject({ isSystem: false, repoPath: resolve(repos, 'tarif-sitesi'), defaultBranch: 'main' });
+    expect(project).toMatchObject({ isSystem: false, repoPath: resolve(repos, 'tarif-sitesi'), defaultBranch: 'main', settings: { integrateWhenDone: true } });
     expect(existsSync(resolve(repos, 'tarif-sitesi', '.git'))).toBe(true);
     expect(await t.prisma.auditLog.count({ where: { action: 'project.created_by_conductor', targetId: project.id } })).toBe(1);
     // the same name again is a second project, not an error
@@ -134,5 +136,69 @@ describe('conductor', () => {
     expect(await call('create_mission', { project: 'tarif-sitesi', request: 'A page of recipes' })).toMatchObject({
       ok: true, result: { project: 'tarif-sitesi', status: 'planning' },
     });
+  });
+  it('a finished mission of the Conductor lands in the project folder and leaves it one note, which wakes it', async () => {
+    const home = await t.prisma.project.findUniqueOrThrow({ where: { slug: CONDUCTOR_PROJECT_SLUG } });
+    const conductor = await t.prisma.agent.findUniqueOrThrow({ where: { slug: 'conductor' } });
+    const conversation = await t.prisma.conversation.findFirstOrThrow({ where: { projectId: home.id } });
+    const project = await t.prisma.project.findUniqueOrThrow({ where: { slug: 'tarif-sitesi' } });
+    const repo = project.repoPath;
+    const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8' });
+    // what a mission leaves behind: a branch with the work, the folder still on main
+    const work = (branch: string, file: string) => {
+      git('checkout', '-q', '-b', branch, 'main');
+      writeFileSync(resolve(repo, file), 'made by the team\n');
+      git('add', '-A');
+      git('commit', '-q', '-m', `add ${file}`);
+      git('checkout', '-q', 'main');
+    };
+    const mission = (title: string, status: 'done' | 'failed', branch: string | null) =>
+      t.prisma.mission.create({ data: { projectId: project.id, title, request: title, status, branch, conductorConversationId: conversation.id } });
+    const notes = () => t.prisma.message.findMany({ where: { conversationId: conversation.id, idempotencyKey: { startsWith: 'mission-settled:' } }, orderBy: { createdAt: 'asc' }, include: { deliveries: true } });
+    const announce = () => announceSettledMissions(t.prisma, t.app.hub, t.app.log);
+
+    work('office/page', 'index.html');
+    const done = await mission('Recipe page', 'done', 'office/page');
+    await announce();
+    expect(existsSync(resolve(repo, 'index.html'))).toBe(true);
+    const [note] = await notes();
+    expect(note).toMatchObject({ type: 'escalation', senderAgentId: null, senderUserId: null, idempotencyKey: `mission-settled:${done.id}:done` });
+    expect(note!.body).toContain('"Recipe page"');
+    expect(note!.body).toContain(`The files are in the folder ${repo}`);
+    expect(note!.deliveries).toMatchObject([{ recipientAgentId: conductor.id, status: 'pending' }]);
+    expect(await t.prisma.auditLog.count({ where: { action: 'mission.integrated', targetId: done.id } })).toBe(1);
+    // once only
+    await announce();
+    expect(await notes()).toHaveLength(1);
+
+    // the folder has work of its own: nothing is merged over it, and the note says where the result waits
+    work('office/more', 'more.html');
+    writeFileSync(resolve(repo, 'index.html'), 'the owner is editing this\n');
+    await mission('More pages', 'done', 'office/more');
+    await mission('Broken idea', 'failed', null);
+    await announce();
+    expect(existsSync(resolve(repo, 'more.html'))).toBe(false);
+    const bodies = (await notes()).map((n) => n.body);
+    expect(bodies).toHaveLength(3);
+    expect(bodies.find((b) => b.includes('"More pages"'))).toContain('on branch office/more');
+    expect(bodies.find((b) => b.includes('"Broken idea"'))).toContain('is failed');
+    git('checkout', '-q', '--', 'index.html');
+
+    // a mission settled long ago is not announced (nothing from before this feature, or from before a long stop)
+    const old = await mission('Old one', 'done', null);
+    await t.prisma.$executeRaw`UPDATE "Mission" SET "updatedAt" = now() - interval '1 hour' WHERE id = ${old.id}`;
+    await announce();
+    expect(await notes()).toHaveLength(3);
+
+    // the note is mail for the Conductor: the next tick gives it a chat run in its conversation
+    // (the runs earlier tests left queued or running would make it look busy)
+    await t.prisma.taskRun.updateMany({ where: { agentId: conductor.id, status: { in: ['queued', 'running'] } }, data: { status: 'succeeded' } });
+    const { enrollToken } = (await req('POST', '/workers', { name: 'w-note' })).json();
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w-note', capacity: 1, allowedRoots: [home.repoPath] });
+    await t.app.scheduler.tick();
+    const { spec } = await w.waitFor('run.assign');
+    expect(spec).toMatchObject({ kind: 'chat' });
+    expect(spec.systemPrompt).toContain('Office:');
+    await w.close();
   });
 });

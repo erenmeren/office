@@ -13,6 +13,7 @@ const EnvSchema = z.object({
   COOKIE_SECRET: z.string().min(32),
   WEB_ORIGIN: z.string().min(1),
   OFFICE_DATA_DIR: z.string().min(1),
+  OFFICE_PROJECTS_DIR: z.string().min(1).optional(),
   OFFICE_EMBEDDINGS: z.enum(['on', 'off']).default('on'),
   OFFICE_MODELS_DIR: z.string().min(1).optional(),
   OFFICE_LEASE_SECONDS: z.coerce.number().int().positive().default(60),
@@ -37,6 +38,8 @@ export interface Config {
   cookieSecret: string;
   webOrigin: string;
   dataDir: string;
+  /** Where Office makes the folder of a new project: <dataDir>/repos unless OFFICE_PROJECTS_DIR names the owner's own place. */
+  projectsDir: string;
   embeddings: boolean;
   modelsDir?: string;
   artifactsDir: string;
@@ -90,6 +93,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     webOrigin: e.WEB_ORIGIN,
     // absolute: repository paths derived from it are stored and handed to workers
     dataDir: resolve(e.OFFICE_DATA_DIR),
+    projectsDir: resolve(e.OFFICE_PROJECTS_DIR ?? join(e.OFFICE_DATA_DIR, 'repos')),
     embeddings: e.OFFICE_EMBEDDINGS === 'on',
     modelsDir: e.OFFICE_MODELS_DIR,
     artifactsDir: resolve(e.OFFICE_DATA_DIR, 'artifacts'),

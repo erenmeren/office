@@ -96,6 +96,8 @@ async function start(): Promise<void> {
   const workerHome = join(DATA, 'worker');
   for (const d of [DATA, LOGS, workspaces, join(dataDir, 'repos'), workerHome]) mkdirSync(d, { recursive: true, mode: 0o700 });
   const extra = userEnv();
+  // the folder new projects are made in must exist before the worker lists it as a root
+  if (extra.OFFICE_PROJECTS_DIR) mkdirSync(extra.OFFICE_PROJECTS_DIR, { recursive: true });
 
   const DATABASE_URL = await startPostgres();
   const boot = await execFileP(process.execPath, [join(SERVER, 'boot.mjs')], {
@@ -140,7 +142,7 @@ async function start(): Promise<void> {
     OFFICE_WORKER_CAPACITY: '2',
     OFFICE_WORKER_NAME: 'desktop',
     ...extra,
-    OFFICE_WORKSPACE_ROOTS: [workspaces, join(dataDir, 'repos'), extra.OFFICE_WORKSPACE_ROOTS].filter(Boolean).join(':'),
+    OFFICE_WORKSPACE_ROOTS: [workspaces, join(dataDir, 'repos'), extra.OFFICE_PROJECTS_DIR, extra.OFFICE_WORKSPACE_ROOTS].filter(Boolean).join(':'),
     ...(enrollToken ? { OFFICE_ENROLL_TOKEN: enrollToken } : {}),
   });
   await waitFor(WEB_ORIGIN);

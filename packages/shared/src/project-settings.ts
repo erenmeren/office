@@ -43,5 +43,7 @@ export const ProjectSettingsSchema = z.object({
   networkAccess: z.enum(['open', 'allowlist']).default('open'),
   networkAllowedDomains: z.array(NetworkDomainSchema).default([]),
   routing: z.array(RoutingRuleSchema).max(20).default([]),
+  // a finished mission the Conductor opened is merged into the checked-out default branch of the project's folder (set on projects the Conductor creates)
+  integrateWhenDone: z.boolean().default(false),
 });
 export type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;

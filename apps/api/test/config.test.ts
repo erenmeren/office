@@ -6,3 +6,9 @@ it('listens on 127.0.0.1 unless API_HOST is set', () => {
   expect(loadConfig(env).host).toBe('127.0.0.1');
   expect(loadConfig({ ...env, API_HOST: '0.0.0.0' }).host).toBe('0.0.0.0');
 });
+
+it('new project folders go under <data>/repos unless OFFICE_PROJECTS_DIR names another place', () => {
+  const env = { DATABASE_URL: 'pg://x', COOKIE_SECRET: 'x'.repeat(32), WEB_ORIGIN: 'http://w', OFFICE_DATA_DIR: '/d' };
+  expect(loadConfig(env).projectsDir).toBe('/d/repos');
+  expect(loadConfig({ ...env, OFFICE_PROJECTS_DIR: '/home/me/projects' }).projectsDir).toBe('/home/me/projects');
+});

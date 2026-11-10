@@ -16,7 +16,7 @@ import { deleteProject, getSettings, projectAgents, setProjectAgents, updateSett
 const CreateProject = z.object({
   name: z.string().min(1),
   slug: z.string().min(1),
-  // without repoPath a new repository is created under <OFFICE_DATA_DIR>/repos/<slug> (greenfield project)
+  // without repoPath a new repository is created under <projectsDir>/<slug> (greenfield project)
   repoPath: z.string().min(1).optional(),
   defaultBranch: z.string().min(1).optional(),
 });
@@ -87,7 +87,7 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
     let repoPath = data.repoPath;
     if (!repoPath) {
       // absolute: the worker's allowedRoots check and git itself must not depend on the API's cwd
-      repoPath = resolve(opts.config.dataDir, 'repos', data.slug);
+      repoPath = resolve(opts.config.projectsDir, data.slug);
       await initRepository(repoPath, data.defaultBranch ?? 'main', data.name).catch((err: NodeJS.ErrnoException) => {
         if (err.code === 'EEXIST') throw new HttpError(409, 'repo_exists');
         throw err;

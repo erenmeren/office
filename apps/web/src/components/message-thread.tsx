@@ -18,7 +18,8 @@ function Bubble({ m, agents, conv }: { m: MessageView; agents: Agent[]; conv: Co
   const owner = !sender;
   const recipients = m.deliveries.map((d) => (d.recipientUserId ? 'You' : (agents.find((a) => a.id === d.recipientAgentId)?.name ?? 'Agent')));
   const to = recipients.length ? recipients.join(', ') : conv.kind === 'group' || conv.kind === 'task' ? 'everyone' : '';
-  const from = sender?.name ?? 'You';
+  // a note the platform left (a finished mission, for the Conductor) has no sender at all
+  const from = sender?.name ?? (m.senderUserId ? 'You' : 'Office');
   return (
     <MessageBubble
       from={owner ? 'owner' : 'agent'}
