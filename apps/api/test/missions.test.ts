@@ -299,6 +299,8 @@ describe('missions', () => {
     const fix = SAMPLE_PLAN.tasks.find((x) => x.key === 'typo-fix')!;
     const { w, m, spec } = await s.planned({ summary: 'Fix the typo.', risks: [], checkCommand: 'npm test', tasks: [fix] });
     expect(spec.prompt).toContain('no check command');
+    // what the project is and how it is run is kept in its own CLAUDE.md, by one task
+    expect(spec.prompt).toContain('give the last code task the requirement to update CLAUDE.md');
     expect(m.status).toBe('approved');
     expect((await s.req('GET', `/projects/${s.projectId}/settings`)).json().checkCommand).toBe('npm test');
     expect(await s.t.prisma.auditLog.findFirst({ where: { action: 'project.check_set_by_plan', targetId: s.projectId } })).toMatchObject({ detail: { missionId: m.id, checkCommand: 'npm test' } });
