@@ -376,6 +376,10 @@ test('login page is quiet when logged out', async ({ page, noise }) => {
 
 authed('the office page switches between floor, list and timeline', async ({ page, noise }) => {
   await page.goto('/office');
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toHaveText('125%');
+  await page.getByRole('button', { name: 'Reset zoom' }).click();
+  await expect(page.getByRole('button', { name: 'Reset zoom' })).toHaveText('100%');
   await page.getByRole('radio', { name: 'List' }).click();
   await expect(page.getByRole('table', { name: 'Team' })).toBeVisible();
   await page.getByRole('radio', { name: 'Timeline' }).click();

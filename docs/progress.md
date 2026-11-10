@@ -991,6 +991,27 @@ Owner request: draw the office's characters as the Matrix cast, with subagents a
 - Verified with a unit test (every sprite 12×12 and inside the palette) and a static render of the real `OfficeFloor` with mock rooms, screenshotted in Chromium. Not checked against the running app.
 - Seen, not changed: with seven rooms (three rows) the floor is wider than the 1300px stage and the outer rooms are cut off.
 
+## Pixel Office size, detail and zoom (2026-11-10)
+
+Owner request: the characters did not look like their roles; make them and the office bigger and more detailed, the office card bigger, and the floor zoomable.
+
+- The cast is redrawn 24×36 at 2px a cell (48×72 on the stage, was 12×12 at 3px): Morpheus bald with mirrored pince-nez, leather coat and green tie; the Architect with white hair and beard in a grey three-piece; the woman in red; Trinity in glossy black; the Oracle with a bun, a smile and a tray of cookies; Seraph in round glasses and a white jacket; Neo in the long buttoned coat; the operator with a headset and a knit vest. Agent Smith (earpiece, white shirt, tie clip) stands at 1.5px a cell. `CAST_W`/`CAST_H` hold the grid; `HEAD.z` and the subagent row (`SUBPOS`) moved with the taller sprites.
+- `sprite()` gives every cell a .3px spread: at a scaled floor the bare cells showed seams, and the green rim leaked through them.
+- An idle tenant is dimmed less (`saturate(.6) brightness(.8)`, was `.35`/`.75`), so the woman in red stays red while idle.
+- `floorLayout` sizes the stage from the projected floor (`stageW`, `stageH`; the fixed 1300px `STAGE_W` is gone), which fixes the cut-off outer rooms of a three-row floor and drops the empty band above it.
+- `/office` takes the whole content width (`AppShell`: `max-w-[2200px]` for that path instead of `max-w-7xl`); the floor card is as tall as the window leaves under the page header (`max(480px, 100dvh - 16.5rem)`). At 1920×1080 the card went from 924px to 1282px wide.
+- Zoom: 100% shows the whole floor (fit to the card, at most 1.5 times natural size); the buttons step by 25% between 50% and 300% and the middle one resets; Ctrl or ⌘ with the wheel, or a trackpad pinch, zooms at the pointer; a plain wheel scrolls; dragging with the mouse pans, and a drag does not select the room it ends over. The zoom is kept in `localStorage` (`office.zoom`).
+- Verified on the real `/office` page of the dev server in Chromium, with every API call answered from fixtures: screenshots at 100% and 200%, the pointer staying over the same floor point through a Ctrl+wheel zoom, drag, click, the limits, and the stored zoom after a reload. Unit tests cover the stage size, the cast grid and palette, and `clampZoom`. The e2e spec got a zoom step; Playwright itself was not run (no `OFFICE_E2E_*` credentials), and the desktop app was not rebuilt.
+- Not built: zoom with the plain wheel (it would take the page scroll), keyboard shortcuts for zoom, bigger name plates.
+
+Added the same day on the owner's request ("everyone looks like they are standing", and the owner's room was the developer's room again):
+
+- Everyone sits: a tenant is drawn down to its hands (`SEAT_ROWS` 29 of the 36 rows, hips on the seat, legs under the desk) in front of a chair back that stands behind it (`chair()` in `office-floor.tsx`, the old flat chair is gone). Subagents get a small chair too. `HEAD.z` is 79.
+- A working tenant (live run) gets up now and then: a 60 s cycle of 47 s in the chair and a 13 s walk out beside the desk, across its front and back (`om-sit`, `om-walk`, `om-step` in `globals.css`). The walker is the full sprite on the floor, moved with the `translate` property so it stays a billboard and the 3D scene sorts it against the desk. Rooms start the cycle at different points (`walkDelay`); the typing dots leave with the walker. Idle and waiting tenants stay seated. Display only, like bubbles and envelopes.
+- The owner's room has its own theme, `construct` (it shared `couch` with the developer): green code falling down a wall screen (`om-rain`, twelve columns at their own speeds), a red armchair, a side table with the red and the blue pill, and a red desk chair.
+- Verified on the dev server with fixtures: screenshots with the walk cycle frozen at several points (seated, beside the desk, in front of it) and a close-up of the owner's room. Seen on the way: the dev server kept serving a cached stylesheet without the new keyframes until `globals.css` changed while it ran.
+- Not built: leg movement while walking (the sprite bobs), walking for idle tenants, a walk that avoids subagent desks by more than the fixed path.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):

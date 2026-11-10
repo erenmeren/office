@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageView } from '@office/shared';
-import { CAST_PAL, CREATURES, SMITH, creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, ownerRoom, projector, roomOrigin, sprite, themeFor, waitingMail, timelineLanes } from './office';
+import { CAST_H, CAST_PAL, CAST_W, CREATURES, SMITH, ZOOM_MAX, ZOOM_MIN, clampZoom, creatureFor, floorLayout, mailFromMessage, officeRooms, oneLine, ownerRoom, projector, roomOrigin, sprite, themeFor, waitingMail, timelineLanes } from './office';
 import type { Agent, ClaudeSession, LiveSession, Overview, TerminalView } from './queries';
 
 describe('floorLayout', () => {
-  it('is the 1160×650 artboard floor, 1300 wide, for six rooms', () => {
+  it('is the 1160×650 artboard floor on a stage that holds its whole projection, for six rooms', () => {
     const l = floorLayout(6);
-    expect([l.w, l.h, l.stageH, l.left, l.top, l.rows]).toEqual([1160, 650, 910, 70, 165, 2]);
-    expect(l.P(0, 0, 0)).toEqual({ x: 650 - 255 * 0.70711, y: 490 - 905 * 0.35355 });
+    expect([l.w, l.h, l.stageW, l.stageH, l.left, l.top, l.rows]).toEqual([1160, 650, 1408, 940, 124, 185, 2]);
+    expect(l.P(0, 0, 0)).toEqual({ x: 704 - 255 * 0.70711, y: 510 - 905 * 0.35355 });
+  });
+  it('keeps every corner of a three-row floor on the stage', () => {
+    const l = floorLayout(9);
+    for (const [x, y] of [[0, 0], [l.w, 0], [0, l.h], [l.w, l.h]]) {
+      const p = l.P(x, y);
+      expect(p.x).toBeGreaterThanOrEqual(0);
+      expect(p.x).toBeLessThanOrEqual(l.stageW);
+      expect(p.y).toBeGreaterThanOrEqual(0);
+      expect(p.y).toBeLessThanOrEqual(l.stageH);
+    }
   });
   it('grows one row per three rooms and keeps a single row for one', () => {
     expect(floorLayout(7).rows).toBe(3);
@@ -22,7 +32,7 @@ it('projector lifts z along the screen', () => {
 });
 
 it('sprite skips dots and uses the palette, then the base colours', () => {
-  expect(sprite(['.a', 'k.'], { a: '#fff' }, 3)).toBe('3px 0px 0 0 #fff,0px 3px 0 0 #1b1033');
+  expect(sprite(['.a', 'k.'], { a: '#fff' }, 3)).toBe('3px 0px 0 .3px #fff,0px 3px 0 .3px #1b1033');
 });
 
 it('themes and creatures follow the role, with a fallback', () => {
@@ -31,13 +41,17 @@ it('themes and creatures follow the role, with a fallback', () => {
   expect(creatureFor('researcher')).toBe(creatureFor('researcher'));
 });
 
-it('the cast is 12×12, drawn only in its palette, and Smith is nobody’s room tenant', () => {
+it('the cast is 24×36, drawn only in its palette, and Smith is nobody’s room tenant', () => {
   for (const rows of [...Object.values(CREATURES), SMITH]) {
-    expect(rows.map((r) => r.length)).toEqual(Array(12).fill(12));
+    expect(rows.map((r) => r.length)).toEqual(Array(CAST_H).fill(CAST_W));
     expect([...rows.join('')].filter((ch) => ch !== '.' && !CAST_PAL[ch])).toEqual([]);
   }
   expect(creatureFor('security-engineer')).toBe(CREATURES.security);
   expect(Object.values(CREATURES)).not.toContain(SMITH);
+});
+
+it('zoom stays in its range and falls back to 1 for a missing or broken stored value', () => {
+  expect([0.1, 0.75, 9, 0, NaN].map(clampZoom)).toEqual([ZOOM_MIN, 0.75, ZOOM_MAX, 1, 1]);
 });
 
 it('officeRooms joins the team with live sessions', () => {
@@ -79,7 +93,7 @@ it("ownerRoom counts the project's running manual and background sessions", () =
   const room = ownerRoom([t('a', 'p', 'running'), t('bb', 'p', 'exited'), t('c', 'q', 'running')], [bg('x', 'p', 'running'), bg('y', 'p', 'done')], 'p');
   expect(room).toMatchObject({ status: 'running', task: 'Your Claude sessions: 1 manual, 1 background', workerName: 'Office terminal' });
   expect(room.subs.map((s) => s.name)).toEqual(['a-sessio', 'job x']);
-  expect(['owner'].map(themeFor)).toEqual(['couch']);
+  expect(['owner'].map(themeFor)).toEqual(['construct']);
 });
 
 describe('timelineLanes', () => {

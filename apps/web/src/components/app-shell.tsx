@@ -124,7 +124,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       <AppSidebar className="hidden lg:flex" />
       <div className="flex min-w-0 flex-1 flex-col p-4 pb-12">
         <AppHeader />
-        <main className="mx-auto w-full max-w-7xl flex-1 pt-6">{children}</main>
+        {/* the office floor is a canvas and takes the whole width */}
+        <main className={cn('mx-auto w-full flex-1 pt-6', pathname === '/office' ? 'max-w-[2200px]' : 'max-w-7xl')}>{children}</main>
       </div>
     </div>
   );

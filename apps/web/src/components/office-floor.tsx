@@ -1,11 +1,15 @@
 'use client';
 
-import { Fragment, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { Minus, Plus } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { agentGradient } from '@/lib/agent-identity';
 import {
   BEANBAG,
   BEANBAG_PAL,
+  CAST_H,
   CAST_PAL,
+  CAST_W,
   CAT,
   CAT_PAL,
   HEAD,
@@ -16,9 +20,12 @@ import {
   PLANT_PAL,
   ROOM_H,
   ROOM_W,
+  SEAT_ROWS,
   SMITH,
-  STAGE_W,
   SUBPOS,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  clampZoom,
   creatureFor,
   floorLayout,
   roomOrigin,
@@ -50,7 +57,17 @@ const LAMP_S = sprite(LAMP, LAMP_PAL, 3);
 const MONSTERA_S = sprite(MONSTERA, PLANT_PAL, 3);
 const CAT_S = sprite(CAT, CAT_PAL, 3);
 const BEANBAG_S = sprite(BEANBAG, BEANBAG_PAL, 3);
-const SMITH_S = sprite(SMITH, CAST_PAL, 2);
+// cell size of the cast: the room's tenant, and the smaller Smith copies in front of it
+const MAIN_PX = 2;
+const SUB_PX = 1.5;
+const SMITH_S = sprite(SMITH.slice(0, SEAT_ROWS), CAST_PAL, SUB_PX);
+// a working tenant's cycle: seated, then the walk of `om-walk`; rooms start it at different points
+const WALK_S = 60;
+const walkDelay = (i: number) => `-${(i * 23) % WALK_S}s`;
+/** The back of a chair, standing behind whoever sits in it. */
+const chair = (x: number, y: number, w: number, h: number, background = '#34306a'): CSSProperties => stand(x - w / 2, y - h, w, 0, { height: h, borderRadius: `${w / 4}px ${w / 4}px 3px 3px`, background, border: '1px solid rgba(255,255,255,.22)' });
+// green code falling down the owner's wall screen: one column per entry, each at its own speed
+const RAIN = [0.9, 1.6, 1.1, 1.9, 1.3, 0.8, 1.7, 1.2, 1.5, 1.0, 1.8, 1.4];
 // the cast wears black on a dark floor; the green rim keeps it readable
 const RIM = 'drop-shadow(0 0 2px rgba(57,255,20,.75))';
 const FLOWER = { pink: sprite(PLANT, { ...PLANT_PAL, G: '#ff8fb1' }, 3), yellow: sprite(PLANT, { ...PLANT_PAL, G: '#ffe14d' }, 3), violet: sprite(PLANT, { ...PLANT_PAL, G: '#b39dff' }, 3) };
@@ -101,6 +118,28 @@ function Corner({ theme }: { theme: ReturnType<typeof themeFor> }) {
           <div style={abs(10, 92, 22, 150, { borderRadius: 6, transform: 'translateZ(.6px)', background: 'rgba(63,174,106,.18)', border: '1px dashed rgba(143,227,173,.35)' })} />
         </>
       );
+    case 'construct':
+      // the red armchair and the table with the two pills
+      return (
+        <>
+          <div style={abs(14, 104, 36, 42, { transform: 'translateZ(14px)', background: '#b3202a', border: '1px solid rgba(0,0,0,.3)' })} />
+          <div style={abs(14, 146, 36, 14, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#7d141c' })} />
+          <div style={abs(50, 104, 14, 42, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#96181f' })} />
+          <div style={abs(14, 104, 36, 10, { transform: 'translateZ(40px)', background: '#b3202a', border: '1px solid rgba(0,0,0,.3)' })} />
+          <div style={abs(14, 114, 36, 26, { transformOrigin: 'top', transform: 'translateZ(14px) rotateX(90deg)', background: '#8a161e' })} />
+          <div style={abs(50, 104, 26, 10, { transformOrigin: 'left', transform: 'translateZ(14px) rotateY(-90deg)', background: '#96181f' })} />
+          <div style={abs(14, 114, 6, 32, { transform: 'translateZ(24px)', background: '#c42833' })} />
+          <div style={abs(44, 114, 6, 32, { transform: 'translateZ(24px)', background: '#c42833' })} />
+          <div style={abs(14, 146, 6, 10, { transformOrigin: 'top', transform: 'translateZ(14px) rotateX(90deg)', background: '#7d141c' })} />
+          <div style={abs(44, 146, 6, 10, { transformOrigin: 'top', transform: 'translateZ(14px) rotateX(90deg)', background: '#7d141c' })} />
+          <div style={abs(50, 114, 10, 32, { transformOrigin: 'left', transform: 'translateZ(14px) rotateY(-90deg)', background: '#96181f' })} />
+          <div style={abs(58, 126, 22, 14, { borderRadius: '50%', transform: 'translateZ(.6px)', background: 'rgba(0,0,0,.3)' })} />
+          <div style={abs(68, 131, 2, 18, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#8d8ab3' })} />
+          <div style={abs(60, 122, 18, 18, { borderRadius: '50%', transform: 'translateZ(18px)', background: '#e9e7f7', border: '1px solid rgba(0,0,0,.25)' })} />
+          <div style={abs(63, 127, 6, 4, { borderRadius: 2, transform: 'translateZ(19px)', background: '#e11d2e' })} />
+          <div style={abs(70, 132, 6, 4, { borderRadius: 2, transform: 'translateZ(19px)', background: '#2f7bff' })} />
+        </>
+      );
     case 'couch':
       return (
         <>
@@ -142,14 +181,16 @@ function Corner({ theme }: { theme: ReturnType<typeof themeFor> }) {
   }
 }
 
-function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: number; ry: number; selected: boolean; onSelect: () => void }) {
+function Room({ room, i, rx, ry, selected, onSelect }: { room: OfficeRoom; i: number; rx: number; ry: number; selected: boolean; onSelect: () => void }) {
   const [c1, c2] = agentGradient(room.slug);
   const toneKey = statusTone(room.status);
   const tone = TONE[toneKey];
   const live = toneKey === 'live';
   const glow = hexA(tone, live ? 0.55 : toneKey === 'decision' ? 0.5 : 0.18);
   const theme = themeFor(room.slug);
-  const creature = sprite(creatureFor(room.slug), CAST_PAL, 3);
+  const rows = creatureFor(room.slug);
+  const W = CAST_W * MAIN_PX;
+  const walk = live ? { animationDelay: walkDelay(i) } : {};
   return (
     <div aria-hidden onClick={onSelect} style={abs(rx, ry, ROOM_W, ROOM_H, { transformStyle: 'preserve-3d', cursor: 'pointer' })}>
       <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(135deg,${hexA(c1, 0.24)},transparent 60%),repeating-linear-gradient(90deg,rgba(255,255,255,.045) 0 1px,transparent 1px 26px),repeating-linear-gradient(0deg,rgba(0,0,0,.12) 0 1px,transparent 1px 130px),#241d4a`, border: '1px solid rgba(255,255,255,.16)', boxShadow: `inset 0 0 0 2px ${selected ? tone : 'transparent'}` }} />
@@ -157,6 +198,14 @@ function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: numb
       {/* back wall with the night window and, in the QA room, the cork board */}
       <div style={abs(0, 0, ROOM_W, 60, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: 'linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.2))', borderBottom: `2px solid ${c1}`, borderLeft: '1px solid rgba(255,255,255,.25)' })}>
         <div style={abs(206, 16, 60, 30, { background: 'radial-gradient(circle at 68% 36%,#ffe9b0 0 3px,transparent 4px),radial-gradient(circle at 30% 60%,rgba(255,255,255,.5) 0 .8px,transparent 1.5px),linear-gradient(180deg,#1b2a6b,#0d1440)', border: '2px solid rgba(255,255,255,.4)', boxShadow: '0 0 14px rgba(120,150,255,.35)' })} />
+        {theme === 'construct' && (
+          <div style={abs(36, 10, 136, 42, { overflow: 'hidden', background: '#020a04', border: '2px solid #1f5a3a', boxShadow: '0 0 16px rgba(57,255,20,.35)' })}>
+            {RAIN.map((seconds, n) => (
+              // the wall's y runs up from the floor, so the bright head of a streak is its first stop
+              <i key={n} style={abs(4 + n * 11, 0, 4, 42, { background: 'repeating-linear-gradient(180deg,#d9ffe3 0 2px,#39ff14 2px 7px,rgba(57,255,20,.25) 7px 12px,transparent 12px 21px)', animation: `om-rain ${seconds}s linear infinite`, animationDelay: `-${n * 0.37}s` })} />
+            ))}
+          </div>
+        )}
         {theme === 'board' && (
           <div style={abs(40, 12, 124, 40, { background: '#a9794f', border: '3px solid #6b4a2e' })}>
             <i style={abs(8, 6, 13, 13, { background: '#ffe14d', transform: 'rotate(-4deg)' })} />
@@ -174,10 +223,18 @@ function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: numb
       </div>
       <div style={stand(272, -6, 24, 0)}><Pixels shadow={PLANT_S} /></div>
       <Corner theme={theme} />
-      {/* chair, worker, desk, lamp, laptop, mug */}
-      <div style={abs(138, 24, 24, 30, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#262152', border: '1px solid rgba(255,255,255,.15)' })} />
-      <div style={abs(138, 24, 24, 22, { transform: 'translateZ(12px)', background: '#2f2a5e' })} />
-      <div style={stand(132, 6, 36, 12, { filter: toneKey === 'idle' ? 'saturate(.35) brightness(.75) drop-shadow(0 0 1px rgba(57,255,20,.4))' : RIM })}><Pixels shadow={creature} /></div>
+      {/* chair, worker (seated; a working one gets up for a walk now and then), desk, lamp, laptop, mug */}
+      <div style={chair(HEAD.x, HEAD.y - 4, 48, 46, theme === 'construct' ? '#96181f' : undefined)} />
+      <div style={stand(HEAD.x - W / 2, HEAD.y - SEAT_ROWS * MAIN_PX, W, 12, { height: SEAT_ROWS * MAIN_PX, filter: toneKey === 'idle' ? 'saturate(.6) brightness(.8) drop-shadow(0 0 1px rgba(57,255,20,.4))' : RIM, animation: live ? `om-sit ${WALK_S}s linear infinite` : 'none', ...walk })}>
+        <Pixels shadow={sprite(rows.slice(0, SEAT_ROWS), CAST_PAL, MAIN_PX)} px={MAIN_PX} />
+      </div>
+      {live && (
+        <div style={stand(HEAD.x - W / 2, HEAD.y - CAST_H * MAIN_PX, W, 0, { height: CAST_H * MAIN_PX, filter: RIM, visibility: 'hidden', animation: `om-walk ${WALK_S}s linear infinite`, ...walk })}>
+          <div style={{ animation: 'om-step .45s linear infinite' }}>
+            <Pixels shadow={sprite(rows, CAST_PAL, MAIN_PX)} px={MAIN_PX} />
+          </div>
+        </div>
+      )}
       <div style={abs(98, 50, 104, 46, { transform: 'translateZ(22px)', background: '#3f3870', border: '1px solid rgba(255,255,255,.18)' })} />
       <div style={abs(98, 96, 104, 22, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#262050' })} />
       <div style={abs(202, 50, 22, 46, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#302a5e' })} />
@@ -193,7 +250,8 @@ function Room({ room, rx, ry, selected, onSelect }: { room: OfficeRoom; rx: numb
         return (
           // a fragment, not a div: a div in between flattens the 3D scene and lays the sprite on the floor
           <Fragment key={i}>
-            <div style={stand(x - 12, y - 22, 24, 2, { filter: RIM, animation: s.done ? 'om-fade 1.6s ease-in-out infinite' : 'none' })}><Pixels shadow={SMITH_S} px={2} /></div>
+            <div style={chair(x, y - 1, 34, 34)} />
+            <div style={stand(x - (CAST_W * SUB_PX) / 2, y + 2 - SEAT_ROWS * SUB_PX, CAST_W * SUB_PX, 8, { height: SEAT_ROWS * SUB_PX, filter: RIM, animation: s.done ? 'om-fade 1.6s ease-in-out infinite' : 'none' })}><Pixels shadow={SMITH_S} px={SUB_PX} /></div>
             <div style={abs(x - 15, y + 6, 30, 22, { transform: 'translateZ(14px)', background: '#3f3870', border: '1px solid rgba(255,255,255,.18)' })} />
             <div style={abs(x - 15, y + 28, 30, 14, { transformOrigin: 'top', transform: 'rotateX(90deg)', background: '#262050' })} />
             <div style={abs(x + 15, y + 6, 14, 22, { transformOrigin: 'left', transform: 'rotateY(-90deg)', background: '#302a5e' })} />
@@ -230,7 +288,7 @@ function Overlay({ room, i, P, now, selected, onSelect, bubble }: { room: Office
       )}
       {room.subs.map((s, j) => {
         const [x, y] = SUBPOS[Math.min(j, SUBPOS.length - 1)];
-        const tag = P(rx + x, ry + y + 2, 30);
+        const tag = P(rx + x, ry + y + 2, 62);
         return (
           <div key={j} style={{ position: 'absolute', left: tag.x, top: tag.y - 16, transform: 'translateX(-50%)', padding: '1px 6px', borderRadius: 5, background: 'rgba(7,5,20,.72)', color: '#d6d4ee', whiteSpace: 'nowrap', opacity: s.done ? 0.45 : 1, ...MONO, fontSize: 9 }}>
             {s.done ? `${s.name} ✓` : s.name}
@@ -238,7 +296,7 @@ function Overlay({ room, i, P, now, selected, onSelect, bubble }: { room: Office
         );
       })}
       {toneKey === 'live' && (
-        <div style={{ position: 'absolute', left: head.x - 14, top: head.y - 22, display: 'flex', gap: 3, padding: '4px 6px', borderRadius: 999, background: 'rgba(7,5,20,.7)' }}>
+        <div style={{ position: 'absolute', left: head.x - 14, top: head.y - 22, display: 'flex', gap: 3, padding: '4px 6px', borderRadius: 999, background: 'rgba(7,5,20,.7)', animation: `om-sit ${WALK_S}s linear infinite`, animationDelay: walkDelay(i) }}>
           {[0, 0.18, 0.36].map((d) => (
             <i key={d} style={{ width: 5, height: 5, borderRadius: '50%', background: '#3df5c8', animation: `om-dot 1.1s infinite ${d}s` }} />
           ))}
@@ -293,49 +351,122 @@ function mailPath(P: ReturnType<typeof floorLayout>['P'], from: number, to: numb
   return `M ${a.x.toFixed(1)} ${(a.y - 12).toFixed(1)} Q ${((a.x + b.x) / 2).toFixed(1)} ${(Math.min(a.y, b.y) - 90).toFixed(1)} ${b.x.toFixed(1)} ${(b.y - 12).toFixed(1)}`;
 }
 
+const ZOOM_KEY = 'office.zoom';
+
 export function OfficeFloor({ rooms, selected, onSelect, now, mail = [], bubbles = {} }: { rooms: OfficeRoom[]; selected: string | null; onSelect: (agentId: string) => void; now: number; mail?: Mail[]; bubbles?: Record<string, string> }) {
   const layout = floorLayout(rooms.length);
   const index = (agentId: string) => rooms.findIndex((r) => r.agentId === agentId);
   const flights = mail.filter((m) => index(m.from) >= 0 && index(m.to) >= 0);
   const ref = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
+  // the scale that shows the whole floor in the viewport (0 until measured), times the owner's zoom
+  const [fit, setFit] = useState(0);
+  const [zoom, setZoom] = useState(() => clampZoom(Number(localStorage.getItem(ZOOM_KEY))));
+  const scale = (fit || 1) * zoom;
+  // the floor point (a fraction of the scroll area) to keep under a viewport point through the next scale change; the first one centres the floor
+  const hold = useRef<{ fx: number; fy: number; ax?: number; ay?: number } | null>({ fx: 0.5, fy: 0.5 });
+  const drag = useRef<{ x: number; y: number; left: number; top: number; moved: boolean } | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const ro = new ResizeObserver(([e]) => setScale(Math.min(1, e.contentRect.width / STAGE_W)));
+    const ro = new ResizeObserver(([e]) => setFit(Math.min(e.contentRect.width / layout.stageW, e.contentRect.height / layout.stageH, 1.5)));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [layout.stageW, layout.stageH]);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const h = hold.current;
+    if (!el || !h || !fit) return;
+    el.scrollTo(h.fx * el.scrollWidth - (h.ax ?? el.clientWidth / 2), h.fy * el.scrollHeight - (h.ay ?? el.clientHeight / 2));
+    hold.current = null;
+  }, [scale, fit]);
+  const zoomTo = (next: number, ax?: number, ay?: number) => {
+    const el = ref.current;
+    const z = clampZoom(next);
+    if (!el || z === zoom) return;
+    hold.current = { fx: (el.scrollLeft + (ax ?? el.clientWidth / 2)) / el.scrollWidth, fy: (el.scrollTop + (ay ?? el.clientHeight / 2)) / el.scrollHeight, ax, ay };
+    setZoom(z);
+    localStorage.setItem(ZOOM_KEY, String(z));
+  };
+  // Ctrl or ⌘ with the wheel (a trackpad pinch too) zooms at the pointer, a plain wheel scrolls; React's onWheel is passive, so this listener is attached by hand
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      zoomTo(zoom * Math.exp(-e.deltaY * 0.002), e.clientX - r.left, e.clientY - r.top);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  });
   return (
-    <div ref={ref} className="relative w-full overflow-hidden" style={{ height: layout.stageH * scale }}>
-      <div style={{ position: 'absolute', left: '50%', top: 0, width: STAGE_W, height: layout.stageH, marginLeft: -STAGE_W / 2, transformOrigin: 'top center', transform: `scale(${scale})`, marginTop: 0 }}>
-        <div style={abs(layout.left, layout.top, layout.w, layout.h, { transformStyle: 'preserve-3d', transform: 'rotateX(60deg) rotateZ(45deg)' })}>
-          <div style={{ position: 'absolute', inset: -80, transform: 'translateZ(-2px)', background: 'repeating-linear-gradient(90deg,rgba(255,255,255,.03) 0 1px,transparent 1px 28px),linear-gradient(180deg,rgba(255,170,100,.05),transparent 40%),rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 8 }} />
-          {rooms.map((r, i) => (
-            <Room key={r.agentId} room={r} {...roomOrigin(i)} selected={r.agentId === selected} onSelect={() => onSelect(r.agentId)} />
-          ))}
-        </div>
-        <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-          {flights.length > 0 && (
-            <svg aria-label="Messages in flight" style={{ position: 'absolute', inset: 0, overflow: 'visible' }} width={STAGE_W} height={layout.stageH} viewBox={`0 0 ${STAGE_W} ${layout.stageH}`}>
-              {flights.map((m) => (
-                <g key={m.id}>
-                  <path id={`mail-${m.id}`} d={mailPath(layout.P, index(m.from), index(m.to))} fill="none" stroke="rgba(255,106,213,.7)" strokeWidth="1.5" strokeDasharray="3 5" />
-                  <g>
-                    <rect x="-7" y="-5" width="14" height="10" rx="1.5" fill="#fff" stroke="#ff6ad5" />
-                    <path d="M-7 -5 L0 1 L7 -5" fill="none" stroke="#ff6ad5" />
-                    <animateMotion dur="3.2s" repeatCount="indefinite">
-                      <mpath href={`#mail-${m.id}`} />
-                    </animateMotion>
-                  </g>
-                </g>
+    <div className="relative">
+      <div
+        ref={ref}
+        className="flex cursor-grab overflow-auto select-none [scrollbar-width:none] active:cursor-grabbing"
+        // as tall as the window leaves under the page header
+        style={{ height: 'max(480px, calc(100dvh - 16.5rem))' }}
+        onPointerDown={(e) => {
+          drag.current = e.button === 0 && e.pointerType === 'mouse' ? { x: e.clientX, y: e.clientY, left: e.currentTarget.scrollLeft, top: e.currentTarget.scrollTop, moved: false } : null;
+        }}
+        onPointerMove={(e) => {
+          const d = drag.current;
+          if (!d || !(e.buttons & 1)) return;
+          const dx = e.clientX - d.x;
+          const dy = e.clientY - d.y;
+          if (!d.moved && Math.hypot(dx, dy) < 4) return;
+          if (!d.moved) e.currentTarget.setPointerCapture(e.pointerId);
+          d.moved = true;
+          e.currentTarget.scrollTo(d.left - dx, d.top - dy);
+        }}
+        // a drag is not a click on the room it ended over
+        onClickCapture={(e) => {
+          if (drag.current?.moved) e.stopPropagation();
+        }}
+      >
+        <div style={{ position: 'relative', flex: 'none', margin: 'auto', overflow: 'hidden', width: layout.stageW * scale, height: layout.stageH * scale, visibility: fit ? 'visible' : 'hidden' }}>
+          <div style={{ position: 'absolute', left: 0, top: 0, width: layout.stageW, height: layout.stageH, transformOrigin: '0 0', transform: `scale(${scale})` }}>
+            <div style={abs(layout.left, layout.top, layout.w, layout.h, { transformStyle: 'preserve-3d', transform: 'rotateX(60deg) rotateZ(45deg)' })}>
+              <div style={{ position: 'absolute', inset: -40, transform: 'translateZ(-2px)', background: 'repeating-linear-gradient(90deg,rgba(255,255,255,.03) 0 1px,transparent 1px 28px),linear-gradient(180deg,rgba(255,170,100,.05),transparent 40%),rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.1)', borderRadius: 8 }} />
+              {rooms.map((r, i) => (
+                <Room key={r.agentId} room={r} i={i} {...roomOrigin(i)} selected={r.agentId === selected} onSelect={() => onSelect(r.agentId)} />
               ))}
-            </svg>
-          )}
-          {rooms.map((r, i) => (
-            <Overlay key={r.agentId} room={r} i={i} P={layout.P} now={now} selected={r.agentId === selected} onSelect={() => onSelect(r.agentId)} bubble={bubbles[r.agentId]} />
-          ))}
+            </div>
+            <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+              {flights.length > 0 && (
+                <svg aria-label="Messages in flight" style={{ position: 'absolute', inset: 0, overflow: 'visible' }} width={layout.stageW} height={layout.stageH} viewBox={`0 0 ${layout.stageW} ${layout.stageH}`}>
+                  {flights.map((m) => (
+                    <g key={m.id}>
+                      <path id={`mail-${m.id}`} d={mailPath(layout.P, index(m.from), index(m.to))} fill="none" stroke="rgba(255,106,213,.7)" strokeWidth="1.5" strokeDasharray="3 5" />
+                      <g>
+                        <rect x="-7" y="-5" width="14" height="10" rx="1.5" fill="#fff" stroke="#ff6ad5" />
+                        <path d="M-7 -5 L0 1 L7 -5" fill="none" stroke="#ff6ad5" />
+                        <animateMotion dur="3.2s" repeatCount="indefinite">
+                          <mpath href={`#mail-${m.id}`} />
+                        </animateMotion>
+                      </g>
+                    </g>
+                  ))}
+                </svg>
+              )}
+              {rooms.map((r, i) => (
+                <Overlay key={r.agentId} room={r} i={i} P={layout.P} now={now} selected={r.agentId === selected} onSelect={() => onSelect(r.agentId)} bubble={bubbles[r.agentId]} />
+              ))}
+            </div>
+          </div>
         </div>
+      </div>
+      <div className="absolute top-3 right-3 z-[2] flex items-center gap-1">
+        <Button variant="secondary" size="icon-sm" aria-label="Zoom out" disabled={zoom <= ZOOM_MIN} onClick={() => zoomTo(Math.ceil(zoom * 4 - 1) / 4)}>
+          <Minus />
+        </Button>
+        <Button variant="secondary" size="sm" aria-label="Reset zoom" className="w-14 font-mono" onClick={() => zoomTo(1)}>
+          {Math.round(zoom * 100)}%
+        </Button>
+        <Button variant="secondary" size="icon-sm" aria-label="Zoom in" disabled={zoom >= ZOOM_MAX} onClick={() => zoomTo(Math.floor(zoom * 4 + 1) / 4)}>
+          <Plus />
+        </Button>
       </div>
     </div>
   );

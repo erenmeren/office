@@ -7,13 +7,12 @@ export const ROOM_H = 260;
 export const STEP_X = 430;
 export const STEP_Y = 390;
 export const COLS = 3;
-export const STAGE_W = 1300;
-/** Where the main worker sits in its room, and where its head projects from (z = 54). */
-export const HEAD = { x: 150, y: 42, z: 54 };
+/** Where the main worker sits in its room, and where its head projects from (the seat at 12 plus the 58px seated sprite). */
+export const HEAD = { x: 150, y: 42, z: 79 };
 export const SUBPOS: [number, number][] = [
-  [76, 186],
-  [164, 186],
-  [252, 186],
+  [76, 204],
+  [164, 204],
+  [252, 204],
 ];
 
 export interface Point {
@@ -30,6 +29,7 @@ export function projector(w: number, h: number, cx: number, cy: number): Project
 export interface FloorLayout {
   w: number;
   h: number;
+  stageW: number;
   stageH: number;
   left: number;
   top: number;
@@ -37,28 +37,34 @@ export interface FloorLayout {
   P: Project3;
 }
 
-/** Floor size and placement for `n` rooms; the 2-row floor is the 1160×650 artboard at 1300×980. */
+/** Floor size and placement for `n` rooms; the stage is the projected floor plus the room its plates need around it. */
 export function floorLayout(n: number): FloorLayout {
   const rows = Math.max(1, Math.ceil(n / COLS));
   const w = ROOM_W + STEP_X * (COLS - 1);
   const h = ROOM_H + STEP_Y * (rows - 1);
-  // 165px above the floor for the top row's plates, 100px below its front corner for the bottom row's
-  const top = 165;
-  const cy = top + h / 2;
-  const stageH = Math.round(cy + ((w + h) / 2) * 0.35355 + 100);
-  return { w, h, stageH, rows, left: STAGE_W / 2 - w / 2, top, P: projector(w, h, STAGE_W / 2, cy) };
+  // half the projected floor; 64px beside it, 190px above its back corner for the top row's plates, 110px below its front corner for the bottom row's
+  const hw = ((w + h) / 2) * 0.70711;
+  const hh = ((w + h) / 2) * 0.35355;
+  const stageW = Math.round(2 * (hw + 64));
+  const cy = Math.round(190 + hh);
+  return { w, h, stageW, stageH: Math.round(cy + hh + 110), rows, left: stageW / 2 - w / 2, top: cy - h / 2, P: projector(w, h, stageW / 2, cy) };
 }
+
+/** Zoom of the floor, relative to the size that shows all of it. */
+export const ZOOM_MIN = 0.5;
+export const ZOOM_MAX = 3;
+export const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z || 1));
 
 export const roomOrigin = (i: number) => ({ rx: (i % COLS) * STEP_X, ry: Math.floor(i / COLS) * STEP_Y });
 
-/** Pixel-art rows as one `box-shadow` list; `.` is transparent, other letters look up the palette. */
+/** Pixel-art rows as one `box-shadow` list; `.` is transparent, other letters look up the palette. The .3px spread overlaps the cells, so a scaled floor shows no seams between them. */
 export function sprite(rows: string[], pal: Record<string, string>, px: number): string {
   const out: string[] = [];
   rows.forEach((r, y) => {
     for (let x = 0; x < r.length; x++) {
       const ch = r[x];
       if (ch === '.') continue;
-      out.push(`${x * px}px ${y * px}px 0 0 ${pal[ch] ?? BASE[ch] ?? '#1b1033'}`);
+      out.push(`${x * px}px ${y * px}px 0 .3px ${pal[ch] ?? BASE[ch] ?? '#1b1033'}`);
     }
   });
   return out.join(',');
@@ -66,35 +72,390 @@ export function sprite(rows: string[], pal: Record<string, string>, px: number):
 
 const BASE: Record<string, string> = { k: '#1b1033', w: '#ffffff', e: '#1b1033', p: '#ff8fb1' };
 
-/** Colours of the Matrix cast below: blacks, skins, hair, and the few bright pieces that tell them apart. */
+/** Colours of the Matrix cast below: blacks, skins, hair, lenses, and the few bright pieces that tell them apart. */
 export const CAST_PAL: Record<string, string> = {
   k: '#0d0f14',
+  j: '#262b36',
   K: '#4a5262',
   s: '#f1c7a1',
+  S: '#d49f7a',
+  m: '#b5524a',
   d: '#8d5a3b',
+  D: '#6b4029',
+  b: '#a8744f',
+  M: '#4a221b',
   e: '#1b1033',
   w: '#ffffff',
   y: '#aab1bd',
   h: '#6b7280',
   u: '#6b4423',
+  U: '#8f6238',
   o: '#f6d55c',
+  O: '#c99a2e',
   r: '#e11d2e',
+  R: '#9e1220',
   t: '#3fae6a',
+  T: '#1f5a3a',
+  G: '#0a1410',
+  g: '#8a94a6',
+  c: '#d9a05b',
 };
 
-/** The Matrix cast, 12×12 each: chief Morpheus, the Architect, designer the woman in red, developer Trinity, qa the Oracle, security Seraph, owner Neo, summarizer the operator. */
+/** The cast is drawn 24×36 at 2px a cell: head to row 13, torso to row 29, legs below (the desk hides most of those). */
+export const CAST_W = 24;
+export const CAST_H = 36;
+/** A seated tenant is drawn down to its hands; the rows below are legs, under the desk. */
+export const SEAT_ROWS = 29;
+/**
+ * The Matrix cast: chief Morpheus (bald, mirrored pince-nez, leather coat, green tie), the Architect (white hair and beard, grey three-piece),
+ * designer the woman in red, developer Trinity (slick hair, glossy black), qa the Oracle (bun, smile, a tray of cookies),
+ * security Seraph (round glasses, white jacket), owner Neo (long buttoned coat), summarizer the operator (headset, knit vest).
+ */
 export const CREATURES: Record<string, string[]> = {
-  chief: ['............', '....dddd....', '...dddddd...', '...dkKkKd...', '...dddddd...', '....dddd....', '..kkkwwkkk..', '.kkkkttkkkk.', '.kdkkttkkdk.', '..kkkKKkkk..', '.kkkkKKkkkk.', '.kkk.kk.kkk.'],
-  architect: ['....wwww....', '...wwwwww...', '...wssssw...', '...sesses...', '...wssssw...', '....wwww....', '..yyywwyyy..', '.yyyykkyyyy.', '.ysyykkyysy.', '..yyyyyyyy..', '...yy..yy...', '...kk..kk...'],
-  designer: ['....oooo....', '...oooooo...', '..oossssoo..', '..osessseo..', '..ossrrsso..', '..oo.ss.oo..', '..osrrrrso..', '...srrrrs...', '...srrrrs...', '....rrrr....', '...rrrrrr...', '....s..s....'],
-  developer: ['....kkkk....', '...kkkkkk...', '..kkssssk...', '..kskkkks...', '..kssssss...', '....ssss....', '...kkkkkk...', '..kkKkkKkk..', '..skkKKkks..', '...kkkkkk...', '...kK..Kk...', '...kk..kk...'],
-  qa: ['.....kk.....', '....kkkk....', '...kkkkkk...', '...kddddk...', '...dedded...', '....dddd....', '..tttttttt..', '.ttttwwtttt.', '.tdtwwwwtdo.', '..ttwwwwtt..', '..tttttttt..', '...kk..kk...'],
-  security: ['....kkkk....', '...kkkkkk...', '...kssssk...', '...skssks...', '...ssssss...', '....ssss....', '..wwwwwwww..', '.wwwwyywwww.', '.wswwyywwsw.', '..wwwwwwww..', '...ww..ww...', '...kk..kk...'],
-  owner: ['....kkkk....', '...kkkkkk...', '...kssssk...', '...skkkks...', '...ssssss...', '....ssss....', '..kkkkkkkk..', '.kkkkKkkkkk.', '.kskkKkkksk.', '..kkkKkkkk..', '.kkkkKkkkkk.', '.kkk.kk.kkk.'],
-  summarizer: ['....hhhh....', '...hkkkkh...', '..hkddddkh..', '..hdeddedh..', '..hdddddd...', '...hhddd....', '..dyyyyyyd..', '.ddyyyyyydd.', '.d.yyyyyy.d.', '...yyyyyy...', '...kk..kk...', '...kk..kk...'],
+  chief: [
+    '........................',
+    '.........dddddd.........',
+    '.......ddbbdddddd.......',
+    '......ddbbdddddddd......',
+    '......dddddddddddd......',
+    '......dddddddddddd......',
+    '......dddddddddddd......',
+    '......dDDDddddDDDd......',
+    '......dywyyKKywyyd......',
+    '......dhhhhddhhhhd......',
+    '.......ddddDDdddd.......',
+    '.......dddddddddd.......',
+    '........ddDMMDdd........',
+    '.........dddddd.........',
+    '..........dDDd..........',
+    '......kkkKwttwKkkk......',
+    '....kkkkKTwttwTKkkkk....',
+    '...kkkkkKTTttTTKkkkkk...',
+    '...kkkjkKTTttTTKkjkkk...',
+    '...kkkjkKTTttTTKkjkkk...',
+    '...kkkjkKTTttTTKkjkkk...',
+    '...kkkjkKTTTtTTKkjkkk...',
+    '...kkkjkKTTTTTTKkjkkk...',
+    '...kkkjkKTTTyTTKkjkkk...',
+    '...kkkjkKTTTTTTKkjkkk...',
+    '...kkkjkKTTTyTTKkjkkk...',
+    '...kkkjkKkkkkkkKkjkkk...',
+    '...dddjkKkkkkkkKkjddd...',
+    '....dd.kKkkkkkkKk.dd....',
+    '......kkKkkkkkkKkk......',
+    '......kkKkkkkkkKkk......',
+    '......kkKkk..kkKkk......',
+    '......kkKkk..kkKkk......',
+    '......kk.kk..kk.kk......',
+    '.........kk..kk.........',
+    '........kkk..kkk........',
+  ],
+  architect: [
+    '........................',
+    '.........wwwwww.........',
+    '.......wwwwwwwwww.......',
+    '......wwwywwwwwwww......',
+    '......wwywwwwwwwww......',
+    '......wwsssssssssw......',
+    '......wssssssssssw......',
+    '......swwwsssswwws......',
+    '......sseesssseess......',
+    '......sssssSSsssss......',
+    '......wsswwwwwwssw......',
+    '.......wwwwmmwwww.......',
+    '........wwwwwwww........',
+    '.........wywwyw.........',
+    '..........ywwy..........',
+    '......yyyhwKKwhyyy......',
+    '....yyyyhwwKKwwhyyyy....',
+    '...yyyyyyhwKKwhyyyyyy...',
+    '...yyyhyyhhKKhhyyhyyy...',
+    '...yyyhyyhhKKhhyyhyyy...',
+    '...yyyhyyhhhhhhyyhyyy...',
+    '...yyyhyyhhhwhhyyhyyy...',
+    '...yyyhyyhhhhhhyyhyyy...',
+    '...yyyhyyhhhwhhyyhyyy...',
+    '...yyyhyyyhhhhyyyhyyy...',
+    '...yyyhyyyyyyyyyyhyyy...',
+    '...yyyhyyyyyyyyyyhyyy...',
+    '...sss.yyyyyyyyyy.sss...',
+    '....ss.yyyyyyyyyy.ss....',
+    '.......yyyyyyyyyy.......',
+    '.......yyyy..yyyy.......',
+    '.......yyyy..yyyy.......',
+    '.......yyyy..yyyy.......',
+    '.......yyyy..yyyy.......',
+    '.......yyyy..yyyy.......',
+    '......kkkkk..kkkkk......',
+  ],
+  designer: [
+    '........................',
+    '.........oooooo.........',
+    '.......oooooooooo.......',
+    '......ooooOooooooo......',
+    '.....oooOoooooooooo.....',
+    '.....oooosssssssooo.....',
+    '.....oossssssssssoo.....',
+    '.....oOssssssssssoo.....',
+    '.....ooseesssseesoo.....',
+    '.....oossssSSssssoo.....',
+    '....oOossssssssssooo....',
+    '....ooossssrrssssoOo....',
+    '....oooossssssssoooo....',
+    '....oOooossssssooooo....',
+    '....oooooosSSsooooOo....',
+    '....oooossssssssoooo....',
+    '....ooosrssssssrsooo....',
+    '....ooosrrssssrrsooo....',
+    '....oOosrrrrrrrrsoOo....',
+    '.....oosrrrrrrrrsoo.....',
+    '.....ss.rRrrrrrr.ss.....',
+    '.....ss..rRrrrr..ss.....',
+    '.....ss..rrrrrr..ss.....',
+    '.....ss.rrrrrrrr.ss.....',
+    '.....ss.rrrrrrrr.ss.....',
+    '.....ss.rrrrrrrr.ss.....',
+    '........rrrrrrrr........',
+    '........rrrrrrrR........',
+    '........rrrrrrRR........',
+    '.........rrrrrr.........',
+    '.........ss..ss.........',
+    '.........ss..ss.........',
+    '.........ss..ss.........',
+    '.........ss..ss.........',
+    '.........rr..rr.........',
+    '........rrr..rrr........',
+  ],
+  developer: [
+    '........................',
+    '........kkkkkkkk........',
+    '......kkkKKkkkkkkk......',
+    '.....kkKKkkkkkkkkkk.....',
+    '.....kkkkkkkkkkkkkk.....',
+    '.....kkkkkssssssskk.....',
+    '.....kkkssssssssskk.....',
+    '.....kksssssssssskk.....',
+    '.....kksGgGKKGgGskk.....',
+    '.....kksGGGssGGGskk.....',
+    '.....kkssssSSsssskk.....',
+    '......kssssssssssk......',
+    '........sssmmsss........',
+    '.........ssssss.........',
+    '..........sSSs..........',
+    '.......kkkkkkkkkk.......',
+    '.....kyKkkkkkkkkkkk.....',
+    '....kKkkkkkkkkkkkkkk....',
+    '....kKk.kKkkkkkk.kkk....',
+    '....kKk.kKkkkkkk.kkk....',
+    '....kkk.kKkkkkkk.kkk....',
+    '....kkk..kkkkkk..kkk....',
+    '....kkk..kkkkkk..kkk....',
+    '....kkk.kKkkkkkk.kkk....',
+    '....kkk.KKKyyKKK.kkk....',
+    '....kkk.kkkkkkkk.kkk....',
+    '....sss.kkkkkkkk.sss....',
+    '........kkkkkkkk........',
+    '........kkkkkkkk........',
+    '........kKk..kkk........',
+    '........kKk..kkk........',
+    '........kkk..kkk........',
+    '........kkk..kkk........',
+    '........kkk..kkk........',
+    '........kkk..kkk........',
+    '.......kkkk..kkkk.......',
+  ],
+  qa: [
+    '..........kkkk..........',
+    '.........kkhkkk.........',
+    '.......kkkkkkkkkk.......',
+    '......kkhkkkkkkhkk......',
+    '......kkkkkkkkkkkk......',
+    '......kkddddddddkk......',
+    '......kddddddddddk......',
+    '......kddddddddddk......',
+    '......ddweddddewdd......',
+    '......dddddDDddddd......',
+    '.....oddddddddddddo.....',
+    '.......dMddddddMd.......',
+    '........dMMMMMMd........',
+    '.........dddddd.........',
+    '..........dDDd..........',
+    '......tttttddttttt......',
+    '....tttttttttttttttt....',
+    '...ttTtttttTtttttTttt...',
+    '...tttttTtttttTtttttt...',
+    '...ttTtttttTtttttTttt...',
+    '...tttttTtttttTtttttt...',
+    '...ttTtttttTtttttTttt...',
+    '...tttcUctcUctcUctttt...',
+    '...tttccctccctccctttt...',
+    '...dddyyyyyyyyyyyyddd...',
+    '....ddhhhhhhhhhhhhdd....',
+    '......tttttttttttt......',
+    '......ttTtttttTttt......',
+    '......tttttTtttttt......',
+    '......tttttttttttt......',
+    '.......tttttttttt.......',
+    '.........dd..dd.........',
+    '.........dd..dd.........',
+    '.........dd..dd.........',
+    '.........kk..kk.........',
+    '........kkk..kkk........',
+  ],
+  security: [
+    '........................',
+    '.........kkkkkk.........',
+    '.......kkkkkkkkkk.......',
+    '......kkkkkkkkkkkk......',
+    '......kkkKkkkkkkkk......',
+    '......kksssssssskk......',
+    '......kssssssssssk......',
+    '......ssssssssssss......',
+    '......sGgGKKKKGgGs......',
+    '......sGGGssssGGGs......',
+    '.......ssssSSssss.......',
+    '.......ssssssssss.......',
+    '........sssmmsss........',
+    '.........ssssss.........',
+    '..........sSSs..........',
+    '......wwwwwyywwwww......',
+    '....wwwwwwwwwwwwwwww....',
+    '...wwwwwwwyyyywwwwwww...',
+    '...wwwywwwwwwwwwwywww...',
+    '...wwwywwwyyyywwwywww...',
+    '...wwwywwwwwwwwwwywww...',
+    '...wwwywwwyyyywwwywww...',
+    '...wwwywwwwwwwwwwywww...',
+    '...wwwywwwyyyywwwywww...',
+    '...wwwywwwwwwwwwwywww...',
+    '...wwwywwwwwwwwwwywww...',
+    '...wwwyyyyyyyyyyyywww...',
+    '...sss.wwwwwwwwww.sss...',
+    '....ss.wwwwwwwwww.ss....',
+    '.......wwwwwwwwww.......',
+    '.......wwww..wwww.......',
+    '.......wwww..wwww.......',
+    '.......wwww..wwww.......',
+    '.......wwww..wwww.......',
+    '.......yyyy..yyyy.......',
+    '......kkkkk..kkkkk......',
+  ],
+  owner: [
+    '........................',
+    '.........kkkkkk.........',
+    '.......kkkkkkkkkk.......',
+    '......kkkKKkkkkkkk......',
+    '......kkKkkkkkkkkk......',
+    '......kkkssssssskk......',
+    '......kssssssssssk......',
+    '......ssssssssssss......',
+    '......sGgGGKKGgGGs......',
+    '......sGGGGssGGGGs......',
+    '.......ssssSSssss.......',
+    '.......ssssssssss.......',
+    '........sssmmsss........',
+    '.........ssssss.........',
+    '.........kKkkKk.........',
+    '......kkkkkkkkkkkk......',
+    '....kkkkkkkkkkkkkkkk....',
+    '...kkkkkkkkkKkkkkkkkk...',
+    '...kkkjkkkkkkkkkkjkkk...',
+    '...kkkjkkkkkKkkkkjkkk...',
+    '...kkkjkkkkkkkkkkjkkk...',
+    '...kkkjkkkkkKkkkkjkkk...',
+    '...kkkjkkkkkkkkkkjkkk...',
+    '...kkkjkkkkkKkkkkjkkk...',
+    '...kkkjkkkkkkkkkkjkkk...',
+    '...kkkjkkkkkKkkkkjkkk...',
+    '...kkkjkkkkkkkkkkjkkk...',
+    '...sssjkkkkkKkkkkjsss...',
+    '....ss.kkkkkkkkkk.ss....',
+    '......kkkkkkkkkkkk......',
+    '......kkkkkkKkkkkk......',
+    '.....kkkkkkkkkkkkkk.....',
+    '.....kkkkkk..kkkkkk.....',
+    '.....kkkkk....kkkkk.....',
+    '......kkkk....kkkk......',
+    '.....kkkkk....kkkkk.....',
+  ],
+  summarizer: [
+    '........................',
+    '.........hhhhhh.........',
+    '.......hhkkkkkkhh.......',
+    '......hhkkkkkkkkhh......',
+    '......hkkkkkkkkkkh......',
+    '.....hhkddddddddkhh.....',
+    '.....hhddddddddddhh.....',
+    '.....hKddddddddddKh.....',
+    '.....hhdweddddewdhh.....',
+    '.....hhddddDDddddhh.....',
+    '.....h.dddddddddd.......',
+    '.....h.dddddddddd.......',
+    '......hhKddMMddd........',
+    '.........dddddd.........',
+    '..........dDDd..........',
+    '......dyyyyddyyyyd......',
+    '....dddyyyyyyyyyyddd....',
+    '...ddddyhyhyhyhyhdddd...',
+    '...dDd.yyyyyyyyyy.dDd...',
+    '...ddd.hyhyhyhyhy.ddd...',
+    '...ddd.yyyyyyyyyy.ddd...',
+    '...ddd.yhyhyhyhyh.ddd...',
+    '...ddd.yyyyyyyyyy.ddd...',
+    '...ddd.hyhyhyhyhy.ddd...',
+    '...ddd.yyyyyyyyyy.ddd...',
+    '...ddd.yyhyyDyhyy.ddd...',
+    '...ddd.yKyyyKyyKy.ddd...',
+    '...ddd.KKKKKKKKKK.ddd...',
+    '.......KKKKKKKKKK.......',
+    '.......KKKKKKKKKK.......',
+    '.......KKKK..KKKK.......',
+    '.......KKKK..KKKK.......',
+    '.......KKKK..KKKK.......',
+    '.......KKKK..KKKK.......',
+    '.......KKKK..KKKK.......',
+    '......kkkkk..kkkkk......',
+  ],
 };
-/** Agent Smith; every subagent is a copy of him. */
-export const SMITH = ['....uuuu....', '...uuuuuu...', '...ussssu...', '...skkkks...', '...ssssssw..', '....ssss.w..', '..kwwkkwwk..', '.kkkwkkwkkk.', '.kskkkkkksk.', '..kkkkkkkk..', '...kk..kk...', '...kk..kk...'];
+/** Agent Smith (earpiece, white shirt, tie clip); every subagent is a copy of him. */
+export const SMITH = [
+  '........................',
+  '.........uuuuuu.........',
+  '.......uuuuuuuuuu.......',
+  '......uuUUuuuuuuuu......',
+  '......uuusssssssuu......',
+  '......uusssssssssu......',
+  '......ussssssssssu......',
+  '......ssssssssssss......',
+  '......kGgGGkkGgGGk......',
+  '......sGGGGssGGGGsw.....',
+  '.......ssssSSssss.y.....',
+  '.......ssssssssss.y.....',
+  '........ssSmmSss..y.....',
+  '.........ssssss..y......',
+  '..........sSSs.yy.......',
+  '......kkkkwkkwkkkk......',
+  '....kkkkKwwkkwwKkkkk....',
+  '...kkkkkkKwkkwKkkkkkk...',
+  '...kkkjkkkwkkwkkkjkkk...',
+  '...kkkjkkkwyywkkkjkkk...',
+  '...kkkjkkkKkkKkkkjkkk...',
+  '...kkkjkkkkkkkkkkjkkk...',
+  '...kkkjkkkkkKkkkkjkkk...',
+  '...kkkjkkkkkkkkkkjkkk...',
+  '...kkkjkkkkkKkkkkjkkk...',
+  '...kkkjkkkkkkkkkkjkkk...',
+  '...kkkjkkkkkkkkkkjkkk...',
+  '...sss.kkkkkkkkkk.sss...',
+  '....ss.kkkkkkkkkk.ss....',
+  '.......kkkkkkkkkk.......',
+  '.......kkkk..kkkk.......',
+  '.......kkkk..kkkk.......',
+  '.......kkkk..kkkk.......',
+  '.......kkkk..kkkk.......',
+  '.......kkkk..kkkk.......',
+  '......kkkkk..kkkkk......',
+];
 
 export const PLANT = ['..gG.g..', '.gGggGg.', '.ggGGgg.', '..gggg..', '...gg...', '..pPPp..', '..pppp..', '...pp...'];
 export const PLANT_PAL = { g: '#3fae6a', G: '#8fe3ad', p: '#a9613f', P: '#cf8457' };
@@ -106,7 +467,7 @@ export const CAT_PAL = { a: '#ffb15c', k: '#1b1033' };
 export const BEANBAG = ['...bbbbbb...', '..bBBBBBBb..', '.bBBBBBBBBb.', 'bBBBBBBBBBBb', 'bBBBBBBBBBBb', 'bbBBBBBBBBbb', '.bbbbbbbbbb.', '..bbbbbbbb..'];
 export const BEANBAG_PAL = { b: '#b8543a', B: '#e8775a' };
 
-export type Theme = 'library' | 'aquarium' | 'garden' | 'couch' | 'board' | 'fire' | 'plain';
+export type Theme = 'library' | 'aquarium' | 'garden' | 'couch' | 'board' | 'fire' | 'construct' | 'plain';
 const THEMES: [string, Theme][] = [
   ['chief', 'library'],
   ['architect', 'aquarium'],
@@ -116,7 +477,7 @@ const THEMES: [string, Theme][] = [
   ['backend', 'couch'],
   ['qa', 'board'],
   ['summar', 'fire'],
-  ['owner', 'couch'],
+  ['owner', 'construct'],
 ];
 /** Each seeded role has its own corner; other agents get the plain cozy room. */
 export const themeFor = (slug: string): Theme => THEMES.find(([k]) => slug.toLowerCase().includes(k))?.[1] ?? 'plain';
