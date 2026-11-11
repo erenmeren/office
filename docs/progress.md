@@ -1063,6 +1063,17 @@ Simple view, 2026-11-11 (owner: "Assistant or My work?", "why am I still in offi
 - The sidebar no longer lists the agents, in either view.
 - Verified: web typecheck, lint, 57 unit tests, and the dev server with fixtures (four menu items, no agent links in the sidebar in both views, header on the newest work's project, a work item opening Mission Control). The e2e test was updated, not run (no `OFFICE_E2E_*` credentials).
 
+Real run of the 2026-11-10 changes, 2026-11-11 (owner: "you can do those tests"). A separate stack, so the owner's app and projects got no test data: database `office_realtest` on the dev Postgres, API on 4200, one worker with `OFFICE_RUNTIME=claude`, an owner made with `POST /auth/setup`, its own data, projects and worker folders. Two requests to the Conductor, the second sent while the first was planning ("a small to-do list page with one test", then "a button that removes the ticked-off items").
+
+- The Conductor made the project `to-do-list` and opened one mission per request.
+- Queue: the second mission was created at 09:09:05 and got its plan run at 09:12:04, in the tick that merged the first (`mission.integrated` 09:12:04). Its commit sits on top of the first mission's commits.
+- Check command: `project.check_set_by_plan` set `node --test` from the first plan; all six checks `passed`, none `skipped`. `node --test` passes in the folder (one test).
+- The project's `CLAUDE.md` was kept current by the agents: what the page is, how to open it, the check, and after the second mission the new button.
+- Both missions were merged into the folder, and the Conductor answered each "Office:" note in plain words with the folder and what was made.
+- 27 runs, 2.61 USD (Chief 1.24, Conductor 0.62), 4 minutes 40 seconds from the first mission to the last answer.
+- Seen on the way: an owner message of type `message` does not wake the Conductor (`WAKE_TYPES`); the assistant's box sends `question`. The starter `CLAUDE.md` of a project the Conductor made still says "the owner integrates into `main`", while `integrateWhenDone` merges by itself.
+- The test database was dropped afterwards. Not covered: the same run inside the installed desktop app, a plan the owner must approve, a merge that conflicts.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):
