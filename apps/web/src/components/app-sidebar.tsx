@@ -6,12 +6,10 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Bot, Building2, ClipboardCheck, Compass, Database, FolderGit2, LayoutDashboard, LayoutGrid, MessagesSquare, Minimize2, Radio, ScrollText, Server, Settings2, Sparkles, Target, type LucideIcon } from 'lucide-react';
 import { cn } from 'cn';
-import { AgentAvatar } from '@/components/ui/agent-avatar';
 import { Button } from '@/components/ui/button';
-import { StatusDot } from '@/components/ui/status-pill';
 import { useProject } from '@/lib/project';
 import { setSimpleMode, useSimpleMode } from '@/lib/simple-mode';
-import { useAgents, useConversations, useLiveSessions, useMemoryCounts, useMissions, useOverview, useSkills, useTasks, useWorkers } from '@/lib/queries';
+import { useConversations, useLiveSessions, useMemoryCounts, useMissions, useOverview, useSkills, useWorkers } from '@/lib/queries';
 import { uiSocket } from '@/lib/ws';
 
 export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
@@ -30,10 +28,12 @@ export const NAV: { href: string; label: string; icon: LucideIcon }[] = [
   { href: '/settings', label: 'Settings', icon: Settings2 },
 ];
 
-/** The simple view's menu: the same pages under plain names, the home page being the assistant. */
+/**
+ * The simple view's menu: the same pages under plain names, the home page being the assistant.
+ * Mission Control is not in it: it has a request box of its own, and the assistant's page already lists the work and opens each piece.
+ */
 const SIMPLE_NAV: typeof NAV = [
   { href: '/', label: 'Assistant', icon: Compass },
-  { href: '/mission-control', label: 'My work', icon: Target },
   { href: '/office', label: 'Office', icon: Building2 },
   { href: '/agents', label: 'Team', icon: Bot },
   { href: '/skills', label: 'Skills', icon: Sparkles },
@@ -113,13 +113,10 @@ export function useNavCounts() {
 
 export function AppSidebar({ className }: { className?: string }) {
   const pathname = usePathname();
-  const agents = useAgents();
-  const tasks = useTasks();
   const counts = useNavCounts();
   const simple = useSimpleMode();
   const nav = useNav(counts['/decisions'].n);
   const project = useProject();
-  const busy = new Set(tasks.data?.filter((t) => t.status === 'running').map((t) => t.agentId));
 
   return (
     <aside className={cn('glass sticky top-4 my-4 ml-4 flex max-h-[calc(100dvh-2rem)] w-[232px] shrink-0 flex-col gap-5 self-start overflow-y-auto rounded-[22px] px-3 py-4', className)}>
@@ -160,17 +157,6 @@ export function AppSidebar({ className }: { className?: string }) {
           );
         })}
       </nav>
-
-      <div className="flex flex-col gap-0.5">
-        <div className="px-3 pb-1.5 text-xs font-semibold tracking-[0.04em] uppercase text-ink-3">Team</div>
-        {agents.data?.map((a) => (
-          <Link key={a.id} href={`/agents/${a.id}`} className="flex h-[38px] items-center gap-2.5 rounded-[10px] px-2.5 text-ink-2 hover:bg-white/7">
-            <AgentAvatar name={a.name} identity={a.slug} size="sm" />
-            <span className="min-w-0 flex-1 truncate">{a.name}</span>
-            <StatusDot tone={busy.has(a.id) ? 'live' : 'idle'} />
-          </Link>
-        ))}
-      </div>
 
       <Button variant="ghost" size="sm" className="mt-auto justify-start text-ink-3" onClick={() => setSimpleMode(!simple)}>
         {simple ? <LayoutGrid data-icon="inline-start" aria-hidden /> : <Minimize2 data-icon="inline-start" aria-hidden />}

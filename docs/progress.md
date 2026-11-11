@@ -1056,6 +1056,13 @@ Review against real use, the same day (owner: weigh the project against two vide
 - The plan can set a project's first check command (`PlanSchema.checkCommand`, `adoptCheckCommand`): in the recipe project all five checks were `skipped`, so the Chief's review, the dearest step, decided without one executed test. The Chief is asked for the command only when the project has none; code and verify tasks are told the check and that it must pass. Not under the network allowlist (see `docs/security.md`). Verified by API tests: the setting and audit row after an auto-approved plan, the next task run carrying the command and naming it in its prompt, an existing command kept, nothing set under the allowlist.
 - What a project is and how it is run is kept in its own `CLAUDE.md`: the plan prompt has the Chief give the last code task that duty. Agents' memory proposals reach the next run only after the owner verifies them (seven were waiting; 91 had been verified by hand), while the repository file is read by every run and reviewed with the code. Prompt only; not yet seen with a real Chief.
 
+Simple view, 2026-11-11 (owner: "Assistant or My work?", "why am I still in office-sandbox?", "remove the team from the left menu"):
+
+- "My work" (Mission Control) is out of the simple menu, which is now Assistant, Office, Team, Skills and "Needs you". Mission Control has its own request box (`ChiefComposer`), so there were two places to ask. The page stays; "Your work" on the assistant's page opens each mission.
+- In the simple view the selected project follows the newest work the assistant opened. Before, the header, Office and the "Needs you" count stayed on the first project in the list, the seeded `office-sandbox`, while the work ran in the project the assistant had made.
+- The sidebar no longer lists the agents, in either view.
+- Verified: web typecheck, lint, 57 unit tests, and the dev server with fixtures (four menu items, no agent links in the sidebar in both views, header on the newest work's project, a work item opening Mission Control). The e2e test was updated, not run (no `OFFICE_E2E_*` credentials).
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):

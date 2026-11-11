@@ -374,12 +374,15 @@ test('login page is quiet when logged out', async ({ page, noise }) => {
   expectQuiet(noise);
 });
 
-authed('a new browser gets the simple view: the assistant as home and five pages, until the owner asks for all of them', async ({ page }) => {
+authed('a new browser gets the simple view: the assistant as home and four pages, until the owner asks for all of them', async ({ page }) => {
   await page.addInitScript(() => sessionStorage.getItem('e2e.simple') ?? (localStorage.setItem('office.simple', '1'), sessionStorage.setItem('e2e.simple', '1')));
   await page.goto('/');
   const nav = page.getByRole('navigation', { name: 'Primary', exact: true });
   await expect(page.getByRole('heading', { name: 'What would you like to get done?' })).toBeVisible();
   await expect(nav.getByRole('link', { name: 'Assistant' })).toBeVisible();
+  // one place to ask: the page with a request box of its own is not in the menu, and the team is a page, not a list under it
+  await expect(nav.getByRole('link', { name: 'My work' })).toHaveCount(0);
+  await expect(page.getByRole('complementary').locator('a[href^="/agents/"]')).toHaveCount(0);
   await expect(nav.getByRole('link', { name: 'Workers' })).toBeHidden();
   await page.getByRole('button', { name: 'Show all pages' }).click();
   await expect(nav.getByRole('link', { name: 'Workers' })).toBeVisible();

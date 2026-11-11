@@ -57,6 +57,12 @@ export function Assistant({ simple = false }: { simple?: boolean }) {
     return () => offs.forEach((off) => off());
   }, [qc, conversationId]);
 
+  // the simple view has no project to pick: the other pages follow the newest piece of work
+  const newest = view.data?.missions[0]?.project.id;
+  useEffect(() => {
+    if (simple && newest) selectProject(newest);
+  }, [simple, newest]);
+
   if (!mounted) return null;
   const agent = view.data?.agent;
   const agents = agent ? [{ ...agent, currentVersion: null } as Agent] : [];
