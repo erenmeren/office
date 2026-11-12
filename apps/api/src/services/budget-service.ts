@@ -55,7 +55,8 @@ export type Gate = { ok: true } | { ok: false; reason: string; budgetExceeded?: 
 export async function gate(db: Db, settings: ProjectSettings, task: Task, agent: Agent): Promise<Gate> {
   if (!(await agentAllowed(db, task.projectId, agent.id))) return { ok: false, reason: 'agent not allowed in the project' };
   if (!agent.isActive) return { ok: false, reason: 'agent inactive' };
-  if ((await runningCount(db, { agentId: agent.id })) >= agent.maxConcurrentSessions) {
+  // per project: an agent busy in one project still works in another
+  if ((await runningCount(db, { agentId: agent.id, projectId: task.projectId })) >= agent.maxConcurrentSessions) {
     return { ok: false, reason: 'agent at maxConcurrentSessions' };
   }
   if (agent.dailyBudgetUsd != null && (await spentToday(db, { agentId: agent.id })) >= agent.dailyBudgetUsd) {

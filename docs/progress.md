@@ -1074,6 +1074,12 @@ Real run of the 2026-11-10 changes, 2026-11-11 (owner: "you can do those tests")
 - Seen on the way: an owner message of type `message` does not wake the Conductor (`WAKE_TYPES`); the assistant's box sends `question`. The starter `CLAUDE.md` of a project the Conductor made still says "the owner integrates into `main`", while `integrateWhenDone` merges by itself.
 - The test database was dropped afterwards. Not covered: the same run inside the installed desktop app, a plan the owner must approve, a merge that conflicts.
 
+Several projects at once, 2026-11-12 (owner: four projects at the same time, "real parallelism makes more sense"):
+
+- The agent session limit is counted per project (`gate` in `budget-service.ts`). Before, the one `developer` held one session for all projects, so their code tasks ran one after another.
+- The desktop app's worker takes 4 runs at once (was 2).
+- Verified by an API test (`scheduler.test.ts`: the same agent with two tasks in one project and one in another gets the first and the other project's task in one tick, the second stays `ready`; it fails without the change) and the API suite. Not verified: four real Claude sessions at once (rate limits, memory), and the installed app, which needs a rebuild to get both changes.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):

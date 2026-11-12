@@ -515,4 +515,18 @@ describe('scheduler', () => {
     const spec2 = await assign(w);
     expect(spec2.prompt).toContain('second');
   });
+
+  it("counts an agent's session limit per project: busy in one project, it still starts in another", async () => {
+    const other = (await req('POST', '/projects', { name: 'P2', slug: 'p2', repoPath: '/tmp/office-ws/p2' })).json().id;
+    const first = await createTask('first');
+    const second = await createTask('second');
+    const elsewhere = (
+      await req('POST', '/tasks', { projectId: other, agentId, title: 'elsewhere', description: 'details' })
+    ).json() as { id: string };
+    await worker({ capacity: 3 });
+    await t.app.scheduler.tick();
+    expect((await getTask(first.id)).status).toBe('queued');
+    expect((await getTask(second.id)).status).toBe('ready');
+    expect((await getTask(elsewhere.id)).status).toBe('queued');
+  });
 });

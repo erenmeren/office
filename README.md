@@ -206,7 +206,7 @@ Two environment variables are new in Phase 6 (both optional, see `.env.example`)
 
 ## 17. Desktop app (Linux)
 
-`apps/desktop` packages the whole stack as one Electron app, so Docker, `.env` and the three dev servers are not needed. The app starts a bundled Postgres 17 (`@embedded-postgres/linux-x64`, TCP on `127.0.0.1:5440`, scram password generated on first run), runs `apps/desktop/server/boot.mjs` (creates the `office` database, applies `packages/db/prisma/migrations` with Prisma's `_prisma_migrations` bookkeeping, seeds, enrolls the bundled worker), then the API on `127.0.0.1:4100`, the Next.js standalone server on `127.0.0.1:3100` and the local worker (`claude` runtime, capacity 2, name `desktop`), and opens the UI in a window. Closing the window stops everything, Postgres included.
+`apps/desktop` packages the whole stack as one Electron app, so Docker, `.env` and the three dev servers are not needed. The app starts a bundled Postgres 17 (`@embedded-postgres/linux-x64`, TCP on `127.0.0.1:5440`, scram password generated on first run), runs `apps/desktop/server/boot.mjs` (creates the `office` database, applies `packages/db/prisma/migrations` with Prisma's `_prisma_migrations` bookkeeping, seeds, enrolls the bundled worker), then the API on `127.0.0.1:4100`, the Next.js standalone server on `127.0.0.1:3100` and the local worker (`claude` runtime, capacity 4, name `desktop`), and opens the UI in a window. Closing the window stops everything, Postgres included.
 
 ```bash
 pnpm --filter @office/desktop bundle   # builds api/worker/db, the web standalone build, pnpm deploy into apps/desktop/build

@@ -139,7 +139,7 @@ async function start(): Promise<void> {
     OFFICE_API_URL: `ws://127.0.0.1:${API_PORT}`,
     OFFICE_WORKER_HOME: workerHome,
     OFFICE_RUNTIME: 'claude',
-    OFFICE_WORKER_CAPACITY: '2',
+    OFFICE_WORKER_CAPACITY: '4',
     OFFICE_WORKER_NAME: 'desktop',
     ...extra,
     OFFICE_WORKSPACE_ROOTS: [workspaces, join(dataDir, 'repos'), extra.OFFICE_PROJECTS_DIR, extra.OFFICE_WORKSPACE_ROOTS].filter(Boolean).join(':'),
