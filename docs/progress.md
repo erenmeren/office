@@ -1078,7 +1078,9 @@ Several projects at once, 2026-11-12 (owner: four projects at the same time, "re
 
 - The agent session limit is counted per project (`gate` in `budget-service.ts`). Before, the one `developer` held one session for all projects, so their code tasks ran one after another.
 - The desktop app's worker takes 4 runs at once (was 2).
-- Verified by an API test (`scheduler.test.ts`: the same agent with two tasks in one project and one in another gets the first and the other project's task in one tick, the second stays `ready`; it fails without the change) and the API suite. Not verified: four real Claude sessions at once (rate limits, memory), and the installed app, which needs a rebuild to get both changes.
+- Verified by an API test (`scheduler.test.ts`: the same agent with two tasks in one project and one in another gets the first and the other project's task in one tick, the second stays `ready`; it fails without the change) and the suite (API 270, worker 105, runtime 74, shared 67, web 57, db 10).
+- Real run the same day, on the separate stack (database `office_realtest`, API 4200, one real-Claude worker with capacity 4): four requests for four new projects sent to the Conductor back to back. It made the four projects and one mission each; all four were `done` and merged into their folders 5 minutes 21 seconds after the first run started. Four runs were live at once; the `developer` ran in three projects at the same moment, the designer and the QA engineer in two. 66 runs, all `succeeded`; 16 checks, all `passed`; `node --test` passes in each of the four folders. 5.54 USD: Chief 2.88 (20 plan and review runs), Conductor 1.24 (5 chat runs, each dearer than the one before: 0.12 to 0.39), the four specialists 1.37. No rate limit was hit. The test database was dropped afterwards.
+- The desktop app was rebuilt and installed with both changes (the installed `app.asar` equals the build). Not verified: a run inside the installed app, and four larger missions at once.
 
 ## Desktop app (2026-11-03)
 
