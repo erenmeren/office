@@ -1109,6 +1109,7 @@ A new folder from the folder picker, 2026-11-13 (owner: "it should be able to op
 - The folder picker has a "New folder name" field: with a name typed the button reads "Make new folder" and picks `<folder shown>/<name>`; `POST /projects` already made a missing folder into a repository with the starter `CLAUDE.md`.
 - `POST /projects` now refuses a path that does not exist yet when it lies inside a repository (it used to make a repository in a repository there): the check looks at the nearest existing folder above it.
 - Verified: the API test and the browser test were written first and failed (201 instead of 400; no such field), then passed. API suite 272 (a first run under load had 8 mission tests time out at 5 s; the rerun was clean), typecheck clean, web unit 63, web lint 0 errors, browser suite 26 passed and 1 skipped (the real `claude` terminal test).
+- Desktop app rebuilt from `159282f` and installed the same way as before: the owner's app had no work live, was asked to quit by its own PID, and was started again; projects, missions and messages unchanged, worker online. The new field was not clicked inside the installed window.
 
 ## Desktop app (2026-11-03)
 
