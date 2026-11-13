@@ -22,6 +22,9 @@ describe('settings helpers', () => {
     expect(validateSettingsDraft(ok)).toEqual([]);
     const bad = { ...ok, maxConcurrentRuns: 0, defaultMaxAttempts: 1.5, dailyBudgetUsd: NaN, envTemplate: [{ name: 'OK_1', value: '' }, { name: 'bad name', value: '' }] };
     expect(validateSettingsDraft(bad).map((p) => p.field)).toEqual(['maxConcurrentRuns', 'defaultMaxAttempts', 'dailyBudgetUsd', 'envTemplate.1']);
+    // no cap per task run is the default, and 0 says so; the daily and mission budgets stay amounts
+    expect(ok.defaultTaskBudgetUsd).toBe(0);
+    expect(validateSettingsDraft({ ...ok, defaultTaskBudgetUsd: -1, defaultMissionBudgetUsd: 0 }).map((p) => p.field)).toEqual(['defaultMissionBudgetUsd', 'defaultTaskBudgetUsd']);
   });
 
   it('validates required worker tags', () => {

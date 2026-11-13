@@ -13,7 +13,6 @@ export const PlanTaskSchema = z.object({
   parallelGroup: z.string().optional(),
   requiredConsultations: z.array(z.object({ agent: z.string(), topic: z.string().min(1) })).default([]),
   approvalPoints: z.array(ApprovalTypeSchema).default([]),
-  budgetUsd: z.number().positive().max(50).optional(),
 });
 export type PlanTask = z.infer<typeof PlanTaskSchema>;
 
@@ -95,7 +94,6 @@ export const PLAN_JSON_SCHEMA = {
               enum: ['plan', 'git_push', 'merge', 'deploy', 'destructive_command', 'sensitive_path', 'budget_exceeded'],
             },
           },
-          budgetUsd: { type: 'number', exclusiveMinimum: 0, maximum: 50 },
         },
       },
     },

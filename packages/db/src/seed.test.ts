@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,13 @@ it('seed is idempotent: second run reports exists and adds no rows', async () =>
   expect(second.every((l) => l.includes(' exists '))).toBe(true);
   expect(second).toHaveLength(1 + 8 + 1 + 6);
   expect(await count()).toEqual(before);
+});
+
+it('no agent template carries a budget cap: a run stops on a budget only where the owner sets one', () => {
+  const dir = join(templatesDir, 'agents');
+  const caps = readdirSync(dir).map((f) => [f, (JSON.parse(readFileSync(join(dir, f), 'utf8')) as { config: { maxBudgetUsd?: number } }).config.maxBudgetUsd ?? 0]);
+  expect(caps).toHaveLength(8);
+  expect(caps.filter(([, cap]) => cap !== 0)).toEqual([]);
 });
 
 it('seeds the default team with subagents', async () => {

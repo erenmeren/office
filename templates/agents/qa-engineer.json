@@ -15,7 +15,6 @@
       "Write"
     ],
     "maxTurns": 30,
-    "maxBudgetUsd": 1,
     "skills": [
       {
         "skill": "test-driven-development",

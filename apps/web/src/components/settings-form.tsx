@@ -167,8 +167,8 @@ export function SettingsForm({ projectId, settings, agentIds }: { projectId: str
           <Field label="Daily budget (USD)" htmlFor="dailyBudgetUsd" error={problem('dailyBudgetUsd')} hint={budget ? `Today ${usd(budget.spentTodayUsd)} of ${usd(budget.dailyBudgetUsd)}` : undefined}>
             <Input {...num('dailyBudgetUsd')} step="0.01" />
           </Field>
-          <Field label="Default per task (USD)" htmlFor="defaultTaskBudgetUsd" error={problem('defaultTaskBudgetUsd')}>
-            <Input {...num('defaultTaskBudgetUsd')} step="0.01" />
+          <Field label="Cap per task run (USD, 0 = no cap)" htmlFor="defaultTaskBudgetUsd" error={problem('defaultTaskBudgetUsd')}>
+            <Input {...num('defaultTaskBudgetUsd')} min={0} step="0.01" />
           </Field>
           <Field label="Default per mission (USD)" htmlFor="defaultMissionBudgetUsd" error={problem('defaultMissionBudgetUsd')} hint="Hard cap of a new mission; raise it per mission in Mission Control.">
             <Input {...num('defaultMissionBudgetUsd')} step="1" />

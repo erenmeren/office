@@ -9,7 +9,6 @@
     "model": "haiku",
     "allowedTools": [],
     "maxTurns": 6,
-    "maxBudgetUsd": 0.1,
     "maxConcurrentSubagents": 0,
     "maxSubagentDepth": 0,
     "skills": [],

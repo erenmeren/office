@@ -30,6 +30,8 @@ describe('project settings, agents, audit, artifacts', () => {
     const s = (await call('GET', `/projects/${projectId}/settings`)).json();
     expect(s.approvalTimeoutMinutes).toBe(30);
     expect(s.approvalPolicy.plan).toBe('auto');
+    expect(s.defaultTaskBudgetUsd).toBe(0); // no cap per task run until the owner sets one
+    expect((await call('PUT', `/projects/${projectId}/settings`, { defaultTaskBudgetUsd: 0 })).statusCode).toBe(200);
     const put = await call('PUT', `/projects/${projectId}/settings`, { checkCommand: 'pnpm test', dailyBudgetUsd: 10 });
     expect(put.statusCode).toBe(200);
     const again = (await call('GET', `/projects/${projectId}/settings`)).json();

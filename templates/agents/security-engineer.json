@@ -13,7 +13,6 @@
       "Bash"
     ],
     "maxTurns": 30,
-    "maxBudgetUsd": 1,
     "skills": [
       {
         "skill": "ponytail-review",

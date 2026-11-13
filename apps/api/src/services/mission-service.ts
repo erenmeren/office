@@ -147,7 +147,6 @@ export function planPrompt(mission: Mission & { project: Project }, roster: Agen
       '- Every task needs requirements and acceptance criteria.',
       "- Add `requiredConsultations` when a task depends on another agent's knowledge.",
       '- Use `approvalPoints` only for push, merge or deploy.',
-      `- A task without \`budgetUsd\` gets ${settings.defaultTaskBudgetUsd} USD.`,
       // one task, the last: two tasks editing the same file in parallel would not rebase cleanly
       '- When the work changes what the project is, how it is run or how it is checked, give the last code task the requirement to update CLAUDE.md (short: what the project is, how to run it, how to check it). No other task touches that file; the next mission starts from it, not from this session.',
       // under the network allowlist the plan cannot set it: the check runs outside the sandbox (adoptCheckCommand)
@@ -246,7 +245,6 @@ async function createPlanTasks(db: Db, mission: Mission, plan: Plan, settings: P
         acceptanceCriteria: t.acceptanceCriteria,
         parallelGroup: t.parallelGroup,
         requiredConsultations: t.requiredConsultations,
-        budgetUsd: t.budgetUsd ?? settings.defaultTaskBudgetUsd,
         maxAttempts: settings.defaultMaxAttempts,
       },
     });

@@ -627,6 +627,10 @@ authed('owner changes the check command and sees it saved', async ({ page, noise
   await expect(page.getByText('Saved.')).toBeVisible();
   await page.reload();
   await expect(page.getByLabel('Check command')).toHaveValue(value);
+  // no cap per task run unless the owner types one, and 0 is a value the field accepts
+  const cap = page.getByLabel('Cap per task run (USD, 0 = no cap)');
+  await expect(cap).toHaveValue('0');
+  expect(await cap.evaluate((el: HTMLInputElement) => el.validity.valid)).toBe(true);
   expectQuiet(noise);
 });
 

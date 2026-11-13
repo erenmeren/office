@@ -405,7 +405,7 @@ describe('run lifecycle', () => {
     const spec = await s.assign(w);
     expect(spec).toMatchObject({ kind: 'inbox', agentId: s.b, prompt: 'You have new messages. Read your inbox and answer.' });
     expect(spec.maxTurns).toBeLessThanOrEqual(8);
-    expect(spec.maxBudgetUsd).toBeLessThanOrEqual(0.25);
+    expect(spec.maxBudgetUsd).toBe(0); // no budget of its own: the eight turns bound a wake run
     expect(spec.allowedTools).toEqual(['Read']);
     expect(spec.tools).toContain('reply_message');
     expect(spec.tools).not.toContain('submit_summary');
@@ -424,6 +424,27 @@ describe('run lifecycle', () => {
       projectId: s.projectId, type: 'question', body, recipientAgentIds: [s.b], ...from,
     });
   const assigns = (w: FakeWorker) => w.received.filter((m) => m.type === 'run.assign').length;
+
+  it('with the network open an agent that has Bash gets the web tools; not under the allowlist, not without Bash', async () => {
+    s = await setup();
+    const w = await s.worker();
+    await s.createTask();
+    const open = await s.assign(w);
+    expect(open.allowedTools).toEqual(['Read', 'Edit', 'Bash', 'WebFetch', 'WebSearch']);
+    s.result(w, open, { status: 'succeeded' });
+    await s.flush(w);
+
+    const reader = (await s.req('POST', '/agents', { name: 'r', slug: 'r', role: 'dev', config: { systemPrompt: 'x', model: 'sonnet', allowedTools: ['Read'] } })).json().id as string;
+    await s.createTask('Read only', reader);
+    const plain = await s.assign(w);
+    expect(plain.allowedTools).toEqual(['Read']);
+    s.result(w, plain, { status: 'succeeded' });
+    await s.flush(w);
+
+    await s.t.prisma.project.update({ where: { id: s.projectId }, data: { settings: { networkAccess: 'allowlist' } } });
+    await s.createTask('Under the allowlist');
+    expect((await s.assign(w)).allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+  });
 
   it('a lost wake run is retried on the next tick', async () => {
     s = await setup();

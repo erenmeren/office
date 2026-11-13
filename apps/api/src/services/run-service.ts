@@ -85,6 +85,8 @@ const conductorSection = (tab: { name: string; slug: string } | null) =>
 const DEFAULT_MESSAGING_SECTION =
   'You can message teammates with the office tools (list_agents, send_message, read_inbox, …). Check read_inbox when you are blocked or when the context pack reports unread mail. Propose durable knowledge with propose_memory; the owner verifies it.';
 const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];
+// with the network open an agent that has Bash can reach any host already (curl); these give it the proper tools for it
+const WEB_TOOLS = ['WebFetch', 'WebSearch'];
 
 /** Everything in a run spec that depends on the agent version, kind and project, plus the context pack. */
 async function specBase(
@@ -135,10 +137,17 @@ async function specBase(
       model: a.route?.model ?? cfg.model,
       runtime: a.route?.runtime ?? cfg.runtime,
       effort: a.route?.effort ?? cfg.effort,
-      allowedTools: summary || conductor ? [] : inbox ? cfg.allowedTools.filter((t) => INBOX_TOOLS.includes(t)) : cfg.allowedTools,
+      allowedTools:
+        summary || conductor
+          ? []
+          : inbox
+            ? cfg.allowedTools.filter((t) => INBOX_TOOLS.includes(t))
+            : settings.networkAccess === 'open' && cfg.allowedTools.includes('Bash')
+              ? [...new Set([...cfg.allowedTools, ...WEB_TOOLS])]
+              : cfg.allowedTools,
       noBuiltinTools: conductor,
       maxTurns: inbox ? Math.min(cfg.maxTurns, 8) : cfg.maxTurns,
-      maxBudgetUsd: inbox ? minBudget(cfg.maxBudgetUsd, 0.25) : cfg.maxBudgetUsd,
+      maxBudgetUsd: cfg.maxBudgetUsd,
       maxConcurrentSubagents: cfg.maxConcurrentSubagents,
       maxSubagentDepth: cfg.maxSubagentDepth,
       kind: a.kind,

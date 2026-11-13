@@ -143,7 +143,7 @@ describe('missions', () => {
     expect(byKey.mapping!.dependencies.map((d) => d.dependsOnId)).toEqual([byKey.analysis!.id]);
     expect(byKey.verify!.dependencies.map((d) => d.dependsOnId)).toEqual([byKey.mapping!.id]);
     expect(byKey.mapping!.requiredConsultations).toEqual([{ agent: 'architect', topic: 'where the mapping rules live' }]);
-    expect(byKey.mapping).toMatchObject({ kind: 'code', budgetUsd: 5, requirements: ['Follow the analysis'] });
+    expect(byKey.mapping).toMatchObject({ kind: 'code', budgetUsd: null, requirements: ['Follow the analysis'] });
 
     const approvals = (await s.req('GET', `/approvals?projectId=${s.projectId}&status=pending`)).json();
     expect(approvals).toHaveLength(1);
@@ -185,6 +185,15 @@ describe('missions', () => {
     expect((await s.mission(m.id)).status).toBe('cancelled');
     expect((await s.tasks(m.id)).every((x) => x.status === 'cancelled')).toBe(true);
     expect((await s.t.prisma.approval.findUniqueOrThrow({ where: { id: approval.id } })).status).toBe('denied');
+  });
+
+  it("a plan's budgetUsd is accepted and ignored: an agent's guess does not cap a run", async () => {
+    s = await setup();
+    const plan = clone(SAMPLE_PLAN);
+    Object.assign(plan.tasks[0]!, { budgetUsd: 3 }); // plans made before 2026-11-13 carry one
+    const { m } = await s.planned(plan);
+    expect(m.planErrors).toEqual([]);
+    expect((await s.tasks(m.id)).map((x) => x.budgetUsd)).toEqual(plan.tasks.map(() => null));
   });
 
   it('a plan with a cycle -> plan_failed with the cycle error and zero tasks', async () => {

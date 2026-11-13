@@ -31,7 +31,7 @@ export function changedKeys<T extends Record<string, unknown>>(original: T, draf
 }
 
 export const INT_FIELDS = ['maxConcurrentRuns', 'defaultMaxAttempts', 'approvalTimeoutMinutes', 'checkTimeoutSeconds'] as const;
-export const USD_FIELDS = ['dailyBudgetUsd', 'defaultTaskBudgetUsd', 'defaultMissionBudgetUsd'] as const;
+export const USD_FIELDS = ['dailyBudgetUsd', 'defaultMissionBudgetUsd'] as const;
 const ENV_NAME = /^[A-Z_][A-Z0-9_]*$/;
 
 /** Problems that would make the API reject the draft; `field` is a settings key or `envTemplate.<index>`. */
@@ -39,6 +39,7 @@ export function validateSettingsDraft(draft: ProjectSettings): { field: string; 
   const out: { field: string; message: string }[] = [];
   for (const f of INT_FIELDS) if (!Number.isInteger(draft[f]) || draft[f] < 1) out.push({ field: f, message: 'Enter a whole number of at least 1.' });
   for (const f of USD_FIELDS) if (!Number.isFinite(draft[f]) || draft[f] <= 0) out.push({ field: f, message: 'Enter an amount greater than 0.' });
+  if (!Number.isFinite(draft.defaultTaskBudgetUsd) || draft.defaultTaskBudgetUsd < 0) out.push({ field: 'defaultTaskBudgetUsd', message: 'Enter an amount, or 0 for no cap.' });
   draft.envTemplate.forEach((r, i) => {
     if (!ENV_NAME.test(r.name)) out.push({ field: `envTemplate.${i}`, message: `Env row ${i + 1}: name must be upper case letters, digits and underscores, and not start with a digit.` });
   });

@@ -33,7 +33,8 @@ export const ProjectSettingsSchema = z.object({
   approvalTimeoutMinutes: z.number().int().positive().default(30),
   checkTimeoutSeconds: z.number().int().positive().default(900),
   dailyBudgetUsd: z.number().positive().default(1000),
-  defaultTaskBudgetUsd: z.number().positive().default(5),
+  // caps every task run of the project; 0 = no cap (owner, 2026-11-13: agents must not stop because of a budget)
+  defaultTaskBudgetUsd: z.number().nonnegative().default(0),
   // hard cap of a mission created without its own budgetUsd
   defaultMissionBudgetUsd: z.number().positive().default(5000),
   maxConcurrentRuns: z.number().int().positive().default(2),

@@ -9,7 +9,6 @@
     "model": "opus",
     "allowedTools": [],
     "maxTurns": 30,
-    "maxBudgetUsd": 2,
     "maxConcurrentSubagents": 0,
     "maxSubagentDepth": 0,
     "skills": [],
