@@ -1116,6 +1116,7 @@ Finished work into the folder for every project, 2026-11-13 (owner: "from now on
 - `POST /projects` stores `integrateWhenDone: true`; the starter `CLAUDE.md` says that Office merges finished work when that is safe.
 - Migration `20261113100000_integrate_existing_projects`: one `UPDATE` that gives the setting to the projects that exist (not the system project, not one that carries the key). Checked on a throwaway database with four sample rows: two updated, an explicit `false` and the system project untouched.
 - Verified: the API test was written first and failed (`false`), then passed. API suite 273; one orchestration test (a plan run waiting for the daily budget) now sets manual integration, because with the new setting its second mission waits behind the first. Typecheck clean. No web change, so the browser suite was not run again.
+- Desktop app rebuilt from `d684637` and installed: no work was live, the app was asked to quit by its own PID, its stopped database folder was copied to `~/.local/share/office/backups/pg-2026-11-13-before-integrate`, and the app was started again. The migration is recorded as applied; the owner's four projects carry `integrateWhenDone: true`, the system project does not; projects, missions and messages unchanged. All four folders were on their default branch with no uncommitted tracked change, so the next finished work can be merged. No real mission was run to watch a merge into an opened folder.
 
 ## Desktop app (2026-11-03)
 
