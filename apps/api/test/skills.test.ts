@@ -129,6 +129,14 @@ describe('skills', () => {
     expect((await req('POST', '/skills/nope/approve')).statusCode).toBe(404);
   });
 
+  it('lists skills by name, not in the order they were added, and word by word whatever the database collation', async () => {
+    const added = ['zz-last', 'aab', 'aa-first'];
+    for (const name of added) expect((await req('POST', '/skills', { name, files: { 'SKILL.md': md(name) } })).statusCode).toBe(201);
+    const names = ((await req('GET', '/skills')).json() as { name: string }[]).map((s) => s.name);
+    // an en_US database would put `aab` before `aa-first` (it skips the hyphen); a C one would not
+    expect(names.filter((n) => added.includes(n))).toEqual(['aa-first', 'aab', 'zz-last']);
+  });
+
   it('rejects http:// and ssh git urls with 400', async () => {
     for (const url of ['http://example.com/r.git', 'ssh://git@example.com/r.git', 'git@example.com:r.git', `file:///etc`]) {
       const res = await req('POST', '/skills/import', { source: 'git', url });

@@ -46,7 +46,8 @@ export async function skillRoutes(app: FastifyInstance, opts: { config: Config }
   };
 
   app.get('/skills', async () => {
-    const skills = await app.prisma.skill.findMany({ orderBy: { createdAt: 'asc' } });
+    // by name, sorted here: the database's own order depends on its collation, which differs between installs
+    const skills = (await app.prisma.skill.findMany()).sort((a, b) => a.name.localeCompare(b.name, 'en'));
     const versions = await app.prisma.skillVersion.findMany({
       where: { id: { in: skills.flatMap((s) => (s.currentVersionId ? [s.currentVersionId] : [])) } },
       select: { ...meta.select, files: true },

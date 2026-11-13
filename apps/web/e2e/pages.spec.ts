@@ -591,6 +591,33 @@ authed('in a phone-width window the example requests of a new tab stay inside th
   await page.getByRole('button', { name: 'Close New' }).click();
 });
 
+authed('skill library: every skill says who it comes from, and the filter finds a plugin by its name', async ({ page, noise }) => {
+  const at = new Date().toISOString();
+  const skill = (name: string, source: string, sourceRef: string | null) => ({
+    id: name, name, description: `does ${name}`, source, sourceRef, status: 'approved', currentVersionId: `${name}-v1`, createdAt: at,
+    currentVersion: { id: `${name}-v1`, version: 1, checksum: 'x', createdAt: at }, model: null, usedBy: [],
+  });
+  await page.route(`${API}/skills`, (route) =>
+    route.fulfill({
+      json: [
+        skill('brainstorming', 'local', '/home/o/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/brainstorming'),
+        skill('graphify', 'local', '/home/o/.claude/skills/graphify'),
+        skill('house-style', 'ui', null),
+      ],
+    }),
+  );
+  await page.goto('/skills');
+  const row = (name: string) => page.getByRole('row').filter({ has: page.getByRole('link', { name, exact: true }) });
+  await expect(page.getByRole('columnheader', { name: 'By', exact: true })).toBeVisible();
+  await expect(row('brainstorming').getByRole('cell', { name: 'superpowers', exact: true })).toBeVisible();
+  await expect(row('graphify').getByRole('cell', { name: 'Your Claude skills', exact: true })).toBeVisible();
+  await expect(row('house-style').getByRole('cell', { name: 'You', exact: true })).toBeVisible();
+  await page.getByLabel('Filter skills').fill('superpowers');
+  await expect(page.getByRole('link', { name: 'brainstorming', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'graphify', exact: true })).toHaveCount(0);
+  expectQuiet(noise);
+});
+
 authed('owner changes the check command and sees it saved', async ({ page, noise }) => {
   await page.goto('/settings');
   const input = page.getByLabel('Check command');

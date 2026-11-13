@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './api';
-import { frontmatterModel, skillErrorText, skillSourceLabel, withFrontmatterModel } from './skills';
+import { frontmatterModel, skillBy, skillErrorText, skillSourceLabel, withFrontmatterModel } from './skills';
 
 describe('skills helpers', () => {
   it('labels sources as on the artboard', () => {
     expect(['ui', 'local', 'git'].map((s) => skillSourceLabel(s as 'ui'))).toEqual(['Created here', 'Local folder', 'Git']);
+  });
+  it('names who a skill comes from: the Claude plugin, the Claude skills folder, the repository, or the owner', () => {
+    const by = (source: string, sourceRef: string | null) => skillBy({ source: source as 'ui', sourceRef });
+    expect(by('local', '/home/o/.claude/plugins/cache/claude-plugins-official/superpowers/7.0.0/skills/brainstorming')).toBe('superpowers');
+    expect(by('local', '/home/o/.claude/plugins/cache/ui-ux-pro-max-skill/ui-ux-pro-max/2.13.0/.claude/skills/design')).toBe('ui-ux-pro-max');
+    expect(by('local', '/home/o/.claude/skills/graphify')).toBe('Your Claude skills');
+    expect(by('local', '/srv/skills/x')).toBe('—');
+    expect(by('git', 'https://github.com/vercel-labs/skills#HEAD:skills/find-skills')).toBe('vercel-labs/skills');
+    expect(by('git', 'https://example.com/a/b.git#main:.')).toBe('a/b');
+    expect(by('ui', null)).toBe('You');
   });
   it('formats API errors with their message', () => {
     expect(skillErrorText(new ApiError(409, { error: 'skill_pinned', message: 'pinned by dev' }))).toBe('skill_pinned: pinned by dev');

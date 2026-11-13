@@ -12,7 +12,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { del, post } from '@/lib/api';
 import { useAgents, useSkills, type Skill } from '@/lib/queries';
-import { skillErrorText, skillSourceLabel } from '@/lib/skills';
+import { skillBy, skillErrorText, skillSourceLabel } from '@/lib/skills';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 
 const STATUS_TONE = { approved: 'done', pending_review: 'decision', rejected: 'failed', disabled: 'idle' } as const;
@@ -57,7 +57,7 @@ export function SkillsTable() {
   };
 
   const q = filter.trim().toLowerCase();
-  const rows = (skills.data ?? []).filter((s) => !q || s.name.includes(q) || s.description.toLowerCase().includes(q));
+  const rows = (skills.data ?? []).filter((s) => !q || s.name.includes(q) || s.description.toLowerCase().includes(q) || skillBy(s).toLowerCase().includes(q));
   const agentById = new Map((agents.data ?? []).map((a) => [a.id, a]));
 
   return (
@@ -83,6 +83,7 @@ export function SkillsTable() {
             <TableHeader>
               <TableRow>
                 <TableHead>Skill</TableHead>
+                <TableHead>By</TableHead>
                 <TableHead>Source</TableHead>
                 <TableHead>Model</TableHead>
                 <TableHead>Version</TableHead>
@@ -100,6 +101,7 @@ export function SkillsTable() {
                     </Link>
                     <p className="line-clamp-1 text-xs text-ink-3">{s.description}</p>
                   </TableCell>
+                  <TableCell className="text-ink-2">{skillBy(s)}</TableCell>
                   <TableCell>
                     <Badge variant="outline">{skillSourceLabel(s.source)}</Badge>
                   </TableCell>
@@ -134,7 +136,7 @@ export function SkillsTable() {
               ))}
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-muted-foreground">
+                  <TableCell colSpan={8} className="text-muted-foreground">
                     {q ? 'No skill matches the filter.' : 'No skills yet.'}
                   </TableCell>
                 </TableRow>
