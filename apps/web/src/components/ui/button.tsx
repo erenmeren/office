@@ -55,4 +55,7 @@ function Button({
   )
 }
 
-export { Button, buttonVariants }
+/** For a button whose text may be longer than a narrow window: it wraps instead of running out of its card. */
+const buttonWrap = "h-auto min-h-7 max-w-full shrink justify-start py-1 text-left whitespace-normal"
+
+export { Button, buttonVariants, buttonWrap }

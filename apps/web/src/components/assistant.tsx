@@ -4,19 +4,19 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ClosedTabsList } from '@/components/closed-tabs';
 import { MessageThread } from '@/components/message-thread';
-import { NewProjectForm } from '@/components/new-project-form';
-import { Button } from '@/components/ui/button';
+import { OpenFolder } from '@/components/open-folder';
+import { Button, buttonWrap } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { PageActions, PageDescription, PageHeader, PageTitle } from '@/components/ui/page-header';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Steps } from '@/components/ui/steps';
 import { ApiError, api } from '@/lib/api';
 import { MISSION_STEPS, missionStatusLine, missionStep } from '@/lib/missions';
 import { selectProject, useProject } from '@/lib/project';
-import { useProjects, useTalks, type Agent, type Conversation, type MessageView, type MissionSummary } from '@/lib/queries';
-import { closeTab, frontTab, openFresh, setTabs, useTabs } from '@/lib/tabs';
+import { useProjects, type Agent, type Conversation, type MessageView, type MissionSummary } from '@/lib/queries';
+import { closeTab, frontTab, setTabs, useTabs } from '@/lib/tabs';
 import { useMounted } from '@/lib/use-mounted';
 import { uiSocket } from '@/lib/ws';
 
@@ -31,21 +31,10 @@ interface ConductorView {
 
 const REFRESH = ['message.created', 'mission.status.changed', 'task.status.changed', 'approval.changed'];
 
-/** A button whose text may be longer than a narrow window: it wraps instead of running out of its card. */
-const WRAP = 'h-auto min-h-7 max-w-full shrink justify-start py-1 text-left whitespace-normal';
-
 const EXAMPLES = ['Make a simple web page that shows my favourite recipes', 'Make a to-do list I can open in my browser', 'Make a birthday invitation page for my daughter'];
 
-/**
- * For a tab without a project: the projects whose tab was closed, the earlier talks that have no project (the one from
- * before the tabs among them), and the form for a folder Office does not know yet.
- */
+/** For a tab without a project: the closed tabs to open again, and a folder of this computer to open as a project. */
 function OpenProject() {
-  const projects = useProjects().data ?? [];
-  const { closed, fresh } = useTabs();
-  const [creating, setCreating] = useState(false);
-  const hidden = projects.filter((p) => closed.includes(p.id));
-  const earlier = (useTalks().data ?? []).filter((t) => !fresh.includes(t.id));
   return (
     <Card className="min-w-0 flex-[2_1_320px]">
       <CardHeader>
@@ -53,29 +42,10 @@ function OpenProject() {
       </CardHeader>
       <CardContent>
         <div className="flex flex-col items-start gap-2">
-          {hidden.length > 0 && <p className="text-[13px] text-ink-3">Tabs you closed:</p>}
-          {hidden.map((p) => (
-            <Button key={p.id} variant="secondary" size="sm" className={WRAP} onClick={() => selectProject(p.id)}>
-              {p.name}
-            </Button>
-          ))}
-          {earlier.length > 0 && <p className="text-[13px] text-ink-3">Earlier talks:</p>}
-          {earlier.map((t) => (
-            <Button key={t.id} variant="secondary" size="sm" className={WRAP} onClick={() => setTabs((tabs) => openFresh(tabs, t.id))}>
-              {t.title}
-            </Button>
-          ))}
+          <ClosedTabsList />
           <p className="text-[13px] text-ink-3">A folder that is already on this computer:</p>
-          <Button variant="secondary" size="sm" onClick={() => setCreating(true)}>
-            Open an existing folder…
-          </Button>
+          <OpenFolder variant="secondary" />
         </div>
-        <Dialog open={creating} onOpenChange={setCreating}>
-          <DialogContent>
-            <DialogTitle>New project</DialogTitle>
-            <NewProjectForm onDone={() => setCreating(false)} />
-          </DialogContent>
-        </Dialog>
       </CardContent>
     </Card>
   );
@@ -187,7 +157,7 @@ export function Assistant({ simple = false }: { simple?: boolean }) {
                 <div className="mb-4 flex flex-col items-start gap-2">
                   <p className="text-[13px] text-ink-3">Not sure how to start? Pick one and change it to your own:</p>
                   {EXAMPLES.map((example) => (
-                    <Button key={example} variant="secondary" size="sm" className={WRAP} onClick={() => setDraft(example)}>
+                    <Button key={example} variant="secondary" size="sm" className={buttonWrap} onClick={() => setDraft(example)}>
                       {example}
                     </Button>
                   ))}

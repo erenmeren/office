@@ -1,8 +1,11 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
+import { ClosedTabs } from '@/components/closed-tabs';
+import { OpenFolder } from '@/components/open-folder';
 import { TabBar } from '@/components/ui/tab-bar';
-import { del, post } from '@/lib/api';
+import { del, post, put } from '@/lib/api';
 import { selectProject, useProject } from '@/lib/project';
 import { useProjects, useTalks } from '@/lib/queries';
 import { useSimpleMode } from '@/lib/simple-mode';
@@ -20,6 +23,7 @@ export function ProjectTabs({ className }: { className?: string }) {
   const simple = useSimpleMode();
   const router = useRouter();
   const pathname = usePathname();
+  const qc = useQueryClient();
   const mounted = useMounted();
   const talks = useTalks().data;
   // a new tab is named by how the owner began in it, once something is said there
@@ -49,5 +53,28 @@ export function ProjectTabs({ className }: { className?: string }) {
     if (made) setTabs((t) => openFresh(t, made.conversationId));
     router.push(assistant);
   };
-  return <TabBar label="Projects" tabs={items} current={frontId} onSelect={select} onClose={close} onAdd={add} addLabel="New tab" className={className} />;
+  const rename = async (id: string, name: string) => {
+    // a project's tab carries the project's name; a tab without a project has a name of its own
+    await (tabs.fresh.includes(id) ? put(`/conductor/tabs/${id}`, { title: name }) : put(`/projects/${id}`, { name })).catch(() => undefined);
+    await Promise.all([qc.invalidateQueries({ queryKey: ['projects'] }), qc.invalidateQueries({ queryKey: ['conductor'] })]);
+  };
+  return (
+    <TabBar
+      label="Projects"
+      tabs={items}
+      current={frontId}
+      onSelect={select}
+      onClose={close}
+      onAdd={add}
+      addLabel="New tab"
+      onRename={(id, name) => void rename(id, name)}
+      actions={
+        <>
+          <OpenFolder />
+          <ClosedTabs />
+        </>
+      }
+      className={className}
+    />
+  );
 }

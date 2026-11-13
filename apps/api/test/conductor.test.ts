@@ -69,6 +69,16 @@ describe('conductor', () => {
     expect(sent.statusCode, sent.body).toBe(201);
     // a talk without a project is listed by how the owner began it, so a closed one can be opened again
     expect((await req('GET', '/conductor/tabs')).json()).toMatchObject([{ id: conversationId, title: 'Add dark mode to the shop' }]);
+    // the owner can name a tab: the name replaces the first words, and a named tab is listed before anything is said in it
+    const rename = (id: string, title: string) => t.app.inject({ method: 'PUT', url: `/conductor/tabs/${id}`, headers: { cookie }, payload: { title } });
+    expect((await rename(conversationId, '  Shop ideas ')).statusCode).toBe(200);
+    const named = (await req('POST', '/conductor/tabs')).json().conversationId;
+    expect((await rename(named, 'Later')).statusCode).toBe(200);
+    expect((await req('GET', '/conductor/tabs')).json()).toMatchObject([{ id: named, title: 'Later' }, { id: conversationId, title: 'Shop ideas' }]);
+    expect((await rename(named, ' ')).statusCode).toBe(400);
+    expect((await rename('nope', 'x')).statusCode).toBe(404);
+    expect((await close(named)).statusCode).toBe(204);
+    expect(await t.prisma.conversation.findUnique({ where: { id: named } })).toBeNull();
     await t.app.scheduler.tick();
     const { spec } = await w.waitFor('run.assign');
     expect(spec).toMatchObject({ kind: 'chat', cwd: home.repoPath, allowedTools: [], noBuiltinTools: true, skills: [], subagents: [] });
@@ -87,6 +97,8 @@ describe('conductor', () => {
     const home = await t.prisma.project.findUniqueOrThrow({ where: { slug: CONDUCTOR_PROJECT_SLUG } });
     const shop = (await req('GET', `/conductor?project=${projectId}`)).json();
     expect(shop).toMatchObject({ project: { id: projectId, slug: 'shop', name: 'Shop' }, conversation: { kind: 'human', aboutProjectId: projectId }, missions: [] });
+    // a project's tab carries the project's name: it is not renamed as a talk
+    expect((await t.app.inject({ method: 'PUT', url: `/conductor/tabs/${shop.conversation.id}`, headers: { cookie }, payload: { title: 'x' } })).statusCode).toBe(409);
     // a repeated GET keeps the one conversation, and closing the tab does not remove it
     expect((await t.app.inject({ method: 'DELETE', url: `/conductor/tabs/${shop.conversation.id}`, headers: { cookie } })).statusCode).toBe(204);
     expect((await req('GET', `/conductor?project=${projectId}`)).json().conversation.id).toBe(shop.conversation.id);

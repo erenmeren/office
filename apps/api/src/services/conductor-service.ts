@@ -11,10 +11,12 @@ import type { EventHub, Outbox } from './event-hub.js';
 import { queueMessageCreated, toMessageView } from './message-service.js';
 import { createMission } from './mission-service.js';
 import { projectDecisions, searchMemory } from './memory-service.js';
-import { projectAgents } from './project-service.js';
+import { projectAgents, slugOf } from './project-service.js';
 
 export { CONDUCTOR_SLUG } from '@office/shared';
 export const CONDUCTOR_PROJECT_SLUG = 'office-conductor';
+/** The title a tab's conversation has until the owner names the tab. */
+export const TAB_TITLE = 'Conductor';
 
 const LIVE_MISSION = ['planning', 'plan_failed', 'awaiting_approval', 'approved', 'running', 'review'] as const;
 
@@ -56,7 +58,7 @@ export async function conductorHome(prisma: PrismaClient, config: Config) {
  * (`aboutProjectId`); a new tab has none until `create_project` gives it one.
  */
 export function openTab(prisma: PrismaClient, home: { id: string }, agent: { id: string }, aboutProjectId?: string): Promise<Conversation> {
-  return prisma.conversation.create({ data: { projectId: home.id, kind: 'human', agentIds: [agent.id], includesOwner: true, title: 'Conductor', aboutProjectId } });
+  return prisma.conversation.create({ data: { projectId: home.id, kind: 'human', agentIds: [agent.id], includesOwner: true, title: TAB_TITLE, aboutProjectId } });
 }
 
 /** A project's tab, made on first use. The oldest one counts, so two first calls at once still agree. */
@@ -81,17 +83,6 @@ async function projectBySlug(prisma: PrismaClient, slug: string) {
   const slugs = (await prisma.project.findMany({ where: { isSystem: false }, select: { slug: true } })).map((p) => p.slug);
   throw new ConductorToolError('not_found', `unknown project "${slug}"; projects: ${slugs.join(', ') || 'none'}`);
 }
-
-/** A slug from a project's name: ASCII letters and digits with dashes between. The Turkish dotless ı has no Unicode decomposition, so it is mapped by hand. */
-const slugOf = (name: string) =>
-  name
-    .replace(/ı/g, 'i')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .slice(0, 40)
-    .replace(/^-+|-+$/g, '');
 
 const team = async (prisma: PrismaClient, projectId: string) =>
   (await projectAgents(prisma, projectId)).map((a) => ({ slug: a.slug, name: a.name, role: a.role }));

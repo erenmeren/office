@@ -81,6 +81,24 @@ describe('project settings, agents, audit, artifacts', () => {
     rmSync(fresh, { recursive: true, force: true });
   });
 
+  it('a folder opened without a slug gets the first free one from its name', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'office-open-'));
+    try {
+      const post = (payload: object) => t.app.inject({ method: 'POST', url: '/projects', headers: { cookie }, payload });
+      const first = await post({ name: 'Şık Dükkanım', repoPath: join(dir, 'a') });
+      expect(first.statusCode, first.body).toBe(201);
+      expect(first.json()).toMatchObject({ name: 'Şık Dükkanım', slug: 'sik-dukkanim', repoPath: join(dir, 'a') });
+      // the same name again is a second project with the next free slug, not a conflict
+      expect((await post({ name: 'Şık Dükkanım', repoPath: join(dir, 'b') })).json()).toMatchObject({ slug: 'sik-dukkanim-2' });
+      // a name without a letter or digit still gets a slug
+      expect((await post({ name: '!!!', repoPath: join(dir, 'c') })).json()).toMatchObject({ slug: 'project' });
+      // a slug that was given and is taken stays a conflict
+      expect((await post({ name: 'X', slug: 'sik-dukkanim', repoPath: join(dir, 'd') })).statusCode).toBe(409);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('project without repoPath gets a fresh repository under <dataDir>/repos/<slug>', async () => {
     const dir = resolve(t.config.dataDir, 'repos', 'fresh');
     await rm(dir, { recursive: true, force: true });

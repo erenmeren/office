@@ -97,3 +97,14 @@ export async function deleteProject(db: PrismaClient, projectId: string): Promis
   });
   return project;
 }
+
+/** A slug from a project's name: ASCII letters and digits with dashes between. The Turkish dotless ı has no Unicode decomposition, so it is mapped by hand. */
+export const slugOf = (name: string) =>
+  name
+    .replace(/ı/g, 'i')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, '');

@@ -11,11 +11,11 @@ import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { dailyLimit, spentToday } from '../services/budget-service.js';
 import { expireDailyBudgetApprovals } from '../services/budget-service.js';
-import { deleteProject, getSettings, projectAgents, setProjectAgents, updateSettings } from '../services/project-service.js';
+import { deleteProject, getSettings, projectAgents, setProjectAgents, slugOf, updateSettings } from '../services/project-service.js';
 
 const CreateProject = z.object({
   name: z.string().min(1),
-  slug: z.string().min(1),
+  slug: z.string().min(1).optional(),
   // without repoPath a new repository is created under <projectsDir>/<slug> (greenfield project)
   repoPath: z.string().min(1).optional(),
   defaultBranch: z.string().min(1).optional(),
@@ -80,10 +80,18 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
   app.get('/projects', async () => app.prisma.project.findMany({ where: { isSystem: false }, orderBy: { createdAt: 'asc' } }));
 
   app.post('/projects', async (req, reply) => {
-    const data = CreateProject.parse(req.body);
-    if (await app.prisma.project.findUnique({ where: { slug: data.slug } })) {
-      throw new HttpError(409, 'conflict');
+    const given = CreateProject.parse(req.body);
+    const taken = async (slug: string) => !!(await app.prisma.project.findUnique({ where: { slug } }));
+    let slug = given.slug;
+    if (slug) {
+      if (await taken(slug)) throw new HttpError(409, 'conflict');
+    } else {
+      // a folder opened by name only: the first slug no project carries (nor a folder, when Office makes the folder)
+      const base = slugOf(given.name) || 'project';
+      slug = base;
+      for (let n = 2; (await taken(slug)) || (!given.repoPath && existsSync(resolve(opts.config.projectsDir, slug))); n++) slug = `${base}-${n}`;
     }
+    const data = { ...given, slug };
     let repoPath = data.repoPath;
     if (!repoPath) {
       // absolute: the worker's allowedRoots check and git itself must not depend on the API's cwd
