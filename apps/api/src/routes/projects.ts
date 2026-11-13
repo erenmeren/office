@@ -48,7 +48,7 @@ export function starterFiles(name: string, branch: string): Record<string, strin
   return {
     'CLAUDE.md': `# ${name}
 
-Managed by Claude Agent Office. Agents work on \`office/*\` branches in their own worktrees and commit there; the owner integrates into \`${branch}\`.
+Managed by Claude Agent Office. Agents work on \`office/*\` branches in their own worktrees and commit there; Office merges finished work into \`${branch}\` in this folder when that is safe, otherwise it stays on its branch.
 
 ## About
 
@@ -122,7 +122,8 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
         if (head) data.defaultBranch = head;
       }
     }
-    const project = await app.prisma.project.create({ data: { ...data, repoPath } });
+    // finished work goes into the folder by itself, as in a project the Conductor makes (owner, 2026-11-13)
+    const project = await app.prisma.project.create({ data: { ...data, repoPath, settings: { integrateWhenDone: true } } });
     // the owner chose this folder: the worker on this machine may work in it from now on (persisted on the worker)
     const local = app.gateway.localWorkerId();
     if (local && !app.gateway.onlineWorkers().some((w) => w.local(repoPath))) {

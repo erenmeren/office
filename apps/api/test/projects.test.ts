@@ -53,6 +53,18 @@ describe('project settings, agents, audit, artifacts', () => {
     expect(rows[0].detail.keys).toEqual(['checkCommand']);
   });
 
+  it("a project the owner makes puts finished work into its folder: the owner's own folder or one Office makes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'office-lands-'));
+    const post = (payload: object) => t.app.inject({ method: 'POST', url: '/projects', headers: { cookie }, payload });
+    for (const payload of [{ name: 'Lands here', repoPath: dir }, { name: 'Lands there' }]) {
+      const res = await post(payload);
+      expect(res.statusCode).toBe(201);
+      expect((await call('GET', `/projects/${res.json().id}/settings`)).json()).toMatchObject({ integrateWhenDone: true });
+      if (!('repoPath' in payload)) rmSync(res.json().repoPath, { recursive: true, force: true });
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('an existing repository gives the project its checked-out branch as the default branch', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'office-master-'));
     execFileSync('git', ['init', '-q', '-b', 'master'], { cwd: dir });

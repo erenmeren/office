@@ -1111,6 +1111,12 @@ A new folder from the folder picker, 2026-11-13 (owner: "it should be able to op
 - Verified: the API test and the browser test were written first and failed (201 instead of 400; no such field), then passed. API suite 272 (a first run under load had 8 mission tests time out at 5 s; the rerun was clean), typecheck clean, web unit 63, web lint 0 errors, browser suite 26 passed and 1 skipped (the real `claude` terminal test).
 - Desktop app rebuilt from `159282f` and installed the same way as before: the owner's app had no work live, was asked to quit by its own PID, and was started again; projects, missions and messages unchanged, worker online. The new field was not clicked inside the installed window.
 
+Finished work into the folder for every project, 2026-11-13 (owner: "from now on they should make the changes inside that folder"). Only projects the assistant made had `integrateWhenDone`; in a folder the owner opened, the work stayed on a branch.
+
+- `POST /projects` stores `integrateWhenDone: true`; the starter `CLAUDE.md` says that Office merges finished work when that is safe.
+- Migration `20261113100000_integrate_existing_projects`: one `UPDATE` that gives the setting to the projects that exist (not the system project, not one that carries the key). Checked on a throwaway database with four sample rows: two updated, an explicit `false` and the system project untouched.
+- Verified: the API test was written first and failed (`false`), then passed. API suite 273; one orchestration test (a plan run waiting for the daily budget) now sets manual integration, because with the new setting its second mission waits behind the first. Typecheck clean. No web change, so the browser suite was not run again.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):

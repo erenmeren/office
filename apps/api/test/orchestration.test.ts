@@ -595,7 +595,8 @@ describe('orchestration', () => {
   it('a plan run waits for the daily budget like a task and raises the approval', async () => {
     s = await setup();
     const { w } = await s.approved(2); // its plan run cost 0.5
-    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 0.4 });
+    // manual integration: where finished work goes into the folder by itself, the second mission would wait behind the first
+    await s.req('PUT', `/projects/${s.projectId}/settings`, { dailyBudgetUsd: 0.4, integrateWhenDone: false });
     const res = await s.req('POST', '/missions', { projectId: s.projectId, request: 'Second mission' });
     await s.t.app.scheduler.tick();
     await sleep(100);
