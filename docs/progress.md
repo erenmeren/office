@@ -1102,6 +1102,7 @@ Tab row: a way back, a folder, a name, 2026-11-13 (owner: "I deleted the project
 - "Open folder…" in the row and in the card: pick a folder and it is a project with a tab, named after the folder; the slug is derived (`POST /projects` without `slug`). Picking a folder that is a project already brings its tab back and makes no second project.
 - The tab in front can be renamed (pencil, or a double click): a project's tab renames the project, a tab without a project gets a name of its own (`PUT /conductor/tabs/:id`).
 - Verified: API tests written first (`projects.test.ts`: slug from the name, next free one, a given taken slug still 409; `conductor.test.ts`: naming a tab, a named unused tab listed and still removed on close, a project's tab refused), the suite, typecheck, web lint, e2e 25 passed and 1 skipped twice in a row on the separate stack (the three new or changed tests failed first). Screenshots of the row at 1280 and 390 px.
+- Desktop app rebuilt from `066f3e3` and installed. The owner's app was open with no work live (no run, mission or manual session): it was asked to quit by its own PID, the build was installed, and the app was started again from the shell (the owner's desktop session was the active one). After the start: API and web answer, the window loads the tab row's requests, three projects, three missions and 25 messages as before. Not verified: the new buttons clicked inside the installed window.
 
 ## Desktop app (2026-11-03)
 
