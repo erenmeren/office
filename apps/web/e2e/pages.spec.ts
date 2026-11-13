@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { API, authed, expect, expectQuiet, test } from './fixtures';
@@ -437,6 +437,34 @@ authed('a folder of this computer is opened as a project from the tab row; openi
     await pick();
     await expect(tab).toHaveAttribute('aria-current', 'true');
     expect(await mine()).toHaveLength(1);
+  } finally {
+    for (const p of await mine()) await request.delete(`${API}/projects/${p.id}`);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+authed('a folder that does not exist yet is named in the folder picker, made, and opened as a project', async ({ page, request }) => {
+  const dir = mkdtempSync(join(tmpdir(), 'office-e2e-new-'));
+  const made = join(dir, 'fresh-idea');
+  const mine = async () => ((await (await request.get(`${API}/projects`)).json()) as { id: string; repoPath: string }[]).filter((p) => p.repoPath === made);
+  try {
+    await page.route(`${API}/browse**`, (route) => route.fulfill({ json: { path: dir, parent: null, isRepo: false, dirs: [], roots: [] } }));
+    await page.goto('/conductor');
+    const tabs = page.getByRole('navigation', { name: 'Projects' });
+    await tabs.getByRole('button', { name: 'Open folder…' }).click();
+    const dialog = page.getByRole('dialog');
+    // with a name typed, the button makes that folder inside the one shown
+    await expect(dialog.getByRole('button', { name: 'Use this folder' })).toBeVisible();
+    await dialog.getByLabel('New folder name').fill('fresh-idea');
+    await dialog.getByRole('button', { name: 'Make new folder' }).click();
+    await expect(tabs.getByRole('button', { name: 'fresh-idea', exact: true })).toHaveAttribute('aria-current', 'true');
+    expect(await mine()).toHaveLength(1);
+    // a repository of its own, with the starter notes every agent reads first
+    expect(existsSync(join(made, '.git'))).toBe(true);
+    expect(existsSync(join(made, 'CLAUDE.md'))).toBe(true);
+    // the name is not kept for the next folder
+    await tabs.getByRole('button', { name: 'Open folder…' }).click();
+    await expect(dialog.getByLabel('New folder name')).toHaveValue('');
   } finally {
     for (const p of await mine()) await request.delete(`${API}/projects/${p.id}`);
     rmSync(dir, { recursive: true, force: true });

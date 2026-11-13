@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { rm, stat, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -74,11 +74,19 @@ describe('project settings, agents, audit, artifacts', () => {
     expect(execFileSync('git', ['log', '--oneline'], { cwd: fresh }).toString()).toContain('Initial commit');
     expect(execFileSync('git', ['ls-files'], { cwd: fresh }).toString().trim().split('\n').sort()).toEqual(['.gitignore', 'CLAUDE.md']);
     expect(readFileSync(join(fresh, 'CLAUDE.md'), 'utf8')).toContain('# E');
-    const missing = join(fresh, 'deeper', 'new');
+    // a folder that does not exist yet is made, with the folders above it
+    const plain = mkdtempSync(join(tmpdir(), 'office-plain-'));
+    const missing = join(plain, 'deeper', 'new');
     expect((await post({ name: 'N', slug: 'm-new', repoPath: missing, defaultBranch: 'trunk' })).statusCode).toBe(201);
     expect(execFileSync('git', ['branch', '--show-current'], { cwd: missing }).toString().trim()).toBe('trunk');
+    // but not inside somebody's repository: a repository in a repository would be committed into the outer one
+    const nested = await post({ name: 'X', slug: 'm-nested', repoPath: join(dir, 'not', 'yet') });
+    expect(nested.statusCode).toBe(400);
+    expect(nested.json()).toMatchObject({ error: 'not_repo_root', message: expect.stringContaining(`inside the repository at ${dir}`) });
+    expect(existsSync(join(dir, 'not'))).toBe(false);
     rmSync(dir, { recursive: true, force: true });
     rmSync(fresh, { recursive: true, force: true });
+    rmSync(plain, { recursive: true, force: true });
   });
 
   it('a folder opened without a slug gets the first free one from its name', async () => {

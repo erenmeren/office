@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { ProjectSettingsSchema, type ProjectSettings } from '@office/shared';
@@ -73,6 +73,9 @@ build/
 /** The repository root that holds `path`, or null outside any repository. */
 const repoRootOf = (path: string) => run('git', ['rev-parse', '--show-toplevel'], { cwd: path }).then((r) => resolve(r.stdout.trim())).catch(() => null);
 
+/** `path`, or the nearest folder above it that exists. */
+const existing = (path: string): string => (existsSync(path) ? path : existing(dirname(path)));
+
 export async function projectRoutes(app: FastifyInstance, opts: { config: Config }) {
   app.get('/settings/runtime', async () => ({ leaseSeconds: opts.config.leaseSeconds, heartbeatSeconds: opts.config.heartbeatSeconds }));
 
@@ -103,10 +106,12 @@ export async function projectRoutes(app: FastifyInstance, opts: { config: Config
     }
     else {
       repoPath = resolve(repoPath);
-      const root = existsSync(repoPath) ? await repoRootOf(repoPath) : null;
+      // a folder that does not exist yet is judged by where it would be made
+      const root = await repoRootOf(existing(repoPath));
       if (root && root !== repoPath) {
-        // a folder inside somebody's repository would make the whole repository the project's working tree
-        throw new HttpError(400, 'not_repo_root', `${repoPath} is inside the repository at ${root}; give that path, or an empty folder for a new repository`);
+        // a folder inside somebody's repository would make the whole repository the project's working tree,
+        // and a new repository made there would be committed into the outer one
+        throw new HttpError(400, 'not_repo_root', `${repoPath} is inside the repository at ${root}; give that path, or a folder outside it for a new repository`);
       }
       if (!root) {
         // the owner's own new folder (or a path that does not exist yet): make it a repository

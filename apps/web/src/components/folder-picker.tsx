@@ -4,11 +4,17 @@ import { useState } from 'react';
 import { ArrowUp, FolderGit2, Folder } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { useBrowse } from '@/lib/queries';
 
-/** Picks a folder on the machine the API runs on (your home, the data directory, the workers' roots). */
+/**
+ * Picks a folder on the machine the API runs on (your home, the data directory, the workers' roots), or names a new
+ * one inside the folder shown: that path is picked, and whoever takes it makes the folder (`POST /projects` does).
+ */
 export function FolderPicker({ open, onOpenChange, initial, onPick }: { open: boolean; onOpenChange: (open: boolean) => void; initial?: string; onPick: (path: string) => void }) {
   const [path, setPath] = useState<string | undefined>(initial || undefined);
+  const [name, setName] = useState('');
+  const fresh = name.trim();
   const q = useBrowse(path, open);
   const d = q.data;
   return (
@@ -34,10 +40,11 @@ export function FolderPicker({ open, onOpenChange, initial, onPick }: { open: bo
             </li>
           ))}
         </ul>
+        <Input aria-label="New folder name" placeholder="Or type a name to make a new folder here" value={name} onChange={(e) => setName(e.target.value)} />
         <div className="flex justify-end gap-2">
           <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button type="button" size="sm" disabled={!d} onClick={() => { onPick(d!.path); onOpenChange(false); }}>
-            Use this folder
+          <Button type="button" size="sm" disabled={!d} onClick={() => { onPick(fresh ? `${d!.path}/${fresh}` : d!.path); setName(''); onOpenChange(false); }}>
+            {fresh ? 'Make new folder' : 'Use this folder'}
           </Button>
         </div>
       </DialogContent>

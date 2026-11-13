@@ -1104,6 +1104,12 @@ Tab row: a way back, a folder, a name, 2026-11-13 (owner: "I deleted the project
 - Verified: API tests written first (`projects.test.ts`: slug from the name, next free one, a given taken slug still 409; `conductor.test.ts`: naming a tab, a named unused tab listed and still removed on close, a project's tab refused), the suite, typecheck, web lint, e2e 25 passed and 1 skipped twice in a row on the separate stack (the three new or changed tests failed first). Screenshots of the row at 1280 and 390 px.
 - Desktop app rebuilt from `066f3e3` and installed. The owner's app was open with no work live (no run, mission or manual session): it was asked to quit by its own PID, the build was installed, and the app was started again from the shell (the owner's desktop session was the active one). After the start: API and web answer, the window loads the tab row's requests, three projects, three missions and 25 messages as before. Not verified: the new buttons clicked inside the installed window.
 
+A new folder from the folder picker, 2026-11-13 (owner: "it should be able to open in a new folder"). "Open folder…" could only take a folder that existed.
+
+- The folder picker has a "New folder name" field: with a name typed the button reads "Make new folder" and picks `<folder shown>/<name>`; `POST /projects` already made a missing folder into a repository with the starter `CLAUDE.md`.
+- `POST /projects` now refuses a path that does not exist yet when it lies inside a repository (it used to make a repository in a repository there): the check looks at the nearest existing folder above it.
+- Verified: the API test and the browser test were written first and failed (201 instead of 400; no such field), then passed. API suite 272 (a first run under load had 8 mission tests time out at 5 s; the rerun was clean), typecheck clean, web unit 63, web lint 0 errors, browser suite 26 passed and 1 skipped (the real `claude` terminal test).
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):
