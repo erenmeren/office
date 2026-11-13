@@ -133,6 +133,15 @@ export interface CheckResult {
   command: string;
   artifactId: string | null;
 }
+
+/** A talk with the assistant that belongs to no project and has something said in it; `title` is how the owner began. */
+export interface Talk {
+  id: string;
+  createdAt: string;
+  title: string;
+}
+// under the assistant's own key, so what refreshes its page refreshes this list too
+export const useTalks = () => useQuery({ queryKey: ['conductor', 'tabs'], queryFn: () => api<Talk[]>('/conductor/tabs') });
 /** Mission-era fields of a task; plain Phase 1–3 tasks carry empty values. */
 export interface TaskPlanFields {
   key: string | null;

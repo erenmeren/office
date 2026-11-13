@@ -69,6 +69,11 @@ export async function executeTool(
   try {
     const args = parseToolArgs(name as OfficeToolName, rawArgs);
     if (CONDUCTOR_ONLY.includes(name as OfficeToolName)) return { ok: true, result: await runConductorTool(prisma, hub, config, ctx.run, name, args) };
+    // a Conductor run answers one tab: its inbox is that tab's mail, the other tabs' waits for their own runs
+    if (conductor && name === 'read_inbox' && ctx.run.conversationId) {
+      const { agentId, projectId, conversationId } = ctx.run;
+      return { ok: true, result: { messages: await readInbox(prisma, { agentId, projectId, conversationId, limit: (args as { limit: number }).limit }) } };
+    }
     return { ok: true, ...(await run(prisma, hub, config, ctx, name as OfficeToolName, args)) };
   } catch (err) {
     if (err instanceof ZodError) return fail('invalid_args', err.message);

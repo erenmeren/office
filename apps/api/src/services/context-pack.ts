@@ -9,7 +9,8 @@ const line = (e: Pick<MemoryEntry, 'id' | 'type' | 'title' | 'content'>) =>
 
 export async function buildContextPack(
   db: Db,
-  a: { projectId: string; agentId: string; taskText: string; maxChars: number },
+  /** `conversationId`: the inbox section lists only that conversation's mail (a Conductor run answers one tab) */
+  a: { projectId: string; agentId: string; taskText: string; maxChars: number; conversationId?: string },
 ): Promise<{ text: string; entryIds: string[]; summaryIds: string[]; inboxCount: number }> {
   const verified = { projectId: a.projectId, status: 'verified' as const, supersededById: null };
   const entryIds: string[] = [];
@@ -48,7 +49,7 @@ export async function buildContextPack(
   }
 
   const inbox = await db.messageDelivery.findMany({
-    where: { recipientAgentId: a.agentId, status: { in: ['pending', 'delivered'] }, message: { projectId: a.projectId } },
+    where: { recipientAgentId: a.agentId, status: { in: ['pending', 'delivered'] }, message: { projectId: a.projectId, conversationId: a.conversationId } },
     include: { message: { select: { body: true } } },
     orderBy: { createdAt: 'asc' },
   });

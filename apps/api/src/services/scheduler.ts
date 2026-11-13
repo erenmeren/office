@@ -12,7 +12,7 @@ import { gate, missionGate, requestBudgetApproval } from './budget-service.js';
 import { getSettings } from './project-service.js';
 import { expireApprovals } from './approval-service.js';
 import { embedMissingMemory } from './memory-service.js';
-import { CONDUCTOR_SLUG, announceSettledMissions, missionAhead } from './conductor-service.js';
+import { CONDUCTOR_PROJECT_SLUG, CONDUCTOR_SLUG, announceSettledMissions, missionAhead } from './conductor-service.js';
 import { agentDefault, codexUnfit, routeTask } from './router-service.js';
 
 const SUMMARIZER_SLUG = 'office-summarizer';
@@ -307,10 +307,13 @@ export class Scheduler {
       orderBy: { createdAt: 'asc' },
     });
     const offered = new Set<string>();
+    // every tab of the Conductor is a conversation in its home project: a run there takes its own tab's mail only
+    const home = runs.length ? await this.prisma.project.findUnique({ where: { slug: CONDUCTOR_PROJECT_SLUG }, select: { id: true } }) : null;
     for (const run of runs) {
       const messages = await this.prisma.message.findMany({
         where: {
           projectId: run.projectId,
+          ...(run.projectId === home?.id && run.conversationId && { conversationId: run.conversationId }),
           createdAt: { gt: run.createdAt },
           deliveries: { some: { recipientAgentId: run.agentId, status: 'pending' } },
         },
@@ -401,10 +404,14 @@ export class Scheduler {
         // a Codex agent has no office tools to read or answer mail with
         if ((await agentDefault(this.prisma, agent)).runtime !== 'claude') continue;
         const scope = { agentId: wake.agentId, projectId: wake.projectId };
-        const busy = await this.prisma.taskRun.count({
+        const live = await this.prisma.taskRun.findMany({
           where: { ...scope, status: { in: ['queued', 'running', 'waiting_reply', 'waiting_approval'] } },
+          select: { conversationId: true },
         });
-        if (busy) continue;
+        // the Conductor answers each tab in a run of its own: only a tab it is already answering in waits
+        const perTab = agent.slug === CONDUCTOR_SLUG;
+        if (live.length && !perTab) continue;
+        const answering = new Set(live.map((r) => r.conversationId));
         // shortcut: one count per pending delivery; fine for small inboxes, batch it if inboxes grow large
         const tried = await Promise.all(
           wake.deliveries.map(async (d) => {
@@ -421,7 +428,7 @@ export class Scheduler {
           }),
         );
         const next = tried
-          .filter((x) => x.attempts < 2)
+          .filter((x) => x.attempts < 2 && !answering.has(x.d.conversationId))
           .sort((x, y) => x.attempts - y.attempts || x.d.createdAt.getTime() - y.d.createdAt.getTime())[0];
         if (!next) continue;
         const [project, conversation] = await Promise.all([

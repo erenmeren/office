@@ -626,11 +626,14 @@ model Conversation {
   agentIds      String[]
   includesOwner Boolean          @default(false)
   sdkSessionId  String?
+  /// A Conductor conversation is a tab: this is the project the tab belongs to, null while it has none yet.
+  aboutProjectId String?
   messages      Message[]
   runs          TaskRun[]
 
   @@index([projectId, updatedAt])
   @@index([taskId])
+  @@index([aboutProjectId])
 }
 
 model Message {

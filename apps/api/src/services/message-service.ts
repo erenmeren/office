@@ -227,11 +227,13 @@ async function sendInTx(db: Db, limits: MessageLimits, input: SendInput): Promis
 
 export async function readInbox(
   db: Db,
-  input: { agentId: string; projectId: string; limit: number },
+  /** `conversationId`: only that conversation's mail (a Conductor run answers one tab) */
+  input: { agentId: string; projectId: string; limit: number; conversationId?: string },
 ): Promise<MessageView[]> {
   const messages = await db.message.findMany({
     where: {
       projectId: input.projectId,
+      conversationId: input.conversationId,
       deliveries: { some: { recipientAgentId: input.agentId, status: { in: ['pending', 'delivered'] } } },
     },
     orderBy: { createdAt: 'asc' },

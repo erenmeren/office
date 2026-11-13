@@ -2,19 +2,15 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronRight } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { cn } from 'cn';
 import { AppSidebar, NAV, isActive, useNav } from '@/components/app-sidebar';
-import { NewProjectForm } from '@/components/new-project-form';
+import { ProjectTabs } from '@/components/project-tabs';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { post } from '@/lib/api';
-import { selectProject, useProject } from '@/lib/project';
-import { useBudget, useMe, useProjects } from '@/lib/queries';
-import { useMounted } from '@/lib/use-mounted';
+import { useProject } from '@/lib/project';
+import { useBudget, useMe } from '@/lib/queries';
 
 /** Today's spend against the project's daily limit. */
 function BudgetBar({ projectId }: { projectId?: string }) {
@@ -26,47 +22,6 @@ function BudgetBar({ projectId }: { projectId?: string }) {
         Today ${budget.spentTodayUsd.toFixed(2)} / ${budget.dailyBudgetUsd.toFixed(2)}
       </span>
       <Progress value={budget.dailyBudgetUsd ? (budget.spentTodayUsd / budget.dailyBudgetUsd) * 100 : 0} label="Daily budget used" className="h-1" />
-    </div>
-  );
-}
-
-const NEW_PROJECT = '__new__';
-
-/** Project switcher; the last item opens the new-project form. */
-function ProjectSwitcher() {
-  const projects = useProjects().data;
-  const project = useProject();
-  const [creating, setCreating] = useState(false);
-  // the stored selection is read on the client only: render after hydration
-  if (!useMounted() || !projects) return <span className="truncate">Office</span>;
-  const items = [...projects.map((p) => ({ value: p.id, label: p.name })), { value: NEW_PROJECT, label: 'New project…' }];
-  return (
-    <div>
-      {project ? (
-        <Select items={items} value={project.id} onValueChange={(v) => (v === NEW_PROJECT ? setCreating(true) : selectProject(String(v)))}>
-          <SelectTrigger size="sm" aria-label="Project" className="border-0 text-ink-3 hover:text-ink">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent align="start">
-            {items.map((i) => (
-              <SelectItem key={i.value} value={i.value}>
-                {i.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : (
-        // no project left: the switcher has nothing to select, so the form gets its own button
-        <Button variant="ghost" size="sm" onClick={() => setCreating(true)}>
-          New project…
-        </Button>
-      )}
-      <Dialog open={creating} onOpenChange={setCreating}>
-        <DialogContent>
-          <DialogTitle>New project</DialogTitle>
-          <NewProjectForm onDone={() => setCreating(false)} />
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -86,8 +41,6 @@ function AppHeader() {
   return (
     <header className="glass flex min-h-16 flex-wrap items-center gap-x-5 gap-y-3 rounded-[20px] py-2.5 pr-3 pl-5">
       <div className="flex min-w-0 flex-1 items-center gap-2 text-ink-3">
-        <ProjectSwitcher />
-        <ChevronRight className="size-3.5 shrink-0" aria-hidden />
         <span className="font-medium text-ink">{page}</span>
       </div>
       <BudgetBar projectId={project?.id} />
@@ -125,6 +78,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="aurora flex min-h-dvh">
       <AppSidebar className="hidden lg:flex" />
       <div className="flex min-w-0 flex-1 flex-col p-4 pb-12">
+        <ProjectTabs className="mb-3" />
         <AppHeader />
         {/* the office floor is a canvas and takes the whole width */}
         <main className={cn('mx-auto w-full flex-1 pt-6', pathname === '/office' ? 'max-w-[2200px]' : 'max-w-7xl')}>{children}</main>

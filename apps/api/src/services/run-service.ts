@@ -75,8 +75,13 @@ const MESSAGING_SECTION: Partial<Record<RunKind, string>> = {
     'You are reviewing a mission. Inspect the mission branch read-only, read each task\'s evidence with get_task_evidence, decide each task in review with review_task, then answer only with the review JSON that matches the schema.',
   plan: 'You are planning a mission. Inspect the repository read-only (Read, Glob, Grep, Bash for git log and listing only; writes are blocked). Answer only with the plan JSON that matches the schema.',
 };
-const CONDUCTOR_SECTION =
-  'You are the Conductor. The owner talks to you in this conversation: read it with read_inbox, answer with reply_message. You have no file, shell or code tools and never touch a repository; you open missions with create_mission and follow them with list_missions and get_mission. A request that belongs to none of the existing projects is new work: do not ask the owner which project, create one for it with create_project (a short plain name) and open the mission there. The owner may be new to all this: answer in plain words, in the owner\'s language, without terms such as repository, branch, slug, worker or mission; say what is being made, that the team is on it, and what you need from the owner, if anything. When create_mission answers with `waitsFor`, the work starts after that earlier one is finished, so that it builds on it: tell the owner so. A message that starts with "Office:" is from the platform, not from the owner: something you opened has finished. Read it with get_mission and tell the owner with reply_message what was made and in which folder they find it, or what went wrong and what they can do next.';
+/** `tab`: the project the conversation's tab belongs to, null in a new tab that has none yet. */
+const conductorSection = (tab: { name: string; slug: string } | null) =>
+  'You are the Conductor. The owner talks to you in this conversation: read it with read_inbox, answer with reply_message. You have no file, shell or code tools and never touch a repository; you open missions with create_mission and follow them with list_missions and get_mission. ' +
+  (tab
+    ? `This conversation is the owner's tab for the project "${tab.name}" (slug \`${tab.slug}\`): the project is settled, so do not look for one and do not ask which. What the owner asks here is work for that project; open its missions there. A tab has one project: you cannot make another project here or open a mission in another one. When the owner asks for that, tell them to write in that project's own tab, or to open a new tab with the + button for something new.`
+    : 'This conversation is a new tab that has no project yet. What the owner asks here is new work: do not ask the owner which project, create one for it with create_project (a short plain name; this tab then belongs to that project) and open the mission there. Work for a project that already exists is asked in that project\'s own tab: tell the owner so and open nothing here.') +
+  ' The owner may be new to all this: answer in plain words, in the owner\'s language, without terms such as repository, branch, slug, worker or mission; say what is being made, that the team is on it, and what you need from the owner, if anything. When create_mission answers with `waitsFor`, the work starts after that earlier one is finished, so that it builds on it: tell the owner so. A message that starts with "Office:" is from the platform, not from the owner: something you opened has finished. Read it with get_mission and tell the owner with reply_message what was made and in which folder they find it, or what went wrong and what they can do next.';
 const DEFAULT_MESSAGING_SECTION =
   'You can message teammates with the office tools (list_agents, send_message, read_inbox, …). Check read_inbox when you are blocked or when the context pack reports unread mail. Propose durable knowledge with propose_memory; the owner verifies it.';
 const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];
@@ -85,7 +90,7 @@ const INBOX_TOOLS = ['Read', 'Glob', 'Grep'];
 async function specBase(
   prisma: PrismaClient,
   config: Config,
-  a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string; route?: Pick<Route, 'runtime' | 'model' | 'effort'> },
+  a: { kind: RunKind; agentId: string; projectId: string; agentVersionId: string; taskText: string; conversationId?: string | null; route?: Pick<Route, 'runtime' | 'model' | 'effort'> },
 ) {
   const [project, loaded, settings] = await Promise.all([
     prisma.project.findUniqueOrThrow({ where: { id: a.projectId } }),
@@ -94,6 +99,9 @@ async function specBase(
   ]);
   const { config: cfg } = loaded;
   const conductor = project.isSystem;
+  // the Conductor answers in a tab: the project that tab belongs to, if it has one yet
+  const tab = conductor && a.conversationId ? await prisma.conversation.findUnique({ where: { id: a.conversationId }, select: { aboutProjectId: true } }) : null;
+  const tabProject = tab?.aboutProjectId ? await prisma.project.findUnique({ where: { id: tab.aboutProjectId }, select: { name: true, slug: true } }) : null;
   const summary = a.kind === 'summary';
   const inbox = a.kind === 'inbox';
   const skills = summary || conductor ? [] : loaded.skills;
@@ -104,11 +112,12 @@ async function specBase(
         agentId: a.agentId,
         taskText: a.taskText,
         maxChars: config.contextPackMaxChars,
+        conversationId: (conductor && a.conversationId) || undefined,
       });
   const systemPrompt = [
     cfg.systemPrompt,
     skillPromptSection(skills),
-    conductor ? CONDUCTOR_SECTION : (MESSAGING_SECTION[a.kind] ?? DEFAULT_MESSAGING_SECTION),
+    conductor ? conductorSection(tabProject) : (MESSAGING_SECTION[a.kind] ?? DEFAULT_MESSAGING_SECTION),
     pack?.text,
   ]
     .filter(Boolean)
@@ -175,7 +184,7 @@ export async function createRun(prisma: PrismaClient, hub: EventHub, config: Con
   if (!agent.currentVersionId) throw new Error(`Agent ${agent.id} has no current version`);
   const { kind, agentId, projectId, taskId } = input;
   const base = await specBase(prisma, config, {
-    kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt, route: input.route,
+    kind, agentId, projectId, agentVersionId: agent.currentVersionId, taskText: input.prompt, conversationId: input.conversationId, route: input.route,
   });
 
   const maxBudgetUsd = minBudget(base.spec.maxBudgetUsd, input.taskBudgetUsd);
@@ -354,6 +363,7 @@ export async function resumeRun(
     agentId: run.agentId,
     projectId: run.projectId,
     agentVersionId: run.agentVersionId,
+    conversationId: run.conversationId,
     taskText: run.task ? `${run.task.title}\n\n${run.task.description}` : prompt,
     // the SDK session belongs to the runtime the run was routed to
     route: (run.routing as Route | null) ?? undefined,
@@ -980,6 +990,8 @@ export async function interruptRun(
   const message = await prisma.$transaction(async (tx) => {
     const { message, deliveries } = await sendMessage(tx, config.messageLimits, {
       projectId: run.projectId,
+      // a chat run answers in one conversation (a tab, for the Conductor): the message belongs there
+      conversationId: (run.kind === 'chat' && run.conversationId) || undefined,
       kind: 'human',
       type: 'message',
       body,

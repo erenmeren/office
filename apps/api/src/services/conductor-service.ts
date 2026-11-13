@@ -2,13 +2,13 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import type { PrismaClient, TaskRun } from '@office/db';
+import type { Conversation, PrismaClient, TaskRun } from '@office/db';
 import { CONDUCTOR_SLUG, ProjectSettingsSchema } from '@office/shared';
 import type { Config } from '../config.js';
 import { initRepository } from '../routes/projects.js';
 import { audit } from './audit-service.js';
 import type { EventHub, Outbox } from './event-hub.js';
-import { findOrCreateConversation, queueMessageCreated, toMessageView } from './message-service.js';
+import { queueMessageCreated, toMessageView } from './message-service.js';
 import { createMission } from './mission-service.js';
 import { projectDecisions, searchMemory } from './memory-service.js';
 import { projectAgents } from './project-service.js';
@@ -42,20 +42,37 @@ export async function conductorHome(prisma: PrismaClient, config: Config) {
       .catch(() => prisma.project.findUniqueOrThrow({ where: { slug: CONDUCTOR_PROJECT_SLUG } }));
   }
   const agent = await prisma.agent.findUnique({ where: { slug: CONDUCTOR_SLUG } });
-  if (!agent?.isActive || !agent.currentVersionId) return { project, agent: null, conversation: null };
+  if (!agent?.isActive || !agent.currentVersionId) return { project, agent: null };
   await prisma.projectAgent.upsert({
     where: { projectId_agentId: { projectId: project.id, agentId: agent.id } },
     create: { projectId: project.id, agentId: agent.id },
     update: {},
   });
-  const conversation = await findOrCreateConversation(prisma, {
-    projectId: project.id,
-    kind: 'human',
-    agentIds: [agent.id],
-    includesOwner: true,
-    title: 'Conductor',
-  });
-  return { project, agent, conversation };
+  return { project, agent };
+}
+
+/**
+ * A tab: one conversation between the owner and the Conductor, kept in the home project. A tab belongs to one project
+ * (`aboutProjectId`); a new tab has none until `create_project` gives it one.
+ */
+export function openTab(prisma: PrismaClient, home: { id: string }, agent: { id: string }, aboutProjectId?: string): Promise<Conversation> {
+  return prisma.conversation.create({ data: { projectId: home.id, kind: 'human', agentIds: [agent.id], includesOwner: true, title: 'Conductor', aboutProjectId } });
+}
+
+/** A project's tab, made on first use. The oldest one counts, so two first calls at once still agree. */
+export async function projectTab(prisma: PrismaClient, home: { id: string }, agent: { id: string }, projectId: string) {
+  const oldest = () => prisma.conversation.findFirst({ where: { projectId: home.id, aboutProjectId: projectId }, orderBy: { createdAt: 'asc' } });
+  const existing = await oldest();
+  if (existing) return existing;
+  await openTab(prisma, home, agent, projectId);
+  return (await oldest())!;
+}
+
+/** The tab a Conductor run answers in, and the project that tab belongs to (null in a new tab). */
+async function tabOf(prisma: PrismaClient, run: TaskRun) {
+  const tab = run.conversationId ? await prisma.conversation.findUnique({ where: { id: run.conversationId } }) : null;
+  const project = tab?.aboutProjectId ? await prisma.project.findUnique({ where: { id: tab.aboutProjectId } }) : null;
+  return { tab, project };
 }
 
 async function projectBySlug(prisma: PrismaClient, slug: string) {
@@ -130,6 +147,10 @@ export async function runConductorTool(
       return { entries: entries.map((e) => ({ id: e.id, type: e.type, title: e.title, content: e.content.slice(0, 1200) })) };
     }
     case 'create_project': {
+      const { tab, project: own } = await tabOf(prisma, run);
+      if (own) {
+        throw new ConductorToolError('wrong_tab', `this conversation is the tab of the project "${own.name}", and a tab has one project: tell the owner to open a new tab with the + button for new work`);
+      }
       const base = slugOf(args.name);
       if (!base) throw new ConductorToolError('invalid_name', 'the name needs at least one letter or digit');
       const pathOf = (slug: string) => resolve(config.projectsDir, slug);
@@ -140,10 +161,18 @@ export async function runConductorTool(
       // the owner looks for the result in this folder, not on a branch: finished work is merged into it
       const project = await prisma.project.create({ data: { name: args.name, slug, repoPath: pathOf(slug), settings: { integrateWhenDone: true } } });
       await audit(prisma, { action: 'project.created_by_conductor', targetType: 'project', targetId: project.id, detail: { slug, runId: run.id } });
+      // the new tab it was asked in is this project's tab from now on
+      if (tab) await prisma.conversation.update({ where: { id: tab.id }, data: { aboutProjectId: project.id } });
       return { project: slug, name: project.name, folder: project.repoPath, team: (await team(prisma, project.id)).map((a) => a.slug) };
     }
     case 'create_mission': {
       const p = await projectBySlug(prisma, args.project);
+      // one tab, one project: a mission is opened from its project's own tab
+      const { tab, project: own } = await tabOf(prisma, run);
+      if (tab && own?.id !== p.id) {
+        const elsewhere = `work for "${p.name}" is asked in that project's own tab: tell the owner so and open nothing here`;
+        throw new ConductorToolError('wrong_tab', own ? `this conversation is the tab of the project "${own.name}"; ${elsewhere}` : `this tab has no project yet: make one with create_project for new work; ${elsewhere}`);
+      }
       const mission = await createMission(prisma, hub, {
         projectId: p.id,
         request: args.request,
@@ -251,13 +280,15 @@ export async function announceSettledMissions(prisma: PrismaClient, hub: EventHu
   });
   if (missions.length === 0) return;
   const conductor = await prisma.agent.findUnique({ where: { slug: CONDUCTOR_SLUG } });
-  if (!conductor) return;
+  const home = await prisma.project.findUnique({ where: { slug: CONDUCTOR_PROJECT_SLUG } });
+  if (!conductor || !home) return;
   for (const m of missions) {
     const idempotencyKey = `mission-settled:${m.id}:${m.status}`;
     try {
       if (await prisma.message.findUnique({ where: { idempotencyKey } })) continue;
-      const conversation = await prisma.conversation.findUnique({ where: { id: m.conductorConversationId! } });
-      if (!conversation) continue;
+      const asked = await prisma.conversation.findUnique({ where: { id: m.conductorConversationId! } });
+      // a mission from before the tabs was asked in a conversation that is no project's tab: it reports in its project's tab
+      const conversation = asked?.aboutProjectId === m.projectId ? asked : await projectTab(prisma, home, conductor, m.projectId);
       let where = '';
       if (m.status === 'done' && m.branch) {
         const settings = ProjectSettingsSchema.parse(m.project.settings ?? {});

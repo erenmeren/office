@@ -55,7 +55,8 @@ export async function deleteProject(db: PrismaClient, projectId: string): Promis
   const project = await db.project.findUnique({ where: { id: projectId }, select: { slug: true } });
   if (!project) throw new HttpError(404, 'not_found');
   const [liveRuns, liveMissions] = await Promise.all([
-    db.taskRun.count({ where: { projectId, status: { in: [...LIVE_RUN] } } }),
+    // the project's tab with the Conductor is kept in the Conductor's home project: a run answering there counts
+    db.taskRun.count({ where: { OR: [{ projectId }, { conversation: { aboutProjectId: projectId } }], status: { in: [...LIVE_RUN] } } }),
     db.mission.count({ where: { projectId, status: { in: [...LIVE_MISSION] } } }),
   ]);
   if (liveRuns || liveMissions) {
@@ -77,6 +78,12 @@ export async function deleteProject(db: PrismaClient, projectId: string): Promis
     await tx.messageDelivery.deleteMany({ where: { messageId: { in: messageIds } } });
     await tx.message.deleteMany({ where: { projectId } });
     await tx.conversation.deleteMany({ where: { projectId } });
+    // its tab with the Conductor goes too; the Conductor's runs stay, for the cost history
+    const tabIds = (await tx.conversation.findMany({ where: { aboutProjectId: projectId }, select: { id: true } })).map((c) => c.id);
+    await tx.taskRun.updateMany({ where: { conversationId: { in: tabIds } }, data: { conversationId: null } });
+    await tx.messageDelivery.deleteMany({ where: { message: { conversationId: { in: tabIds } } } });
+    await tx.message.deleteMany({ where: { conversationId: { in: tabIds } } });
+    await tx.conversation.deleteMany({ where: { id: { in: tabIds } } });
     await tx.memorySource.deleteMany({ where: { memoryEntryId: { in: memoryIds } } });
     await tx.memoryEntry.deleteMany({ where: { projectId } });
     await tx.artifact.deleteMany({ where: { projectId } });

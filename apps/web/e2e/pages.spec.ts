@@ -404,11 +404,108 @@ authed('the office page switches between floor, list and timeline', async ({ pag
   expectQuiet(noise);
 });
 
-authed('with no project left, the header still opens the new-project form', async ({ page }) => {
+authed('with no project left, a new tab still opens the new-project form', async ({ page }) => {
   await page.route(`${API}/projects`, (route) => (route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue()));
   await page.goto('/workers');
-  await page.getByRole('button', { name: 'New project…' }).click();
+  await page.getByRole('button', { name: 'New tab' }).click();
+  await page.getByRole('button', { name: 'Open an existing folder…' }).click();
   await expect(page.getByRole('dialog').getByText('New project', { exact: true })).toBeVisible();
+});
+
+authed('projects are tabs: + opens a new tab with a talk of its own, × closes a tab, and a closed project or talk comes back from a new tab', async ({ page, request, noise }) => {
+  const [project] = (await (await request.get(`${API}/projects`)).json()) as { id: string; name: string }[];
+  await page.goto('/conductor');
+  const tabs = page.getByRole('navigation', { name: 'Projects' });
+  const thread = page.getByRole('region', { name: 'Thread' });
+  const projectTab = tabs.getByRole('button', { name: project.name, exact: true });
+  const newTab = tabs.getByRole('button', { name: 'New', exact: true });
+  // every project has its tab; the selected one is in front, with the work asked there
+  await expect(projectTab).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByText('Missions it opened')).toBeVisible();
+
+  // + opens a new tab in front: no project yet, and a talk that starts empty
+  const opened = () => page.waitForResponse((r) => r.url() === `${API}/conductor/tabs` && r.request().method() === 'POST').then((r) => r.json() as Promise<{ conversationId: string }>);
+  const talk = (id: string) => request.get(`${API}/conductor?conversation=${id}`).then((r) => r.status());
+  const first = opened();
+  await tabs.getByRole('button', { name: 'New tab' }).click();
+  await expect(newTab).toHaveAttribute('aria-current', 'true');
+  await expect(projectTab).not.toHaveAttribute('aria-current', 'true');
+  await expect(page.getByText('Or open a project')).toBeVisible();
+  const said = `Only in the new tab ${Date.now()}`;
+  await page.getByLabel('Message').fill(said);
+  await page.getByRole('button', { name: 'Send' }).click();
+  await expect(thread.getByText(said)).toBeVisible();
+  // once something is said in it, the tab is named by how the owner began
+  const talkTab = tabs.getByRole('button', { name: said, exact: true });
+  await expect(talkTab).toHaveAttribute('aria-current', 'true');
+  await expect(newTab).toHaveCount(0);
+  // the project's tab has its own talk: what was said in the new tab is not there
+  await projectTab.click();
+  await expect(page.getByText('Missions it opened')).toBeVisible();
+  await expect(thread.getByText(said)).toHaveCount(0);
+  await talkTab.click();
+  await expect(thread.getByText(said)).toBeVisible();
+  // every other page shows the selected project, so there its tab is the one in front; the new tab leads back to the assistant
+  await page.goto('/workers');
+  await expect(projectTab).toHaveAttribute('aria-current', 'true');
+  await talkTab.click();
+  await expect(page).toHaveURL(/\/conductor$/);
+  await expect(talkTab).toHaveAttribute('aria-current', 'true');
+
+  // × closes the project's tab, and it stays closed after a reload; the project itself is still there
+  await tabs.getByRole('button', { name: `Close ${project.name}` }).click();
+  await expect(projectTab).toHaveCount(0);
+  await page.reload();
+  await expect(talkTab).toHaveAttribute('aria-current', 'true');
+  await expect(projectTab).toHaveCount(0);
+  expect(((await (await request.get(`${API}/projects`)).json()) as { id: string }[]).map((p) => p.id)).toContain(project.id);
+  // a tab without a project lists the closed ones: picking it brings the tab back, in front
+  await page.getByRole('button', { name: project.name, exact: true }).click();
+  await expect(projectTab).toHaveAttribute('aria-current', 'true');
+
+  // × on the talk closes its tab; what was said is kept, and the next new tab lists it, to open it again
+  await tabs.getByRole('button', { name: `Close ${said}` }).click();
+  await expect(talkTab).toHaveCount(0);
+  await expect(projectTab).toHaveAttribute('aria-current', 'true');
+  const unused = opened();
+  await tabs.getByRole('button', { name: 'New tab' }).click();
+  await expect(newTab).toHaveAttribute('aria-current', 'true');
+  await page.getByRole('button', { name: said, exact: true }).click();
+  await expect(talkTab).toHaveAttribute('aria-current', 'true');
+  await expect(thread.getByText(said)).toBeVisible();
+  expect(await talk((await first).conversationId)).toBe(200);
+  // a new tab nothing was said in leaves nothing behind
+  await tabs.getByRole('button', { name: 'Close New' }).click();
+  await expect.poll(async () => talk((await unused).conversationId)).toBe(404);
+  await tabs.getByRole('button', { name: `Close ${said}` }).click();
+  await expect(talkTab).toHaveCount(0);
+  expectQuiet(noise);
+});
+
+authed('while the project list loads, the assistant waits instead of saying no tab is open, and + already opens a tab', async ({ page }) => {
+  await page.route(`${API}/projects`, async (route) => {
+    await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.goto('/conductor');
+  await expect(page.getByText('Loading…').first()).toBeVisible();
+  await expect(page.getByText('No tab is open')).toHaveCount(0);
+  await page.getByRole('button', { name: 'New tab' }).click();
+  await expect(page.getByRole('navigation', { name: 'Projects' }).getByRole('button', { name: 'New', exact: true })).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByText('Or open a project')).toBeVisible();
+  await page.getByRole('button', { name: 'Close New' }).click();
+});
+
+authed('in a phone-width window the example requests of a new tab stay inside their card', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('office.simple', '1'));
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New tab' }).click();
+  const example = page.getByRole('button', { name: /^Make a simple web page/ });
+  await expect(example).toBeVisible();
+  const [box, card] = [(await example.boundingBox())!, (await page.getByLabel('Message').boundingBox())!];
+  expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+  await page.getByRole('button', { name: 'Close New' }).click();
 });
 
 authed('owner changes the check command and sees it saved', async ({ page, noise }) => {
