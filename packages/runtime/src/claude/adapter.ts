@@ -268,7 +268,8 @@ export class ClaudeAdapter implements RuntimeAdapter {
         };
         result = suspended
           ? { status: 'suspended', sdkSessionId: msg.session_id, usage }
-          : msg.subtype === 'success'
+          : // the SDK calls a request the API refused (a used-up plan limit, an unknown model) a success with is_error
+            msg.subtype === 'success' && !msg.is_error
             ? {
                 status: 'succeeded',
                 resultText: redactSecrets(msg.result),
@@ -278,7 +279,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
               }
             : {
                 status: 'failed',
-                error: redactSecrets(msg.errors.join('; ') || msg.subtype),
+                error: redactSecrets(msg.subtype === 'success' ? msg.result : msg.errors.join('; ') || msg.subtype),
                 sdkSessionId: msg.session_id,
                 usage,
               };

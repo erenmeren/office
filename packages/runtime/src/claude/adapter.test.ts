@@ -68,6 +68,17 @@ describe('ClaudeAdapter', () => {
     expect(res.sdkSessionId).toBe('sess-9');
   });
 
+  it('fails the run when the API refused the request: the SDK reports it as a success with is_error', async () => {
+    // what a used-up plan limit looks like (owner's app, 2026-11-13): recorded as succeeded, the tasks looked finished
+    const refused = "You've hit your 5-hour limit · resets 12:10am (Europe/London)";
+    h.messages = [init, { ...base, type: 'result', subtype: 'success', is_error: true, api_error_status: 429, result: refused }];
+    h.throwAtEnd = new Error(`Claude Code returned an error result: ${refused}`);
+    const { events, res } = await run();
+    expect(res).toMatchObject({ status: 'failed', error: refused, sdkSessionId: 'sess-9' });
+    expect(events.filter((e) => e.type === 'agent.completed')).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'agent.failed').map((e) => e.payload)).toEqual([{ subtype: 'api_error', errors: [refused] }]);
+  });
+
   describe('messages into the live session', () => {
     const start = async (messages: unknown[], during: (control: RunControl) => void) => {
       const control: RunControl = { interrupted: new AbortController().signal };

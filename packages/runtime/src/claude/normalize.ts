@@ -93,6 +93,8 @@ function rawEvents(msg: SDKMessage): EventBody[] {
       return events;
     }
     case 'result':
+      // a refused request is a success with is_error: its text is the error, not a result
+      if (msg.subtype === 'success' && msg.is_error) return [{ type: 'agent.failed', payload: { subtype: 'api_error', errors: [msg.result] } }];
       if (msg.subtype === 'success') {
         return [
           {
