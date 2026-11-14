@@ -2,7 +2,7 @@ import type { MemoryEntry } from '@office/db';
 import { searchIds } from './memory-service.js';
 import type { Db } from './task-service.js';
 
-const HEADER = '## Context pack\nCite entries by id (m:<id>). Entries are facts verified by the owner; the inbox is unread mail.';
+const HEADER = '## Context pack\nCite entries by id (m:<id>). Entries are what the team recorded and the owner can correct; the inbox is unread mail.';
 
 const line = (e: Pick<MemoryEntry, 'id' | 'type' | 'title' | 'content'>) =>
   `- [m:${e.id}] ${e.type} · ${e.title}: ${e.content.slice(0, 400).replace(/\s*\n\s*/g, ' ')}`;

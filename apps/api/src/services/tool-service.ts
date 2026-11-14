@@ -156,7 +156,8 @@ async function run(
       content: p.content,
       authorType: 'agent',
       authorAgentId: author,
-      status: 'proposed',
+      // recorded at once (owner, 2026-11-14: too many questions): the owner corrects or deletes it on the Memory page
+      status: 'verified',
       taskId: tid,
       runId: rid,
       sources,
@@ -248,8 +249,8 @@ async function run(
     }
     case 'propose_memory': {
       const e = await propose(prisma, args, agentId, run.id, taskId);
-      memoryChanged(e.id, 'proposed');
-      return { result: { entryId: e.id, status: 'proposed' } };
+      memoryChanged(e.id, 'verified');
+      return { result: { entryId: e.id, status: 'verified' } };
     }
     case 'get_task_history':
       return { result: { entries: await taskHistory(prisma, { projectId, taskId: args.taskId ?? taskId, limit: args.limit }) } };
@@ -305,7 +306,7 @@ async function run(
         return { entry, proposals };
       });
       memoryChanged(created.entry.id, 'verified');
-      for (const p of created.proposals) memoryChanged(p.id, 'proposed');
+      for (const p of created.proposals) memoryChanged(p.id, 'verified');
       return { result: { entryId: created.entry.id, proposalIds: created.proposals.map((p) => p.id) } };
     }
   }

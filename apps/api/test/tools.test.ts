@@ -180,17 +180,21 @@ describe('office tools', () => {
     expect(await call(c, 'read_memory', { id: (await mk('proposed', a)).id })).toMatchObject({ ok: true });
   });
 
-  it('propose_memory writes a proposed entry with a run source', async () => {
+  it('propose_memory records the entry at once, with a run source: the owner is not asked (2026-11-14)', async () => {
     const c = await ctx('task');
     const r = (await call(c, 'propose_memory', {
       type: 'decision', title: 'Use X', content: 'because', sources: [{ kind: 'file', ref: 'a.ts' }],
-    })) as { ok: true; result: { entryId: string } };
+    })) as { ok: true; result: { entryId: string; status: string } };
+    expect(r.result.status).toBe('verified');
     const e = await t.prisma.memoryEntry.findUniqueOrThrow({ where: { id: r.result.entryId }, include: { sources: true } });
-    expect(e).toMatchObject({ status: 'proposed', authorType: 'agent', authorAgentId: a, runId: c.run.id, taskId, projectId });
+    expect(e).toMatchObject({ status: 'verified', authorType: 'agent', authorAgentId: a, runId: c.run.id, taskId, projectId });
+    expect(e.verifiedAt).not.toBeNull();
+    // nothing waits for the owner, and a teammate finds it before writing the same note again
+    expect(await t.prisma.memoryEntry.count({ where: { runId: c.run.id, status: 'proposed' } })).toBe(0);
     expect(e.sources.map((s) => `${s.kind}:${s.ref}`).sort()).toEqual(['file:a.ts', `run:${c.run.id}`]);
-    // own proposal is readable; another agent's is not
+    // the author reads it, and so does a teammate
     expect(await call(c, 'read_memory', { id: e.id })).toMatchObject({ ok: true });
-    expect(await call(await ctx('task', {}, b), 'read_memory', { id: e.id })).toMatchObject({ code: 'not_found' });
+    expect(await call(await ctx('task', {}, b), 'read_memory', { id: e.id })).toMatchObject({ ok: true });
   });
 
   it('propose_memory with scope agent_project keeps the author as agentId', async () => {
@@ -217,7 +221,7 @@ describe('office tools', () => {
     expect(e).toMatchObject({ type: 'task_summary', status: 'verified', authorType: 'system', runId: target.run.id, taskId, title: 'Summary: Do it' });
     expect(e.sources.map((s) => s.kind).sort()).toEqual(['run', 'task']);
     const p = await t.prisma.memoryEntry.findUniqueOrThrow({ where: { id: r.result.proposalIds[0]! } });
-    expect(p).toMatchObject({ status: 'proposed', authorAgentId: a, runId: target.run.id });
+    expect(p).toMatchObject({ status: 'verified', authorAgentId: a, runId: target.run.id });
     expect(await call(c, 'submit_summary', { summary: 'again' })).toMatchObject({ ok: false, code: 'already_submitted' });
     expect(await t.prisma.memoryEntry.count({ where: { runId: target.run.id, type: 'task_summary' } })).toBe(1);
   });

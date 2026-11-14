@@ -60,7 +60,7 @@ export const OFFICE_TOOLS = {
   },
   propose_memory: {
     description:
-      'Propose a durable memory entry (decision, convention, contract, known issue or lesson) with sources. It stays proposed until verified.',
+      'Record a durable memory entry (decision, convention, contract, known issue or lesson) with sources. It is recorded at once: search_memory first, and do not record what is already there.',
     input: MemoryProposalSchema.shape,
   },
   get_task_history: {

@@ -175,8 +175,8 @@ describe('phase 3 end to end with the fake runtime', () => {
     expect(summary.sources.map((s) => s.kind).sort()).toEqual(expect.arrayContaining(['run', 'task']));
     const lessons = await prisma.memoryEntry.findMany({ where: { projectId, type: 'lesson' } });
     expect(lessons.map((l) => [l.title, l.status]).sort()).toEqual([
-      ['Use Postgres', 'proposed'],
-      ['fake proposal', 'proposed'],
+      ['Use Postgres', 'verified'],
+      ['fake proposal', 'verified'],
     ]);
 
     // 5. sessions closed; conversation, memory search and verify go through the routes
