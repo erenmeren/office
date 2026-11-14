@@ -13,6 +13,7 @@ export { FAKE_PLAN } from './fake/plan.js';
 export { gateToolCall } from './gate.js';
 export { ClaudeAdapter, buildQueryOptions, effectiveAllowedTools } from './claude/adapter.js';
 export { buildChildEnv } from './claude/env.js';
+export { claudeModels } from './claude/models.js';
 export { normalizeSdkMessage } from './claude/normalize.js';
 
 export { CodexAdapter, codexArgs, codexRefusal, codexUnenforceable } from './codex/adapter.js';

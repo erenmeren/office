@@ -197,6 +197,13 @@ export interface MarketSkill {
   name: string;
   installs: number;
 }
+export interface ModelOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+/** Models an agent can be given: what the worker's Claude login offers today. */
+export const useModels = () => useQuery({ queryKey: ['models'], queryFn: () => api<ModelOption[]>('/models') });
 export const useSkills = () => useQuery({ queryKey: ['skills'], queryFn: () => api<Skill[]>('/skills') });
 export interface BrowseResult {
   path: string;

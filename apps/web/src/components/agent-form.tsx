@@ -3,6 +3,7 @@
 import { EFFORTS, EFFORT_LABEL } from '@/lib/effort';
 import { useState, type FormEvent } from 'react';
 import { ALWAYS_ON_TOOLS, type AgentConfigInput } from '@office/shared';
+import { ModelItems } from '@/components/model-items';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -12,7 +13,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { ToolPicker } from '@/components/ui/tool-picker';
 import { useSkill, useSkills, type AgentVersionView, type SkillMode } from '@/lib/queries';
 
-const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 const CHECK = 'size-4 accent-primary';
 
 export interface AgentFormBody {
@@ -223,15 +223,11 @@ export function AgentForm({
             <Input id="model" value={form.model} onChange={set('model')} placeholder="Codex default" />
           ) : (
             <Select value={form.model} onValueChange={(v) => setForm({ ...form, model: String(v) })}>
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full" aria-label="Model">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {MODELS.map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {m}
-                  </SelectItem>
-                ))}
+                <ModelItems current={form.model} />
               </SelectContent>
             </Select>
           )}
@@ -339,11 +335,8 @@ export function AgentForm({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {['inherit', ...MODELS].map((m) => (
-                            <SelectItem key={m} value={m}>
-                              {m}
-                            </SelectItem>
-                          ))}
+                          <SelectItem value="inherit">inherit</SelectItem>
+                          <ModelItems current={s.model} />
                         </SelectContent>
                       </Select>
                     </div>

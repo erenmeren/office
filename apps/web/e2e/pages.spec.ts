@@ -618,6 +618,29 @@ authed('skill library: every skill says who it comes from, and the filter finds 
   expectQuiet(noise);
 });
 
+authed("agent form: the models are what the worker's Claude offers today, and a model the list lacks stays chosen", async ({ page, noise }) => {
+  await page.route(`${API}/models`, (route) =>
+    route.fulfill({
+      json: [
+        { value: 'claude-fable-5-2', label: 'Fable 5.2', description: 'For your toughest challenges' },
+        { value: 'opus', label: 'Opus 5.5' },
+      ],
+    }),
+  );
+  await page.goto('/agents?new=1');
+  const model = page.getByRole('combobox', { name: 'Model', exact: true });
+  // a new agent starts on `sonnet`, which this list does not carry: it is still there to keep
+  await expect(model).toContainText('sonnet');
+  await model.click();
+  await expect(page.getByRole('option')).toHaveText(['sonnet', 'Fable 5.2claude-fable-5-2', 'Opus 5.5opus']);
+  await page.getByRole('option', { name: 'Fable 5.2' }).click();
+  // the field shows the id the runtime is told; the model the form opened with is still on the list
+  await expect(model).toContainText('claude-fable-5-2');
+  await model.click();
+  await expect(page.getByRole('option')).toHaveCount(3);
+  expectQuiet(noise);
+});
+
 authed('owner changes the check command and sees it saved', async ({ page, noise }) => {
   await page.goto('/settings');
   const input = page.getByLabel('Check command');

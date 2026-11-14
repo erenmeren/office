@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Badge } from '@/components/ui/badge';
+import { ModelItems } from '@/components/model-items';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -12,7 +12,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { post } from '@/lib/api';
 import { frontmatterModel, skillErrorText, withFrontmatterModel } from '@/lib/skills';
 
-const MODELS = ['fable', 'opus', 'sonnet', 'haiku'];
 const TEMPLATE =
   '---\nname: my-skill\ndescription: One line on when to use this skill\n---\n\n# My skill\n\n## When to use\n\n## Steps\n\n## Done when\n';
 
@@ -154,11 +153,7 @@ export function NewSkillForm({ onDone }: { onDone?: () => void }) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="inherit">inherit</SelectItem>
-                  {MODELS.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      <Badge variant="secondary">{m}</Badge>
-                    </SelectItem>
-                  ))}
+                  <ModelItems current={model} />
                 </SelectContent>
               </Select>
             </div>

@@ -34,6 +34,12 @@ export type Effort = z.infer<typeof EffortSchema>;
 export const RuntimeSchema = z.enum(['claude', 'codex']);
 export type Runtime = z.infer<typeof RuntimeSchema>;
 
+/** A model an agent can be given: `value` is what the runtime is told, `label` what the owner reads. */
+export const ModelOptionSchema = z.object({ value: z.string().min(1).max(100), label: z.string().max(100), description: z.string().max(300).optional() });
+export type ModelOption = z.infer<typeof ModelOptionSchema>;
+/** What every Claude login understands: offered while no worker has said what its login has. */
+export const MODEL_ALIASES: ModelOption[] = ['fable', 'opus', 'sonnet', 'haiku'].map((value) => ({ value, label: value }));
+
 /** A budget of 0 is "no cap". The lowest positive cap wins; with none, 0. */
 export const minBudget = (...caps: Array<number | undefined>): number =>
   caps.reduce<number>((acc, c) => (c === undefined || c <= 0 ? acc : acc <= 0 ? c : Math.min(acc, c)), 0);

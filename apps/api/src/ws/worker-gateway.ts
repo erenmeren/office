@@ -4,7 +4,7 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import type { WebSocket } from 'ws';
 import type { PrismaClient } from '@office/db';
 import { randomUUID } from 'node:crypto';
-import { WorkerToApiSchema, type ApiToWorker, type Runtime, type SessionsErrorCode, type SessionsQuery, type SessionsResult, type ToolCallResult, type WorkerToApi } from '@office/shared';
+import { WorkerToApiSchema, type ApiToWorker, type ModelOption, type Runtime, type SessionsErrorCode, type SessionsQuery, type SessionsResult, type ToolCallResult, type WorkerToApi } from '@office/shared';
 import { redactSecrets } from '@office/runtime';
 import type { Config } from '../config.js';
 import { HttpError } from '../lib/errors.js';
@@ -28,6 +28,7 @@ interface Connection {
   canClone: boolean;
   machineId?: string;
   runtimes: Runtime[];
+  models: ModelOption[];
   /** when this connection was welcomed; terminals not re-announced since are stale */
   connectedAt: Date;
 }
@@ -97,6 +98,7 @@ export class WorkerGateway {
       tags: c.tags,
       canClone: c.canClone,
       runtimes: c.runtimes,
+      models: c.models,
       /**
        * True when the worker runs on the API's machine and its allowedRoots cover `repoPath`: it can use the repo
        * checkout directly. Matching paths alone are not enough; another host may share the layout.
@@ -284,7 +286,7 @@ export class WorkerGateway {
     const activeRuns = await this.leasedRuns(worker.id);
     this.conns.get(worker.id)?.socket.close(4409, 'replaced by a new connection');
     this.conns.set(worker.id, {
-      socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, tags: msg.tags, canClone: msg.canClone, machineId: msg.machineId, runtimes: msg.runtimes, activeRuns, connectedAt: new Date(),
+      socket, capacity: msg.capacity, allowedRoots: msg.allowedRoots, tags: msg.tags, canClone: msg.canClone, machineId: msg.machineId, runtimes: msg.runtimes, models: msg.models, activeRuns, connectedAt: new Date(),
     });
     socket.send(JSON.stringify({ type: 'welcome', workerId: worker.id, credential } satisfies ApiToWorker));
     this.cancelUnleased(worker.id, msg.activeRunIds, activeRuns);

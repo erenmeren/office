@@ -15,6 +15,8 @@ export interface FakeWorkerOptions {
   canClone?: boolean;
   /** Runtimes announced in hello (omitted: the gateway's default, Claude only). */
   runtimes?: ('claude' | 'codex')[];
+  /** Models the worker's Claude login offers (omitted: none announced). */
+  models?: { value: string; label: string; description?: string }[];
   /** Defaults to the API's own machine id (same host); `null` omits it like a pre-Phase 5 worker. */
   machineId?: string | null;
 }
@@ -75,6 +77,7 @@ export async function connectFakeWorker(app: FastifyInstance, opts: FakeWorkerOp
     tags: opts.tags ?? [],
     canClone: opts.canClone ?? false,
     ...(opts.runtimes && { runtimes: opts.runtimes }),
+    ...(opts.models && { models: opts.models }),
     machineId: opts.machineId === null ? undefined : (opts.machineId ?? machineId(process.env.OFFICE_DATA_DIR!)),
   });
   const first = await new Promise<ApiToWorker>((resolve, reject) => {

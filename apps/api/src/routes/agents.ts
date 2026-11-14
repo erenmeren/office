@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { AgentVersion } from '@office/db';
 import { z } from 'zod';
-import { AgentConfigInputSchema } from '@office/shared';
+import { AgentConfigInputSchema, MODEL_ALIASES, type ModelOption } from '@office/shared';
 import { HttpError } from '../lib/errors.js';
 import { audit } from '../services/audit-service.js';
 import { createAgentVersion, versionView } from '../services/agent-service.js';
@@ -32,6 +32,13 @@ export async function agentRoutes(app: FastifyInstance) {
       ...(agent.versions && { versions: await Promise.all(agent.versions.map((v) => versionView(app.prisma, v))) }),
     };
   };
+
+  /** Models an agent can be given: what the online workers' Claude login offers today, else the aliases every login has. */
+  app.get('/models', async () => {
+    const offered = new Map<string, ModelOption>();
+    for (const w of app.gateway.onlineWorkers()) for (const m of w.models) if (!offered.has(m.value)) offered.set(m.value, m);
+    return offered.size ? [...offered.values()] : MODEL_ALIASES;
+  });
 
   app.get('/agents', async () => {
     const agents = await app.prisma.agent.findMany({ where: { isSystem: false }, orderBy: { createdAt: 'asc' } });

@@ -12,6 +12,12 @@ describe('phase 5 schemas', () => {
   it('hello defaults tags to [] and canClone to false', () => {
     expect(WorkerToApiSchema.parse(hello)).toMatchObject({ tags: [], canClone: false });
   });
+  it('hello carries the models the worker offers; an older worker announces none', () => {
+    expect(WorkerToApiSchema.parse(hello)).toMatchObject({ models: [] });
+    const models = [{ value: 'claude-fable-5-2', label: 'Fable 5.2', description: 'For your toughest challenges' }];
+    expect(WorkerToApiSchema.parse({ ...hello, models })).toMatchObject({ models });
+    expect(() => WorkerToApiSchema.parse({ ...hello, models: [{ value: '', label: 'x' }] })).toThrow();
+  });
   it('hello rejects a tag with uppercase or spaces', () => {
     expect(() => WorkerToApiSchema.parse({ ...hello, tags: ['GPU box'] })).toThrow();
   });

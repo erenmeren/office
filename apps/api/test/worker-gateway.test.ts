@@ -56,6 +56,19 @@ describe('worker gateway', () => {
     await re.close();
   });
 
+  it("GET /models: the aliases every login has until a worker is online, then what that worker's Claude login offers", async () => {
+    expect((await req('GET', '/models')).json().map((m: { value: string }) => m.value)).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
+    const { enrollToken } = await enroll();
+    const models = [
+      { value: 'claude-fable-5-2', label: 'Fable 5.2', description: 'For your toughest challenges' },
+      { value: 'opus', label: 'Opus 5.5' },
+    ];
+    const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', models });
+    expect((await req('GET', '/models')).json()).toEqual(models);
+    await w.close();
+    await until(async () => (await req('GET', '/models')).json().length === 4, 'the aliases are back once the worker is gone');
+  });
+
   it('enrollment and revocation are audited', async () => {
     const { id, enrollToken } = await enroll();
     const w = await connectFakeWorker(t.app, { enrollToken, name: 'w1', machineId: 'remote-machine-0001' });
