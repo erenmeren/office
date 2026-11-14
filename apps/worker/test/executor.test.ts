@@ -62,6 +62,24 @@ describe('RunExecutor', () => {
     expect(executor.activeRunIds()).toEqual([]);
   });
 
+  it("passes on what the run has cost so far, as the runtime reports it while the run goes on", async () => {
+    const adapter: RuntimeAdapter = {
+      name: 'fake',
+      run: async (_spec, sink) => {
+        sink.usage?.(0.25);
+        sink.usage?.(0.6);
+        return { status: 'succeeded', usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.7, numTurns: 1, durationMs: 1 } };
+      },
+    };
+    executor = new RunExecutor(adapter, bridge(() => executor), [root], runsDir);
+    executor.accept(spec());
+    await until(done, 'result');
+    expect(sent.filter((m) => m.type === 'run.usage')).toEqual([
+      { type: 'run.usage', runId: 'run-1', costUsd: 0.25 },
+      { type: 'run.usage', runId: 'run-1', costUsd: 0.6 },
+    ]);
+  });
+
   it('rejects an existing sibling directory that shares the root prefix', async () => {
     // `<root>-other` starts with `<root>` as a string but is not under it by segment
     mkdirSync(root + '-other/repo', { recursive: true });

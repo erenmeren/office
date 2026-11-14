@@ -446,6 +446,51 @@ describe('run lifecycle', () => {
     expect((await s.assign(w)).allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
+  it("a run's cost is booked while it runs: the worker's reports show at once, and the result books the rest once", async () => {
+    s = await setup();
+    const w = await s.worker();
+    const task = await s.createTask();
+    const spec = await s.assign(w);
+    const spent = async () => (await s.req('GET', `/projects/${s.projectId}/budget`)).json().spentTodayUsd as number;
+    const records = () => s.t.prisma.usageRecord.findMany({ where: { runId: spec.runId }, orderBy: { createdAt: 'asc' } });
+
+    w.send({ type: 'run.usage', runId: spec.runId, costUsd: 0.2 });
+    await s.flush(w);
+    expect((await s.run(spec.runId)).costUsd).toBeCloseTo(0.2);
+    expect(await spent()).toBeCloseTo(0.2);
+    w.send({ type: 'run.usage', runId: spec.runId, costUsd: 0.45 });
+    w.send({ type: 'run.usage', runId: spec.runId, costUsd: 0.45 }); // nothing new: no second booking
+    await s.flush(w);
+    expect((await s.run(spec.runId)).costUsd).toBeCloseTo(0.45);
+    expect(await records()).toMatchObject([{ live: true, costUsd: 0.45, inputTokens: 0 }]);
+    // a report for a run this worker does not hold is dropped
+    w.send({ type: 'run.usage', runId: '00000000-0000-4000-8000-000000000000', costUsd: 9 });
+    await s.flush(w);
+    expect(await spent()).toBeCloseTo(0.45);
+
+    // the result carries the whole cost (0.5): the row of the running leg becomes the final record
+    s.result(w, spec, { status: 'succeeded' });
+    await s.flush(w);
+    expect((await s.run(spec.runId)).costUsd).toBeCloseTo(0.5);
+    expect(await spent()).toBeCloseTo(0.5);
+    expect(await records()).toMatchObject([{ live: false, costUsd: 0.5, inputTokens: 10, outputTokens: 20 }]);
+    expect((await s.t.prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).not.toBe('running');
+  });
+
+  it('a run that ends without a cost of its own keeps what was reported while it ran', async () => {
+    s = await setup();
+    const w = await s.worker();
+    await s.createTask();
+    const spec = await s.assign(w);
+    w.send({ type: 'run.usage', runId: spec.runId, costUsd: 0.3 });
+    await s.flush(w);
+    // the SDK threw: the worker has no usage to report
+    s.result(w, spec, { status: 'failed', error: 'boom', usage: { inputTokens: 0, outputTokens: 0, costUsd: 0, numTurns: 0, durationMs: 0 } });
+    await s.flush(w);
+    expect((await s.run(spec.runId)).costUsd).toBeCloseTo(0.3);
+    expect(await s.t.prisma.usageRecord.findMany({ where: { runId: spec.runId } })).toMatchObject([{ live: false, costUsd: 0.3 }]);
+  });
+
   it('a lost wake run is retried on the next tick', async () => {
     s = await setup();
     const w = await s.worker();

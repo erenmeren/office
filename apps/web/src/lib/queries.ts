@@ -361,7 +361,8 @@ export const useBudget = (projectId: string | undefined) =>
     queryKey: ['budget', projectId],
     queryFn: () => api<{ spentTodayUsd: number; dailyBudgetUsd: number }>(`/projects/${projectId}/budget`),
     enabled: !!projectId,
-    refetchInterval: 30_000,
+    // a running run's cost is booked every 15 seconds: the top bar follows it
+    refetchInterval: 10_000,
   });
 export const useProjectSettings = (projectId: string | undefined) =>
   useQuery({ queryKey: ['settings', projectId], queryFn: () => api<ProjectSettings>(`/projects/${projectId}/settings`), enabled: !!projectId });

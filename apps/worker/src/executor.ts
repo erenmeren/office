@@ -257,6 +257,8 @@ export class RunExecutor {
       };
       this.send({ type: 'run.event', event: redactSecrets(event) });
     };
+    // best effort: a report made while disconnected is dropped, the result carries the final cost
+    const usage = (costUsd: number) => this.send({ type: 'run.usage', runId: spec.runId, costUsd });
     const tools: ToolBridge = {
       call: async (name, args) => {
         const callId = randomUUID();
@@ -304,7 +306,7 @@ export class RunExecutor {
         const gitDir = worktree ? join(worktree.repo, '.git') : undefined;
         const control: RunControl = { interrupted: this.interrupts.get(spec.runId)!.signal };
         this.controls.set(spec.runId, control);
-        result = await this.adapter.run({ ...spec, cwd, ...(skillsDir && { skillsDir }), ...(gitDir && { gitDir }) }, { emit }, signal, tools, control);
+        result = await this.adapter.run({ ...spec, cwd, ...(skillsDir && { skillsDir }), ...(gitDir && { gitDir }) }, { emit, usage }, signal, tools, control);
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         emit({ type: 'agent.failed', payload: { error } });

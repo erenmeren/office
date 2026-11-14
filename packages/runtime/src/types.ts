@@ -2,6 +2,8 @@ import type { ApprovalDecision, ApprovalRequest, EventBody, OfficeToolName, RunR
 
 export interface EventSink {
   emit(body: EventBody): void;
+  /** What the run has cost so far, reported while it runs by a runtime that knows; the result carries the final figure. */
+  usage?(costUsd: number): void;
 }
 
 export interface ToolBridge {

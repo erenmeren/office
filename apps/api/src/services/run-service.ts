@@ -635,18 +635,20 @@ export async function completeRun(
       const task = run.kind === 'task' && run.taskId ? await tx.task.findUniqueOrThrow({ where: { id: run.taskId } }) : null;
       if (task?.status === 'waiting_approval') await setTaskStatus(tx, outbox, task.id, 'running');
     }
+    // rolled back with the rest when the lease guard below loses
+    const grown = await bookUsage(tx, runId, run.session!, r.usage);
     // guarded again here so a lease expiring between the check and the write still loses
     const { count } = await tx.taskRun.updateMany({
       where: { id: runId, status: { in: [...LEASED] }, leaseExpiresAt: { gt: now } },
       data: suspended
         ? // parked without a lease: the worker slot is free; workerId stays for the record
-          { status, waitingSince: now, leaseExpiresAt: null, costUsd: { increment: r.usage.costUsd } }
+          { status, waitingSince: now, leaseExpiresAt: null, costUsd: { increment: grown } }
         : {
             status,
             resultText: r.resultText,
             error: r.error,
             finishedAt: now,
-            costUsd: { increment: r.usage.costUsd },
+            costUsd: { increment: grown },
             usageRecordedAt: now,
             // Prisma rejects a raw null for a Json column
             structuredOutput: (r.structuredOutput ?? undefined) as Prisma.InputJsonValue | undefined,
@@ -656,17 +658,6 @@ export async function completeRun(
     await tx.agentSession.update({
       where: { id: run.session!.id },
       data: { status, sdkSessionId: r.sdkSessionId, ...(suspended ? {} : { endedAt: now }) },
-    });
-    const tokens = await usageTokens(tx, runId, r.usage);
-    await tx.usageRecord.create({
-      data: {
-        runId,
-        projectId: run.session!.projectId,
-        agentId: run.session!.agentId,
-        model: run.session!.model,
-        ...tokens,
-        costUsd: r.usage.costUsd,
-      },
     });
     if (run.kind === 'chat' && run.conversationId && r.sdkSessionId) {
       await tx.conversation.update({ where: { id: run.conversationId }, data: { sdkSessionId: r.sdkSessionId } });
@@ -743,17 +734,53 @@ export async function recordCancelledUsage(prisma: PrismaClient, runId: string, 
   await prisma.$transaction(async (tx) => {
     const { count } = await tx.taskRun.updateMany({
       where: { id: runId, status: 'cancelled', usageRecordedAt: null },
-      data: { usageRecordedAt: new Date(), costUsd: { increment: usage.costUsd } },
+      data: { usageRecordedAt: new Date() },
     });
     if (count === 0) return;
     const session = await tx.agentSession.findUniqueOrThrow({ where: { runId } });
-    await tx.usageRecord.create({
-      data: {
-        runId, projectId: session.projectId, agentId: session.agentId, model: session.model,
-        ...(await usageTokens(tx, runId, usage)), costUsd: usage.costUsd,
-      },
-    });
+    await tx.taskRun.update({ where: { id: runId }, data: { costUsd: { increment: await bookUsage(tx, runId, session, usage) } } });
   });
+}
+
+/**
+ * What a run's current leg has cost so far, as its worker reports it while the leg runs (owner, 2026-11-14: prices
+ * did not move until a run ended). Kept in the leg's one `live` usage row, and the difference is added to the run's
+ * cost, so every figure that sums usage shows it before the result. A report for a run the worker does not hold is dropped.
+ */
+export async function recordLiveUsage(prisma: PrismaClient, runId: string, workerId: string, costUsd: number): Promise<void> {
+  const run = await findLeasedRun(prisma, runId, workerId);
+  if (!run?.session) return;
+  const { projectId, agentId, model } = run.session;
+  await prisma.$transaction(async (tx) => {
+    // locked like the result is: a report cannot land on a leg that has just been booked
+    if (!(LEASED as readonly string[]).includes((await lockRun(tx, runId)) ?? '')) return;
+    const live = await tx.usageRecord.findFirst({ where: { runId, live: true } });
+    const grown = costUsd - (live?.costUsd ?? 0);
+    if (grown <= 0) return;
+    if (live) await tx.usageRecord.update({ where: { id: live.id }, data: { costUsd } });
+    else await tx.usageRecord.create({ data: { runId, projectId, agentId, model, inputTokens: 0, outputTokens: 0, costUsd, live: true } });
+    await tx.taskRun.update({ where: { id: runId }, data: { costUsd: { increment: grown } } });
+  });
+}
+
+/**
+ * Books the usage a leg ended with and returns what the run's cost grows by. The leg's `live` row (its cost so far,
+ * when the worker reported any) becomes the final record; without one a record is written. A leg that ends without a
+ * cost of its own (the SDK threw) keeps what was booked while it ran.
+ */
+async function bookUsage(
+  tx: Prisma.TransactionClient,
+  runId: string,
+  session: { projectId: string; agentId: string; model: string },
+  usage: RunResult['usage'],
+): Promise<number> {
+  const live = await tx.usageRecord.findFirst({ where: { runId, live: true } });
+  const booked = live?.costUsd ?? 0;
+  const costUsd = usage.costUsd > 0 ? usage.costUsd : booked;
+  const tokens = await usageTokens(tx, runId, usage);
+  if (live) await tx.usageRecord.update({ where: { id: live.id }, data: { ...tokens, costUsd, live: false } });
+  else await tx.usageRecord.create({ data: { runId, projectId: session.projectId, agentId: session.agentId, model: session.model, ...tokens, costUsd } });
+  return costUsd - booked;
 }
 
 /** The tokens of this result alone: a cumulative report (a resumed Codex thread) minus what the run already recorded. */

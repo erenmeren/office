@@ -533,6 +533,8 @@ model UsageRecord {
   inputTokens  Int
   outputTokens Int
   costUsd      Float
+  /// the leg still running: its cost so far, as the worker reports it; the leg's result takes the row over
+  live         Boolean  @default(false)
   run          TaskRun  @relation(fields: [runId], references: [id])
   project      Project  @relation(fields: [projectId], references: [id])
   agent        Agent    @relation(fields: [agentId], references: [id])

@@ -198,6 +198,31 @@ function promptInput(prompt: string) {
 /** Background tasks start new turns after a result; the input stays open for them, but never hangs the run. */
 const BACKGROUND_INPUT_MS = 30 * 60_000;
 
+/** How often a running session is asked what it has cost so far. */
+const USAGE_POLL_MS = 15_000;
+
+/**
+ * Reports what the session has cost so far while it runs, when the sink takes it. The SDK marks the call experimental
+ * and may rename it: without it, or when it fails, the cost shows with the result only, as it did before.
+ */
+function watchCost(q: ReturnType<typeof query>, sink: EventSink): ReturnType<typeof setInterval> | undefined {
+  const session = q as { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (o: { skipBehaviors: boolean }) => Promise<{ session?: { total_cost_usd?: number } }> };
+  if (!sink.usage || typeof session.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') return undefined;
+  let last = 0;
+  const timer = setInterval(() => {
+    // skipBehaviors: the cost alone, without the scan of local transcripts
+    void session.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET!({ skipBehaviors: true }).then(
+      (u) => {
+        const cost = u.session?.total_cost_usd;
+        if (typeof cost === 'number' && cost > last) sink.usage!((last = cost));
+      },
+      () => {},
+    );
+  }, USAGE_POLL_MS);
+  timer.unref?.();
+  return timer;
+}
+
 export class ClaudeAdapter implements RuntimeAdapter {
   readonly name = 'claude' as const;
 
@@ -220,6 +245,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const input = promptInput(spec.prompt);
     const backgroundTasks = new Set<string>();
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    let costTimer: ReturnType<typeof setInterval> | undefined;
     if (control) {
       control.deliver = (messageId, text) => {
         if (suspended || !input.push(text)) return false;
@@ -247,6 +273,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
           abortController,
         },
       });
+      costTimer = watchCost(q, sink);
       for await (const msg of q) {
         if (msg.type === 'assistant' && msg.parent_tool_use_id) {
           for (const block of msg.message.content) if (block.type === 'tool_use') parents.set(block.id, msg.parent_tool_use_id);
@@ -294,6 +321,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
       return { status: 'failed', error, usage: ZERO_USAGE };
     } finally {
       clearTimeout(closeTimer);
+      clearInterval(costTimer);
       input.close();
       if (control) control.deliver = undefined;
       signal.removeEventListener('abort', onAbort);

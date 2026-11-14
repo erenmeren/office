@@ -13,7 +13,7 @@ import { generateToken, hashToken } from '../lib/tokens.js';
 import type { EventHub } from '../services/event-hub.js';
 import { appendEvent } from '../services/event-store.js';
 import { audit } from '../services/audit-service.js';
-import { completeRun, findLeasedRun, markRunning, recordCancelledUsage, renewLeases } from '../services/run-service.js';
+import { completeRun, findLeasedRun, markRunning, recordCancelledUsage, recordLiveUsage, renewLeases } from '../services/run-service.js';
 import { executeTool } from '../services/tool-service.js';
 import { recordSubagentEvent } from '../services/subagent-service.js';
 import { requestApproval, resendDecisions } from '../services/approval-service.js';
@@ -338,6 +338,8 @@ export class WorkerGateway {
         // shortcut: the run keeps its lease until it expires and the task is retried; release early if needed
         this.log.warn({ workerId, runId: msg.runId, reason: msg.reason }, 'worker rejected run');
         return;
+      case 'run.usage':
+        return recordLiveUsage(this.prisma, msg.runId, workerId, msg.costUsd);
       case 'run.event': {
         if (SERVER_ONLY_EVENTS.has(msg.event.type)) throw new Error(`event type ${msg.event.type} is server-only`);
         const run = await findLeasedRun(this.prisma, msg.event.runId, workerId);

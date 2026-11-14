@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalPolicySchema, type EventBody, type RunSpec } from '@office/shared';
 
-const h = vi.hoisted(() => ({ messages: [] as unknown[], throwAtEnd: undefined as Error | undefined, calls: [] as unknown[], interrupt: vi.fn(async () => {}), beforeEnd: undefined as (() => Promise<void>) | undefined }));
+const h = vi.hoisted(() => ({ cost: 0, messages: [] as unknown[], throwAtEnd: undefined as Error | undefined, calls: [] as unknown[], interrupt: vi.fn(async () => {}), beforeEnd: undefined as (() => Promise<void>) | undefined }));
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (params: unknown) => {
@@ -11,7 +11,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
       for (const m of h.messages) yield m;
       if (h.throwAtEnd) throw h.throwAtEnd;
     })();
-    return Object.assign(gen, { interrupt: h.interrupt });
+    return Object.assign(gen, { interrupt: h.interrupt, usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ session: { total_cost_usd: h.cost } }) });
   },
   tool: (name: string, description: string, inputSchema: unknown, handler: unknown) => ({ name, description, inputSchema, handler }),
   createSdkMcpServer: (o: { name: string; tools: unknown[] }) => ({ type: 'sdk', name: o.name, instance: {}, tools: o.tools }),
@@ -77,6 +77,30 @@ describe('ClaudeAdapter', () => {
     expect(res).toMatchObject({ status: 'failed', error: refused, sdkSessionId: 'sess-9' });
     expect(events.filter((e) => e.type === 'agent.completed')).toHaveLength(0);
     expect(events.filter((e) => e.type === 'agent.failed').map((e) => e.payload)).toEqual([{ subtype: 'api_error', errors: [refused] }]);
+  });
+
+  it('reports what the session has cost so far while it runs, to a sink that takes it', async () => {
+    vi.useFakeTimers();
+    try {
+      h.messages = [init, { ...base, type: 'result', subtype: 'success', result: 'ok' }];
+      h.beforeEnd = async () => {
+        for (const cost of [0.4, 0.4, 0.9]) {
+          h.cost = cost;
+          await vi.advanceTimersByTimeAsync(15_000);
+        }
+      };
+      const reported: number[] = [];
+      const res = await new ClaudeAdapter().run(spec, { emit: () => {}, usage: (costUsd) => void reported.push(costUsd) }, new AbortController().signal);
+      // asked every 15 seconds; a cost that has not moved is not reported again
+      expect(reported).toEqual([0.4, 0.9]);
+      expect(res.status).toBe('succeeded');
+      // nothing is asked once the run has ended
+      h.cost = 5;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reported).toEqual([0.4, 0.9]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe('messages into the live session', () => {

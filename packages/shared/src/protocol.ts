@@ -38,6 +38,8 @@ export const WorkerToApiSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('run.accepted'), runId: z.string() }),
   z.object({ type: z.literal('run.rejected'), runId: z.string(), reason: z.string() }),
   z.object({ type: z.literal('run.event'), event: OfficeEventSchema }),
+  /** What the run's current leg has cost so far; sent while it runs, so spending shows before the result. */
+  z.object({ type: z.literal('run.usage'), runId: z.string(), costUsd: z.number().nonnegative() }),
   z.object({
     type: z.literal('run.result'),
     runId: z.string(),
