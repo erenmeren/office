@@ -1159,7 +1159,8 @@ Needless second runs, 2026-11-17 (owner: "is needless work being done?", then "f
 - Needless work: 11 tasks ran a second time. e5: five designer runs failed at the 1 USD cap, 5.61 (fixed 2026-11-13). e3: three second runs, 10.48.
 - Cause of the e3 second runs: 7 tasks had a required consultation and 6 of them took two attempts. In all three e3 tasks the first run sent no question at all; the question went out only in the second run. The task prompt carried the requirements, the acceptance criteria and the review note, but not the required consultations, so the agent learned of them from the Chief's reopen note.
 - Fix: decision "A task run is told the consultations it still owes". Test written first and seen failing (`orchestration.test.ts`); API 280, worker 106, runtime 78, shared 68, db 11, web 66, typecheck clean.
-- Not installed: the desktop app still runs the build from `efa9048`.
+- Desktop app rebuilt from `316616c` and installed (no migration): the app was closed, so nothing was stopped. The installed build was started headless on a scratch data folder (API health ok, web 200) and stopped by its own PID; the owner's data was not opened.
+- The web build stopped once with Next.js's `SecurityFatalError` ("Your version of Next.js is affected by a known security vulnerability", `next` 16.4.3); the same command built on the second run. Next.js was not upgraded.
 - Not changed: a reopen for a missing consultation alone still costs a second run when the agent ignores the prompt; a `help_request` still does not count as a consultation; notes that repeat an earlier one are not merged.
 
 ## Desktop app (2026-11-03)
