@@ -534,6 +534,36 @@ describe('orchestration', () => {
     expect(await s.statuses(m.id)).toMatchObject({ a: 'done', b: 'ready' });
   });
 
+  it('a task run is told the consultations it still owes, so it asks during the run and not after a reopen', async () => {
+    s = await setup();
+    const plan = testPlan();
+    plan.tasks[0]!.requiredConsultations = [
+      { agent: 'architect', topic: 'where the rules live' },
+      { agent: 'qa-engineer', topic: 'how the fix is tested' },
+    ];
+    const { w, k } = await s.approved(1, plan);
+    // the architect has already answered; only the qa-engineer is still owed
+    const limits = s.t.config.messageLimits;
+    const { message: q } = await sendMessage(s.t.prisma, limits, {
+      projectId: s.projectId, type: 'question', body: 'Where do the rules live?', senderAgentId: s.ids.developer,
+      taskId: k.a, recipientAgentIds: [s.ids.architect],
+    });
+    await s.t.prisma.messageDelivery.updateMany({ where: { messageId: q.id }, data: { status: 'acknowledged' } });
+    await sendMessage(s.t.prisma, limits, {
+      projectId: s.projectId, type: 'reply', body: 'src/mapping.ts', senderAgentId: s.ids.architect, inReplyToId: q.id, recipientAgentIds: [],
+    });
+    const a = await s.assign(w);
+    expect(a.taskKind).toBe('code');
+    expect(a.prompt).toContain('- qa-engineer: how the fix is tested');
+    expect(a.prompt).not.toContain('where the rules live');
+    // the form the review counts: a `question` through send_message
+    expect(a.prompt).toMatch(/send_message[^\n]*question/);
+    await s.finish(w, a, { status: 'succeeded', git: git(2), check: check('passed') });
+    const c = await s.assign(w);
+    expect(c.taskKind).toBe('analysis');
+    expect(c.prompt).not.toMatch(/consultation/i);
+  });
+
   it('resume runs before ready tasks: a waiting run with a reply wins the only slot; the reply is acknowledged', async () => {
     s = await setup();
     const w = await s.worker();

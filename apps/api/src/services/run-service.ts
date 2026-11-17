@@ -10,6 +10,7 @@ import { audit } from './audit-service.js';
 import { cancelLiveRuns, notifyCancelled, setTaskStatus } from './task-service.js';
 import { buildContextPack } from './context-pack.js';
 import { toolsForKind } from './tool-service.js';
+import { consultationsSatisfied } from './review-service.js';
 import type { Route } from './router-service.js';
 import {
   LIVE_TASK,
@@ -284,12 +285,17 @@ export async function createRunForTask(
   const fields = await missionRunFields(prisma, task as Task & { missionId: string }, worker);
   // the first run of the mission fixes its branch name
   await prisma.mission.updateMany({ where: { id: task.missionId, branch: null }, data: { branch: fields.spec.git.missionBranch } });
+  // told up front: an agent that learns of a consultation only from the review note costs a whole second run
+  const owed = (await consultationsSatisfied(prisma, task)).missing;
   return createRun(prisma, hub, config, {
     ...input,
     prompt: [
       input.prompt,
       task.requirements.length ? `Requirements:\n${task.requirements.map((r) => `- ${r}`).join('\n')}` : '',
       task.acceptanceCriteria.length ? `Acceptance criteria:\n${task.acceptanceCriteria.map((r) => `- ${r}`).join('\n')}` : '',
+      owed.length
+        ? `Required consultations (the task cannot be accepted without them):\n${owed.map((c) => `- ${c.agent}: ${c.topic}`).join('\n')}\nBefore you finish, ask each agent above with \`send_message\` (type "question", awaitReply true) and use the answer.`
+        : '',
       task.reviewNote ? `Review note:\n${task.reviewNote}` : '',
       task.kind === 'verify'
         ? 'You verify; you are not expected to change the repository. Keep tools and screenshots outside the repository (use a temporary directory). Commit only a regression test for a defect you found. Your final message is the stored evidence: say what you ran, what you saw and your verdict.'

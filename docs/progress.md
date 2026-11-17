@@ -1153,6 +1153,15 @@ Fewer questions, model lists from the login, live prices, 2026-11-14 (owner: "pr
 - Desktop app rebuilt from `efa9048` and installed: no work was live, the app was asked to quit by its own PID, its stopped database folder was copied to `~/.local/share/office/backups/pg-2026-11-14-before-live-usage`, and the app was started again and stayed up. The migration is recorded as applied and `UsageRecord.live` exists; projects, missions, messages, tasks and usage records unchanged in number, worker online. Not seen in the owner's own window: the model list in the agent form, a price moving during a run, a mission without memory questions.
 - Not changed: a reopen for a missing consultation alone still costs a whole second run; notes that repeat an earlier one are not merged; the model list is as fresh as the worker's last start.
 
+Needless second runs, 2026-11-17 (owner: "is needless work being done?", then "fix the needless ones").
+
+- Read from a copy of the owner's database (read-only, copy deleted): 6 projects, 161 runs, 69.94 USD, last run 2026-11-14. Task runs 54.25 (47 runs), reviews 6.58 (37), Conductor chat 4.17 (18), inbox 3.02 (5), plans 1.77 (7), summaries 0.14 (47). Designer on Fable: 15 runs, 49.41, 71% of everything (a model choice, not waste).
+- Needless work: 11 tasks ran a second time. e5: five designer runs failed at the 1 USD cap, 5.61 (fixed 2026-11-13). e3: three second runs, 10.48.
+- Cause of the e3 second runs: 7 tasks had a required consultation and 6 of them took two attempts. In all three e3 tasks the first run sent no question at all; the question went out only in the second run. The task prompt carried the requirements, the acceptance criteria and the review note, but not the required consultations, so the agent learned of them from the Chief's reopen note.
+- Fix: decision "A task run is told the consultations it still owes". Test written first and seen failing (`orchestration.test.ts`); API 280, worker 106, runtime 78, shared 68, db 11, web 66, typecheck clean.
+- Not installed: the desktop app still runs the build from `efa9048`.
+- Not changed: a reopen for a missing consultation alone still costs a second run when the agent ignores the prompt; a `help_request` still does not count as a consultation; notes that repeat an earlier one are not merged.
+
 ## Desktop app (2026-11-03)
 
 Owner request: run the whole thing as one Linux desktop application instead of separate services. Built on `main` as `apps/desktop` (Electron 45, AppImage via electron-builder) plus `apps/desktop/server` (`@office/desktop-server`, the runtime bundle: `@office/api`, `@office/worker`, `@office/db`, `pg`, `@embedded-postgres/linux-x64` 17.11):
